@@ -39,7 +39,8 @@ struct RemoteAssetURLGuard: Sendable {
             let info = current.pointee
             var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             if getnameinfo(info.ai_addr, info.ai_addrlen, &buffer, socklen_t(buffer.count), nil, 0, NI_NUMERICHOST) == 0 {
-                addresses.append(String(cString: buffer))
+                let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+                addresses.append(String(decoding: bytes, as: UTF8.self))
             }
             entry = info.ai_next
         }

@@ -81,7 +81,8 @@ enum LocalAssetLoader {
         }
         var path = [CChar](repeating: 0, count: Int(MAXPATHLEN))
         guard fcntl(descriptor, F_GETPATH, &path) == 0 else { throw CocoaError(.fileReadUnknown) }
-        let openedURL = URL(fileURLWithPath: String(cString: path)).standardizedFileURL
+        let pathBytes = path.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+        let openedURL = URL(fileURLWithPath: String(decoding: pathBytes, as: UTF8.self)).standardizedFileURL
         guard isAllowed(fileURL: openedURL, in: roots) else { throw CocoaError(.fileReadNoPermission) }
         guard info.st_size <= maximumByteCount else { throw BoundedFileReader.ReadError.tooLarge }
         var data = Data()
