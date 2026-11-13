@@ -270,14 +270,10 @@ final class MarkdownReaderDocument: NSDocument {
     }
 
     override func read(from data: Data, ofType typeName: String) throws {
-        guard let decoded = MarkdownTextFormat.decode(data) else {
-            throw CocoaError(.fileReadInapplicableStringEncoding)
+        guard data.count <= Self.maximumSourceByteCount else {
+            throw Self.tooLargeError(for: fileURL)
         }
-        let loaded = LoadedMarkdownSource(
-            sourceText: decoded.text,
-            fingerprint: FileFingerprint.sha256Hex(for: data),
-            format: decoded.format
-        )
+        let loaded = try Self.decodeSource(data)
 
         MainActor.assumeIsolated {
             source = loaded
@@ -1071,9 +1067,24 @@ final class MarkdownReaderDocument: NSDocument {
         documentWindowController?.setEditingActive(isEditing)
     }
 
+    /// The largest Markdown file Wafer opens, 32 MB as Finder counts it: far
+    /// above real notes and generated references, and small enough that
+    /// parsing, rendering, and the editor stay usable. Larger files are
+    /// refused as a whole, never read, shown, or edited in part.
+    nonisolated static let maximumSourceByteCount = 32_000_000
+
     /// The production source loader: reads, decodes, and fingerprints a file.
     nonisolated static func loadSource(from fileURL: URL) throws -> LoadedMarkdownSource {
-        let data = try Data(contentsOf: fileURL)
+        let data: Data
+        do {
+            data = try BoundedFileReader.read(from: fileURL, maximumByteCount: maximumSourceByteCount)
+        } catch BoundedFileReader.ReadError.tooLarge {
+            throw tooLargeError(for: fileURL)
+        }
+        return try decodeSource(data)
+    }
+
+    nonisolated private static func decodeSource(_ data: Data) throws -> LoadedMarkdownSource {
         guard let decoded = MarkdownTextFormat.decode(data) else {
             throw CocoaError(.fileReadInapplicableStringEncoding)
         }
@@ -1083,6 +1094,19 @@ final class MarkdownReaderDocument: NSDocument {
             fingerprint: FileFingerprint.sha256Hex(for: data),
             format: decoded.format
         )
+    }
+
+    /// "The item X couldn't be opened because it is too large", with the limit.
+    nonisolated static func tooLargeError(for fileURL: URL?) -> CocoaError {
+        let limit = ByteCountFormatter.string(fromByteCount: Int64(maximumSourceByteCount), countStyle: .file)
+        var userInfo: [String: Any] = [
+            NSLocalizedRecoverySuggestionErrorKey: "Wafer opens Markdown files up to \(limit).",
+        ]
+        if let fileURL {
+            userInfo[NSURLErrorKey] = fileURL
+            userInfo[NSFilePathErrorKey] = fileURL.path
+        }
+        return CocoaError(.fileReadTooLarge, userInfo: userInfo)
     }
 }
 

@@ -374,6 +374,88 @@ final class ReaderReliabilityTests: XCTestCase {
         waitUntil { document.fileURL == b }
     }
 
+    func testOversizedFileIsRefusedWithAClearError() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let huge = try makeSparseFile(in: directory, named: "Huge.md", byteCount: MarkdownReaderDocument.maximumSourceByteCount + 1)
+        let small = try directory.createTextFile(named: "Small.md", contents: "# Small\n")
+
+        XCTAssertThrowsError(try MarkdownReaderDocument.loadSource(from: huge)) { error in
+            XCTAssertEqual((error as? CocoaError)?.code, .fileReadTooLarge)
+            XCTAssertEqual((error as? CocoaError)?.userInfo[NSURLErrorKey] as? URL, huge)
+            XCTAssertTrue(error.localizedDescription.contains("Huge.md"), error.localizedDescription)
+            XCTAssertTrue((error as NSError).localizedRecoverySuggestion?.contains("Wafer opens Markdown files up to") == true)
+        }
+        XCTAssertEqual(try MarkdownReaderDocument.loadSource(from: small).sourceText, "# Small\n")
+
+        let document = makeDocument(loader: MarkdownReaderDocument.loadSource)
+        document.fileURL = huge
+        defer { document.close() }
+        XCTAssertThrowsError(try document.read(from: Data(count: MarkdownReaderDocument.maximumSourceByteCount + 1), ofType: "dev.wafer.markdown")) { error in
+            XCTAssertEqual((error as? CocoaError)?.code, .fileReadTooLarge)
+        }
+        XCTAssertFalse(document.hasLoadedSource)
+    }
+
+    func testOpeningAnOversizedFileReportsItAndNothingCanBeEdited() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let huge = try makeSparseFile(in: directory, named: "Huge.md", byteCount: MarkdownReaderDocument.maximumSourceByteCount + 1)
+        let failed = expectation(description: "too-large error reported")
+        var errors: [Error] = []
+        let document = makeDocument(loader: MarkdownReaderDocument.loadSource, onError: { error in
+            errors.append(error)
+            failed.fulfill()
+        }, scheduler: { _, _, _, _, _ in
+            XCTFail("an oversized file must not render")
+            return DispatchWorkItem {}
+        })
+        defer { document.close() }
+
+        try MarkdownDocumentOpener.open(url: huge, documentFactory: { document })
+        wait(for: [failed], timeout: 10)
+
+        XCTAssertEqual((errors.first as? CocoaError)?.code, .fileReadTooLarge)
+        XCTAssertFalse(document.hasLoadedSource)
+        XCTAssertNil(OpenDocumentRegistry.shared.document(for: huge))
+        document.beginEditing()
+        XCTAssertFalse(document.isEditing, "nothing was loaded, so nothing can be edited")
+    }
+
+    func testNavigatingToAnOversizedFileKeepsTheCurrentFile() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let current = try directory.createTextFile(named: "Current.md", contents: "# Current\n")
+        let huge = try makeSparseFile(in: directory, named: "Huge.md", byteCount: MarkdownReaderDocument.maximumSourceByteCount + 1)
+        let failed = expectation(description: "too-large error reported")
+        var errors: [Error] = []
+        let document = makeDocument(loader: MarkdownReaderDocument.loadSource, onError: { error in
+            errors.append(error)
+            failed.fulfill()
+        })
+        document.fileURL = current
+        try document.read(from: Data(contentsOf: current), ofType: "dev.wafer.markdown")
+        document.makeWindowControllers()
+        defer { document.close() }
+
+        document.navigateInCurrentWindow(to: huge)
+        wait(for: [failed], timeout: 10)
+
+        XCTAssertEqual((errors.first as? CocoaError)?.code, .fileReadTooLarge)
+        XCTAssertEqual(document.fileURL?.lastPathComponent, "Current.md")
+        XCTAssertTrue(document.navigationHistory.backEntries.isEmpty)
+    }
+
+    /// A file of `byteCount` bytes that takes no time or space to write.
+    private func makeSparseFile(in directory: TemporaryTestDirectory, named name: String, byteCount: Int) throws -> URL {
+        let url = directory.url.appendingPathComponent(name)
+        XCTAssertTrue(FileManager.default.createFile(atPath: url.path, contents: nil))
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.truncate(atOffset: UInt64(byteCount))
+        try handle.close()
+        return url
+    }
+
     func testUnavailableLibraryPreservesSnapshotAndSavedFolder() throws {
         let parent = try TemporaryTestDirectory()
         defer { parent.remove() }
