@@ -11,6 +11,7 @@ final class DocumentHostWindowControllerTests: XCTestCase {
     func testDocumentCreatesSingleTabHostWithUnchangedSurface() throws {
         let reader = RecordingReaderViewController()
         let document = MarkdownReaderDocument(
+            scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, _, _, _ in DispatchWorkItem {} },
             readerControllerFactory: { reader }
         )
@@ -44,6 +45,7 @@ final class DocumentHostWindowControllerTests: XCTestCase {
             let name = url.lastPathComponent
             readers[name] = reader
             let document = MarkdownReaderDocument(
+                scrollStateStore: makeTestScrollStateStore(),
                 renderScheduler: { [weak self] _, baseURL, _, _, completion in
                     let key = baseURL?.lastPathComponent ?? ""
                     self?.completions[key, default: []].append(completion)

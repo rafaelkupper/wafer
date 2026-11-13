@@ -2,12 +2,8 @@ import AppKit
 import UniformTypeIdentifiers
 import WaferCore
 
-/// Opens what a clicked link points at outside the reader. Web and mail
-/// links open in their apps and other external schemes are ignored. A file
-/// that can run code (an app or other code bundle, an executable, a script,
-/// a Terminal or Automator file, an installer package, or a location file
-/// that can point at one) opens only after the user confirms. The opener,
-/// the Finder reveal, and the confirmation are injectable for tests.
+/// Opens known passive files directly and asks before opening other files,
+/// directories, and packages. Open, reveal, and confirmation are injectable.
 @MainActor
 struct LinkTargetOpener {
     enum FileDecision: Equatable {
@@ -34,7 +30,7 @@ struct LinkTargetOpener {
         case .markdownFile(let url):
             openMarkdownFile(url)
         case .otherFile(let url):
-            guard Self.canRunCode(url) else {
+            if Self.opensWithoutConfirmation(url) {
                 openURL(url)
                 return
             }
@@ -59,39 +55,28 @@ struct LinkTargetOpener {
         return allowedExternalSchemes.contains(scheme)
     }
 
-    /// Types whose files run code or install something when opened.
-    /// `script` covers shell, `.command`, and AppleScript files; `bundle`
-    /// covers apps, plug-ins, and other code bundles, but not document
-    /// packages such as `.rtfd`.
-    nonisolated private static let codeTypes: [UTType] = [
-        .executable, .application, .bundle, .script,
-    ] + [
-        "com.apple.terminal.settings",
-        "com.apple.automator-workflow",
-        "com.apple.installer-package-archive",
-        "com.apple.internet-location",
-        "com.microsoft.internet-shortcut",
-    ].compactMap { UTType($0) }
+    nonisolated private static let passiveTypes: [UTType] = [
+        .image, .pdf, .audio, .movie, .rtf,
+    ]
 
-    /// True when opening `url` could run code: the item (after resolving
-    /// symlinks) or its extension has one of `codeTypes`, or it is a file
-    /// with the execute bit set.
-    nonisolated static func canRunCode(_ url: URL) -> Bool {
+    // Do not allow all UTType.text: HTML, scripts, and other active types
+    // conform to it. Office macro-enabled formats are intentionally absent.
+    nonisolated private static let passiveExtensions: Set<String> = [
+        "txt", "text", "log", "csv", "tsv", "json", "yaml", "yml", "toml",
+        "docx", "xlsx", "pptx",
+    ]
+
+    nonisolated static func opensWithoutConfirmation(_ url: URL) -> Bool {
         let resolved = url.resolvingSymlinksInPath()
-        let values = try? resolved.resourceValues(forKeys: [.contentTypeKey, .isDirectoryKey, .isExecutableKey])
-        if values?.isDirectory == false, values?.isExecutable == true {
-            return true
+        guard let values = try? resolved.resourceValues(forKeys: [
+            .contentTypeKey, .isRegularFileKey, .isExecutableKey,
+        ]), values.isRegularFile == true, values.isExecutable == false else {
+            return false
         }
-
-        let pathExtension = resolved.pathExtension
-        let types = [
-            values?.contentType,
-            UTType(filenameExtension: pathExtension),
-            UTType(filenameExtension: pathExtension, conformingTo: .directory),
-        ].compactMap { $0 }
-        return types.contains { type in
-            codeTypes.contains { type.conforms(to: $0) }
-        }
+        let pathExtension = resolved.pathExtension.lowercased()
+        if passiveExtensions.contains(pathExtension) { return true }
+        guard let type = values.contentType ?? UTType(filenameExtension: pathExtension) else { return false }
+        return passiveTypes.contains { type.conforms(to: $0) }
     }
 
     /// Default confirmation: an app-modal alert whose default button only
@@ -100,7 +85,7 @@ struct LinkTargetOpener {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Open \(url.lastPathComponent)?"
-        alert.informativeText = "This link points to an app, script, or other file that can run code on your Mac. Open it only if you trust where it came from."
+        alert.informativeText = "This link points to a file, folder, or package outside the known passive file types. It may run code or make changes on your Mac. Open it only if you trust where it came from."
         alert.addButton(withTitle: "Show in Finder")
         alert.addButton(withTitle: "Open")
         alert.addButton(withTitle: "Cancel")

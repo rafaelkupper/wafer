@@ -8,47 +8,16 @@ final class MarkdownReaderDocument: NSDocument {
         _ baseURL: URL?,
         _ palette: ReaderThemePalette,
         _ wikiLinkIndex: WikiLinkIndex?,
-        _ completion: @escaping (WebKitRenderOutput) -> Void
+        _ completion: @escaping @MainActor @Sendable (WebKitRenderOutput) -> Void
     ) -> DispatchWorkItem
     typealias WikiLinkIndexProvider = @MainActor () -> WikiLinkIndex?
     typealias LibrarySnapshotProvider = @MainActor () -> LibrarySnapshot
     typealias MarkdownLinkOpener = @MainActor (_ url: URL, _ anchorID: String?) -> Void
     typealias LinkTargetHandler = @MainActor (LinkTarget) -> Void
     typealias ReaderControllerFactory = () -> WebKitReaderViewController
-    typealias SourceLoader = @Sendable (_ fileURL: URL) throws -> LoadedMarkdownSource
+    typealias SourceLoader = MarkdownSourceLoader.Load
     typealias FileMonitorFactory =
         @MainActor (_ fileURL: URL, _ onChange: @escaping () -> Void) -> FileChangeMonitoring
-
-    /// The source read in progress, if any. A read that is superseded or
-    /// abandoned bumps `loadGeneration`, and its completion is discarded.
-    private enum LoadState: Equatable {
-        case idle
-        /// Reading the file the document was opened with.
-        case opening(URL)
-        /// Reading another file to show in place of the current one.
-        case navigating(URL)
-        /// Re-reading the current file (file monitor or Cmd-R).
-        case reloading(URL)
-
-        var url: URL? {
-            switch self {
-            case .idle:
-                nil
-            case .opening(let url), .navigating(let url), .reloading(let url):
-                url
-            }
-        }
-
-        /// Back and Forward wait until an open or navigation read finishes.
-        var isNavigating: Bool {
-            switch self {
-            case .opening, .navigating:
-                true
-            case .idle, .reloading:
-                false
-            }
-        }
-    }
 
     /// A heading to scroll to once the page that contains it is ready.
     private enum PendingAnchor: Equatable {
@@ -79,7 +48,7 @@ final class MarkdownReaderDocument: NSDocument {
     private let statisticPreferenceStore: DocumentStatisticPreferenceStore
     private let appearancePreferenceStore: AppearancePreferenceStore
     private let readerBehaviorPreferenceStore: ReaderBehaviorPreferenceStore
-    private let sourceLoader: SourceLoader
+    private let sourceLoading: MarkdownSourceLoader
     private let fileMonitorFactory: FileMonitorFactory
     private let scrollPersistenceDebounceInterval: TimeInterval
     private let wikiLinkIndexProvider: WikiLinkIndexProvider
@@ -89,17 +58,17 @@ final class MarkdownReaderDocument: NSDocument {
     /// The file as shown: its text (the editor's text while editing), its
     /// format, and the fingerprint of the bytes last loaded or saved. Nil
     /// until the first read succeeds.
-    private var source: LoadedMarkdownSource?
+    private var source: LoadedMarkdownSource? {
+        get { sourceLoading.source }
+        set { sourceLoading.source = newValue }
+    }
     private weak var readerController: WebKitReaderViewController?
     private weak var documentWindowController: DocumentWindowController?
     private var fileMonitor: FileChangeMonitoring?
     private var renderWorkItem: DispatchWorkItem?
+    private var isRendering = false
+    private var pendingLiveRender = false
     private var renderToken = UUID()
-    private var loadState = LoadState.idle
-    private var loadGeneration = 0
-    /// A reload requested while a read was running; true when it was
-    /// explicit (Cmd-R). It runs against whatever file that read leaves.
-    private var deferredReload: Bool?
     private var initialSourceFailureHandler: (@MainActor () -> Void)?
     private var currentStatistics: DocumentStatistics?
     private var currentSidebarEntries: [DocumentSidebarEntry] = []
@@ -136,12 +105,12 @@ final class MarkdownReaderDocument: NSDocument {
 
     override convenience init() {
         // Every dependency takes its production default.
-        self.init(assetResolver: AssetResolver())
+        self.init(scrollStateStore: ScrollStateStore())
     }
 
     init(
         assetResolver: AssetResolver = AssetResolver(),
-        scrollStateStore: ScrollStateStore = ScrollStateStore(),
+        scrollStateStore: ScrollStateStore,
         renderScheduler: RenderScheduler? = nil,
         markdownLinkOpener: @escaping MarkdownLinkOpener = MarkdownReaderDocument.defaultOpenMarkdownLink,
         linkTargetHandler: @escaping LinkTargetHandler = { LinkTargetOpener().handle($0) },
@@ -171,7 +140,7 @@ final class MarkdownReaderDocument: NSDocument {
         self.statisticPreferenceStore = statisticPreferenceStore
         self.appearancePreferenceStore = appearancePreferenceStore
         self.readerBehaviorPreferenceStore = readerBehaviorPreferenceStore
-        self.sourceLoader = sourceLoader
+        self.sourceLoading = MarkdownSourceLoader(load: sourceLoader)
         self.fileMonitorFactory = fileMonitorFactory
         self.scrollPersistenceDebounceInterval = scrollPersistenceDebounceInterval
         self.wikiLinkIndexProvider = wikiLinkIndexProvider ?? {
@@ -270,10 +239,7 @@ final class MarkdownReaderDocument: NSDocument {
     }
 
     override func read(from data: Data, ofType typeName: String) throws {
-        guard data.count <= Self.maximumSourceByteCount else {
-            throw Self.tooLargeError(for: fileURL)
-        }
-        let loaded = try Self.decodeSource(data)
+        let loaded = try MarkdownSourceLoader.decodeSource(data, fileURL: fileURL)
 
         MainActor.assumeIsolated {
             source = loaded
@@ -293,9 +259,11 @@ final class MarkdownReaderDocument: NSDocument {
         }
         editMode.stop()
         renderToken = UUID()
-        abandonSourceRead()
+        isRendering = false
+        pendingLiveRender = false
+        sourceLoading.abandon()
         initialSourceFailureHandler = nil
-        deferredReload = nil
+        sourceLoading.deferredReload = nil
         NotificationCenter.default.removeObserver(self, name: .libraryDidChange, object: nil)
         stopFileMonitor()
         persistCurrentScrollFraction()
@@ -353,8 +321,8 @@ final class MarkdownReaderDocument: NSDocument {
         navigate(to: target.fileURL, anchorID: target.anchorID, historyAfterNavigation: history)
     }
 
-    private var canGoBack: Bool { !loadState.isNavigating && navigationHistory.canGoBack }
-    private var canGoForward: Bool { !loadState.isNavigating && navigationHistory.canGoForward }
+    private var canGoBack: Bool { !sourceLoading.state.isNavigating && navigationHistory.canGoBack }
+    private var canGoForward: Bool { !sourceLoading.state.isNavigating && navigationHistory.canGoForward }
 
     private func updateWindowNavigationControls() {
         guard isActiveInHost else {
@@ -381,6 +349,15 @@ final class MarkdownReaderDocument: NSDocument {
         guard let source, let readerController else {
             return
         }
+
+        // Typing coalesces behind the active render; navigation and explicit
+        // refreshes still supersede it through the generation token.
+        if live, isRendering {
+            pendingLiveRender = true
+            return
+        }
+        pendingLiveRender = false
+        isRendering = true
 
         let fileURL = fileURL
         let restoreFraction: Double?
@@ -410,11 +387,21 @@ final class MarkdownReaderDocument: NSDocument {
         let wikiLinkIndex = wikiLinkIndexProvider()
         lastRenderedWikiLinkIndex = wikiLinkIndex
         renderedPalette = palette
-        renderWorkItem = scheduleRender(source.sourceText, fileURL, palette, wikiLinkIndex) { [weak self] output in
+        let workItem = scheduleRender(source.sourceText, fileURL, palette, wikiLinkIndex) { [weak self] output in
             guard let self, self.renderToken == token else {
                 return
             }
 
+            self.isRendering = false
+            self.renderWorkItem = nil
+            defer {
+                if self.pendingLiveRender {
+                    self.pendingLiveRender = false
+                    self.scheduleRenderIfPossible(
+                        initialScrollFractionOverride: nil, showsLoadingPlaceholder: false, live: true
+                    )
+                }
+            }
             self.lastOutputHadWikiLinks = output.hasWikiLinks
             if live {
                 self.applyLiveRender(output)
@@ -432,6 +419,7 @@ final class MarkdownReaderDocument: NSDocument {
             }
             self.readerController?.apply(renderOutput: output, initialScrollFraction: restoreFraction)
         }
+        if renderToken == token, isRendering { renderWorkItem = workItem }
     }
 
     /// Edit-mode renders carry source-line annotations; each request says so
@@ -441,7 +429,7 @@ final class MarkdownReaderDocument: NSDocument {
         _ baseURL: URL?,
         _ palette: ReaderThemePalette,
         _ wikiLinkIndex: WikiLinkIndex?,
-        completion: @escaping (WebKitRenderOutput) -> Void
+        completion: @escaping @MainActor @Sendable (WebKitRenderOutput) -> Void
     ) -> DispatchWorkItem {
         if let injectedRenderScheduler {
             return injectedRenderScheduler(source, baseURL, palette, wikiLinkIndex, completion)
@@ -542,19 +530,11 @@ final class MarkdownReaderDocument: NSDocument {
     }
 
     private func performReloadFromDisk(forceRender: Bool = false) {
-        guard loadState == .idle else {
-            deferredReload = (deferredReload ?? false) || forceRender
-            return
-        }
-        guard let fileURL else {
-            return
-        }
-
-        readSource(.reloading(fileURL)) { [weak self] result in
+        sourceLoading.reload(fileURL: fileURL, forceRender: forceRender) { [weak self] result in
             guard let self else { return }
             switch result {
             case .success(let loaded):
-                self.applyReloadedSourceIfNeeded(loaded, forceRender: forceRender)
+                if let loaded { self.applyReloadedSource(loaded) }
             case .failure(let error):
                 if forceRender { self.sourceLoadErrorHandler(error) }
             }
@@ -562,38 +542,10 @@ final class MarkdownReaderDocument: NSDocument {
         }
     }
 
-    /// All app-driven source reads, decoding, and hashing run off the main
-    /// thread. `state` names the read; a superseding read or close discards
-    /// both successful and failed results.
-    private func readSource(
-        _ state: LoadState,
-        completion: @escaping @MainActor (Result<LoadedMarkdownSource, Error>) -> Void
-    ) {
-        guard let url = state.url else { return }
-        loadGeneration += 1
-        let generation = loadGeneration
-        loadState = state
-        let loader = sourceLoader
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let result = Result { try loader(url) }
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.loadGeneration == generation else { return }
-                self.loadState = .idle
-                completion(result)
-            }
-        }
-    }
-
-    /// Discards the read in progress, if any.
-    private func abandonSourceRead() {
-        loadGeneration += 1
-        loadState = .idle
-    }
-
     func loadInitialSource(onFailure: @escaping @MainActor () -> Void) {
         guard source == nil, let fileURL else { return }
         initialSourceFailureHandler = onFailure
-        readSource(.opening(fileURL)) { [weak self] result in
+        sourceLoading.read(.opening(fileURL)) { [weak self] result in
             guard let self else { return }
             self.updateWindowNavigationControls()
             switch result {
@@ -605,7 +557,7 @@ final class MarkdownReaderDocument: NSDocument {
                 self.runDeferredReload()
             case .failure(let error):
                 self.initialSourceFailureHandler = nil
-                self.deferredReload = nil
+                self.sourceLoading.deferredReload = nil
                 onFailure()
                 self.sourceLoadErrorHandler(error)
             }
@@ -614,16 +566,12 @@ final class MarkdownReaderDocument: NSDocument {
     }
 
     private func runDeferredReload() {
-        guard let forceRender = deferredReload else { return }
-        deferredReload = nil
+        guard let forceRender = sourceLoading.deferredReload else { return }
+        sourceLoading.deferredReload = nil
         performReloadFromDisk(forceRender: forceRender)
     }
 
-    private func applyReloadedSourceIfNeeded(_ loadedSource: LoadedMarkdownSource, forceRender: Bool) {
-        guard forceRender || loadedSource.fingerprint != source?.fingerprint else {
-            return
-        }
-
+    private func applyReloadedSource(_ loadedSource: LoadedMarkdownSource) {
         if isEditing {
             if !editMode.adoptDiskVersion(loadedSource) {
                 // Same bytes (explicit reload): refresh the page, keeping its place.
@@ -853,15 +801,15 @@ final class MarkdownReaderDocument: NSDocument {
         guard fileURL != normalizedURL else {
             // Selecting the opening document again must keep its initial read.
             if source == nil {
-                if loadState.url != normalizedURL, let initialSourceFailureHandler {
+                if sourceLoading.state.url != normalizedURL, let initialSourceFailureHandler {
                     loadInitialSource(onFailure: initialSourceFailureHandler)
                 }
                 if let anchorID { navigateToAnchor(id: anchorID) }
                 return
             }
-            if loadState.isNavigating {
+            if sourceLoading.state.isNavigating {
                 // Coming back to the shown file drops the pending navigation.
-                abandonSourceRead()
+                sourceLoading.abandon()
             }
             if let historyAfterNavigation { navigationHistory = historyAfterNavigation }
             updateWindowNavigationControls()
@@ -878,7 +826,7 @@ final class MarkdownReaderDocument: NSDocument {
         }
 
         persistCurrentScrollFraction()
-        readSource(.navigating(normalizedURL)) { [weak self] result in
+        sourceLoading.read(.navigating(normalizedURL)) { [weak self] result in
             guard let self else { return }
             switch result {
             case .success(let loaded):
@@ -891,7 +839,7 @@ final class MarkdownReaderDocument: NSDocument {
                 }
                 // A conflict prompt runs the run loop; a reload of this file
                 // that began meanwhile must not land on the next one.
-                self.abandonSourceRead()
+                self.sourceLoading.abandon()
                 self.replaceCurrentFile(with: loaded, fileURL: normalizedURL,
                     anchorID: anchorID, historyAfterNavigation: historyAfterNavigation)
             case .failure(let error):
@@ -1072,46 +1020,14 @@ final class MarkdownReaderDocument: NSDocument {
         documentWindowController?.setEditingActive(isEditing)
     }
 
-    /// The largest Markdown file Wafer opens, 32 MB as Finder counts it: far
-    /// above real notes and generated references, and small enough that
-    /// parsing, rendering, and the editor stay usable. Larger files are
-    /// refused as a whole, never read, shown, or edited in part.
-    nonisolated static let maximumSourceByteCount = 32_000_000
+    nonisolated static let maximumSourceByteCount = MarkdownSourceLoader.maximumSourceByteCount
 
-    /// The production source loader: reads, decodes, and fingerprints a file.
     nonisolated static func loadSource(from fileURL: URL) throws -> LoadedMarkdownSource {
-        let data: Data
-        do {
-            data = try BoundedFileReader.read(from: fileURL, maximumByteCount: maximumSourceByteCount)
-        } catch BoundedFileReader.ReadError.tooLarge {
-            throw tooLargeError(for: fileURL)
-        }
-        return try decodeSource(data)
+        try MarkdownSourceLoader.loadSource(from: fileURL)
     }
 
-    nonisolated private static func decodeSource(_ data: Data) throws -> LoadedMarkdownSource {
-        guard let decoded = MarkdownTextFormat.decode(data) else {
-            throw CocoaError(.fileReadInapplicableStringEncoding)
-        }
-
-        return LoadedMarkdownSource(
-            sourceText: decoded.text,
-            fingerprint: FileFingerprint.sha256Hex(for: data),
-            format: decoded.format
-        )
-    }
-
-    /// "The item X couldn't be opened because it is too large", with the limit.
     nonisolated static func tooLargeError(for fileURL: URL?) -> CocoaError {
-        let limit = ByteCountFormatter.string(fromByteCount: Int64(maximumSourceByteCount), countStyle: .file)
-        var userInfo: [String: Any] = [
-            NSLocalizedRecoverySuggestionErrorKey: "Wafer opens Markdown files up to \(limit).",
-        ]
-        if let fileURL {
-            userInfo[NSURLErrorKey] = fileURL
-            userInfo[NSFilePathErrorKey] = fileURL.path
-        }
-        return CocoaError(.fileReadTooLarge, userInfo: userInfo)
+        MarkdownSourceLoader.tooLargeError(for: fileURL)
     }
 }
 
@@ -1133,11 +1049,4 @@ extension MarkdownReaderDocument: MarkdownEditCoordinatorDelegate {
         source?.fingerprint = fingerprint
         source?.format = format
     }
-}
-
-/// A file's decoded text, its on-disk format, and the fingerprint of its bytes.
-struct LoadedMarkdownSource: Sendable {
-    var sourceText: String
-    var fingerprint: String
-    var format: MarkdownTextFormat = .default
 }

@@ -67,11 +67,12 @@ final class LinkTargetOpenerTests: XCTestCase {
         XCTAssertEqual(asked, [])
     }
 
-    func testOrdinaryFilesAndFoldersOpenWithoutAsking() throws {
+    func testKnownPassiveFilesOpenWithoutAsking() throws {
         let opener = makeOpener()
         let targets = [
-            try makeFile("notes.txt"), try makeFile("image.png"), try makeFile("page.html"),
-            try makeFolder("Plain folder"), try makeFolder("Doc.rtfd"),
+            try makeFile("notes.txt"), try makeFile("image.png"), try makeFile("paper.pdf"),
+            try makeFile("letter.docx"), try makeFile("table.xlsx"), try makeFile("slides.pptx"),
+            try makeFile("song.mp3"), try makeFile("movie.mp4"), try makeFile("note.rtf"),
         ]
 
         for url in targets {
@@ -112,6 +113,22 @@ final class LinkTargetOpenerTests: XCTestCase {
         XCTAssertEqual(revealed, [])
     }
 
+    func testUnknownFilesDirectoriesAndPackagesAskFirst() throws {
+        let opener = makeOpener()
+        let targets = try [
+            "page.html", "disk.dmg", "action.shortcut", "action.wflow",
+            "profile.mobileconfig", "launch.jnlp", "notebook.ipynb", "unknown.wafer-unknown",
+            "tool-without-extension", "script.py", "script.js", "macro.docm",
+        ].map { try makeFile($0) } + [
+            makeFolder("Plain folder"), makeFolder("Doc.rtfd"),
+            makeFolder("Code.playground"), makeFolder("Project.xcodeproj"),
+            makeFolder("Fake.png"),
+        ]
+        for url in targets { opener.handle(.otherFile(url)) }
+        XCTAssertEqual(asked, targets)
+        XCTAssertTrue(opened.isEmpty)
+    }
+
     func testConfirmationChoosesBetweenOpeningRevealingAndNothing() throws {
         let opener = makeOpener()
         let tool = try makeFile("tool", executable: true)
@@ -142,6 +159,7 @@ final class LinkTargetOpenerTests: XCTestCase {
     func testDocumentLinksGoThroughTheOpener() throws {
         let reader = RecordingReaderViewController()
         let document = MarkdownReaderDocument(
+            scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, _, _, _ in DispatchWorkItem {} },
             linkTargetHandler: { [unowned self] in self.makeOpener().handle($0) },
             readerControllerFactory: { reader },

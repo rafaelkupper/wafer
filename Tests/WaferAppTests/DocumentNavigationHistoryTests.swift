@@ -16,6 +16,7 @@ final class DocumentNavigationHistoryTests: XCTestCase {
         let reader = RecordingReaderViewController()
         var renderExpectations: [String: XCTestExpectation] = [:]
         let document = MarkdownReaderDocument(
+            scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, baseURL, _, _, _ in
                 if let name = baseURL?.lastPathComponent {
                     renderExpectations.removeValue(forKey: name)?.fulfill()
@@ -82,6 +83,7 @@ final class DocumentNavigationHistoryTests: XCTestCase {
         var renderCount = 0
         let secondRender = expectation(description: "reload render scheduled")
         let document = MarkdownReaderDocument(
+            scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, _, _, _ in
                 renderCount += 1
                 if renderCount == 2 {
@@ -117,6 +119,7 @@ final class DocumentNavigationHistoryTests: XCTestCase {
         let reader = RecordingReaderViewController()
         var renderExpectations: [String: XCTestExpectation] = [:]
         let document = MarkdownReaderDocument(
+            scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, baseURL, _, _, _ in
                 if let name = baseURL?.lastPathComponent {
                     renderExpectations.removeValue(forKey: name)?.fulfill()
@@ -179,7 +182,7 @@ final class DocumentNavigationHistoryTests: XCTestCase {
         let fileB = try tempDirectory.createTextFile(named: "B.md", contents: "# B")
 
         let reader = RecordingReaderViewController()
-        let scrollStore = ScrollStateStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        let scrollStore = makeTestScrollStateStore()
         var completions: [(name: String, completion: (WebKitRenderOutput) -> Void)] = []
         var renderExpectations: [String: XCTestExpectation] = [:]
         let document = MarkdownReaderDocument(

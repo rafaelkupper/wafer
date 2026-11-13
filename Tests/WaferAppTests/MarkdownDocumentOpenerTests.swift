@@ -44,6 +44,7 @@ final class MarkdownDocumentOpenerTests: XCTestCase {
         let fileURL = try tempDirectory.createTextFile(named: "Anchors.md", contents: "# Café\n\n## 日本語")
         let reader = RecordingReaderViewController()
         let document = MarkdownReaderDocument(
+            scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, baseURL, _, _, completion in
                 completion(WebKitRenderOutput(html: "<html></html>", baseURL: baseURL))
                 return DispatchWorkItem {}
@@ -77,7 +78,7 @@ final class MarkdownDocumentOpenerTests: XCTestCase {
         let fileURL = try tempDirectory.createTextFile(named: "Retain.md", contents: "# Retain\n\nBody")
         let initialRetainedCount = MarkdownDocumentOpener.retainedDocumentCountForTesting
 
-        try MarkdownDocumentOpener.open(url: fileURL)
+        try MarkdownDocumentOpener.open(url: fileURL, documentFactory: { MarkdownReaderDocument(scrollStateStore: makeTestScrollStateStore()) })
 
         XCTAssertEqual(MarkdownDocumentOpener.retainedDocumentCountForTesting, initialRetainedCount + 1)
 
@@ -99,11 +100,11 @@ final class MarkdownDocumentOpenerTests: XCTestCase {
         defer { tempDirectory.remove() }
         let fileURL = try tempDirectory.createTextFile(named: "Reuse.md", contents: "# Reuse")
 
-        try MarkdownDocumentOpener.open(url: fileURL)
+        try MarkdownDocumentOpener.open(url: fileURL, documentFactory: { MarkdownReaderDocument(scrollStateStore: makeTestScrollStateStore()) })
         let initialDocuments = openMarkdownDocuments()
         let initialWindows = initialDocuments.flatMap(\.windowControllers).compactMap(\.window)
 
-        try MarkdownDocumentOpener.open(url: fileURL)
+        try MarkdownDocumentOpener.open(url: fileURL, documentFactory: { MarkdownReaderDocument(scrollStateStore: makeTestScrollStateStore()) })
 
         let finalDocuments = openMarkdownDocuments()
         XCTAssertEqual(finalDocuments.count, 1)
@@ -121,8 +122,8 @@ final class MarkdownDocumentOpenerTests: XCTestCase {
         components?.fragment = "section-1"
         let fileURLWithFragment = try XCTUnwrap(components?.url)
 
-        try MarkdownDocumentOpener.open(url: fileURL)
-        try MarkdownDocumentOpener.open(url: fileURLWithFragment)
+        try MarkdownDocumentOpener.open(url: fileURL, documentFactory: { MarkdownReaderDocument(scrollStateStore: makeTestScrollStateStore()) })
+        try MarkdownDocumentOpener.open(url: fileURLWithFragment, documentFactory: { MarkdownReaderDocument(scrollStateStore: makeTestScrollStateStore()) })
 
         let documents = openMarkdownDocuments()
         XCTAssertEqual(documents.count, 1)
@@ -137,11 +138,11 @@ final class MarkdownDocumentOpenerTests: XCTestCase {
         let firstURL = try tempDirectory.createTextFile(named: "One.md", contents: "# One")
         let secondURL = try tempDirectory.createTextFile(named: "Two.md", contents: "# Two")
 
-        try MarkdownDocumentOpener.open(url: firstURL)
+        try MarkdownDocumentOpener.open(url: firstURL, documentFactory: { MarkdownReaderDocument(scrollStateStore: makeTestScrollStateStore()) })
         let firstDocument = try XCTUnwrap(openMarkdownDocuments().last)
         let firstWindow = try XCTUnwrap(firstDocument.windowControllers.first?.window)
 
-        try MarkdownDocumentOpener.open(url: secondURL)
+        try MarkdownDocumentOpener.open(url: secondURL, documentFactory: { MarkdownReaderDocument(scrollStateStore: makeTestScrollStateStore()) })
 
         let documents = openMarkdownDocuments()
         XCTAssertEqual(documents.count, 2)
@@ -170,8 +171,8 @@ final class MarkdownDocumentOpenerTests: XCTestCase {
         let firstURL = try tempDirectory.createTextFile(named: "One.md", contents: "# One")
         let secondURL = try tempDirectory.createTextFile(named: "Two.md", contents: "# Two")
 
-        try MarkdownDocumentOpener.open(url: firstURL)
-        try MarkdownDocumentOpener.open(url: secondURL)
+        try MarkdownDocumentOpener.open(url: firstURL, documentFactory: { MarkdownReaderDocument(scrollStateStore: makeTestScrollStateStore()) })
+        try MarkdownDocumentOpener.open(url: secondURL, documentFactory: { MarkdownReaderDocument(scrollStateStore: makeTestScrollStateStore()) })
 
         let secondDocument = try XCTUnwrap(
             openMarkdownDocuments().first(where: { $0.fileURL == secondURL })
@@ -187,7 +188,7 @@ final class MarkdownDocumentOpenerTests: XCTestCase {
 
         XCTAssertEqual(openMarkdownDocuments().filter { $0.fileURL == firstURL }.count, 2)
 
-        try MarkdownDocumentOpener.open(url: firstURL)
+        try MarkdownDocumentOpener.open(url: firstURL, documentFactory: { MarkdownReaderDocument(scrollStateStore: makeTestScrollStateStore()) })
 
         XCTAssertEqual(openMarkdownDocuments().count, 2)
     }

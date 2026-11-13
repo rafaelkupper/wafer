@@ -18,7 +18,7 @@ final class ReviewRegressionTests: XCTestCase {
         let reader = RecordingReaderViewController()
         var sources: [String] = []
         let document = MarkdownReaderDocument(
-            scrollStateStore: ScrollStateStore(defaults: UserDefaults(suiteName: UUID().uuidString)!),
+            scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { source, _, _, _, _ in
                 sources.append(source)
                 return DispatchWorkItem {}
@@ -37,6 +37,7 @@ final class ReviewRegressionTests: XCTestCase {
         let reader = RecordingReaderViewController()
         var completion: ((WebKitRenderOutput) -> Void)?
         let document = MarkdownReaderDocument(
+            scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, _, _, callback in
                 completion = callback
                 return DispatchWorkItem {}
@@ -69,8 +70,8 @@ final class ReviewRegressionTests: XCTestCase {
             completion(WebKitRenderOutput(html: "<html><body>Note</body></html>", baseURL: nil))
             return DispatchWorkItem {}
         }
-        let first = MarkdownReaderDocument(renderScheduler: scheduler, readerControllerFactory: { firstReader }, appearancePreferenceStore: appearance)
-        let second = MarkdownReaderDocument(renderScheduler: scheduler, readerControllerFactory: { secondReader }, appearancePreferenceStore: appearance)
+        let first = MarkdownReaderDocument(scrollStateStore: makeTestScrollStateStore(), renderScheduler: scheduler, readerControllerFactory: { firstReader }, appearancePreferenceStore: appearance)
+        let second = MarkdownReaderDocument(scrollStateStore: makeTestScrollStateStore(), renderScheduler: scheduler, readerControllerFactory: { secondReader }, appearancePreferenceStore: appearance)
         defer { first.close(); second.close() }
         try first.read(from: Data("# First".utf8), ofType: "dev.wafer.markdown")
         first.makeWindowControllers()

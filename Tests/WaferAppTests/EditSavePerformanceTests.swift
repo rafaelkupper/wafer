@@ -25,6 +25,7 @@ final class EditSavePerformanceTests: XCTestCase {
         let source = String(repeating: section, count: 5_000_000 / section.utf8.count)
         let url = try directory.createTextFile(named: "Large.md", contents: source)
         let document = MarkdownReaderDocument(
+            scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, _, _, _ in DispatchWorkItem {} },
             readerControllerFactory: { RecordingReaderViewController() },
             fileMonitorFactory: { _, _ in PerformanceTestFileMonitor() },
