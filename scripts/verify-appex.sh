@@ -1,5 +1,6 @@
 #!/bin/zsh
 set -euo pipefail
+setopt NULL_GLOB
 
 ROOT_DIR=${0:A:h:h}
 # Bundle name only; the Quick Look appex keeps its SwiftPM product name.
@@ -37,10 +38,8 @@ require_plist_value() {
 [[ -f "$CORE_RESOURCE_BUNDLE/reader-theme.css" ]] || fail "Quick Look extension is missing WaferCore resources: $CORE_RESOURCE_BUNDLE"
 [[ -f "$CORE_RESOURCE_BUNDLE/gemoji-shortcodes.json" ]] || fail "Quick Look extension is missing Gemoji shortcode data: $CORE_RESOURCE_BUNDLE"
 [[ -f "$CORE_RESOURCE_BUNDLE/gemoji-LICENSE.txt" ]] || fail "Quick Look extension is missing Gemoji license: $CORE_RESOURCE_BUNDLE"
-[[ -f "$CORE_RESOURCE_BUNDLE/katex.min.js" ]] || fail "Quick Look extension is missing KaTeX renderer: $CORE_RESOURCE_BUNDLE"
-[[ -f "$CORE_RESOURCE_BUNDLE/katex.min.css" ]] || fail "Quick Look extension is missing KaTeX stylesheet: $CORE_RESOURCE_BUNDLE"
-[[ -f "$CORE_RESOURCE_BUNDLE/katex-LICENSE.txt" ]] || fail "Quick Look extension is missing KaTeX license: $CORE_RESOURCE_BUNDLE"
-[[ -f "$CORE_RESOURCE_BUNDLE/KaTeX_Main-Regular.woff2" ]] || fail "Quick Look extension is missing KaTeX fonts: $CORE_RESOURCE_BUNDLE"
+unused_resources=("$CORE_RESOURCE_BUNDLE"/mermaid* "$CORE_RESOURCE_BUNDLE"/katex* "$CORE_RESOURCE_BUNDLE"/KaTeX_*)
+(( ${#unused_resources} == 0 )) || fail "Quick Look extension contains unused Mermaid or KaTeX resources: $unused_resources"
 
 plutil -lint "$INFO_PLIST" >/dev/null
 require_plist_value ":CFBundleExecutable" "$QUICKLOOK_NAME"

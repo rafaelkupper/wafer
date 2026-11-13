@@ -24,13 +24,13 @@ Sparkle's tools are not installed separately. SwiftPM unpacks them next to the f
 2. Run `scripts/release.py --repository OWNER/REPO`.
 3. Review the generated directory under `dist/updates/<version>-<build>`. Inspect `appcast.xml`, `review.json`, `notarytool-submit.json`, and the final ZIP.
 
-Preparation runs `scripts/package-release.sh` into that directory: tests, a release build, Developer ID signing, notarization through the `VibeMD` profile, stapling, and the final ZIP. It then verifies the ZIP as extracted by both `ditto` and `unzip`, including each Sparkle helper's team, timestamp, hardened runtime and entitlements. It generates the appcast and checks the archive length and signature against the public key. It refuses an existing output directory or a build number already in the live feed. It stops before publication.
+Preparation runs `scripts/package-release.sh` into that directory: tests, a release build, Developer ID signing, notarization through the `VibeMD` profile, stapling, and the final ZIP. It then verifies the ZIP as extracted by both `ditto` and `unzip`, including each Sparkle helper's team, timestamp, hardened runtime and entitlements. It generates the appcast and checks the archive length and signature against the public key. It refuses an existing output directory or a build number already in the live feed. The receipt records the source commit, repository, feed URL, signing identity, public key, base feed hash, and artifact hashes. It stops before publication.
 
 ## Publish the reviewed artifacts
 
 Run this only with explicit authorization to publish the version and target repository.
 
-Push the commit the release was built from to the default branch first. The release tag `v<version>` is created at the tip of that branch, and GitHub attaches the source archives for that tag to the release.
+Push the source commit recorded in the receipt to the release repository first. Keep the preparing checkout at that commit when publishing. The release tag `v<version>` explicitly targets the recorded commit, and GitHub attaches its source archives to the release.
 
 The release title, notes, and feed commit message are all `Wafer <version>`, and the feed commit uses the publisher's Git identity.
 
@@ -38,7 +38,9 @@ The release title, notes, and feed commit message are all `Wafer <version>`, and
 scripts/release.py --repository OWNER/REPO --publish dist/updates/<version>-<build>
 ```
 
-Publishing verifies the manifest and reviewed artifact hashes again, uploads the ZIP to a GitHub release, and pushes the updated `appcast.xml` to the default branch from a temporary clone. Pull afterwards so your checkout includes the feed commit. If publishing stops with "Release repo and live feed disagree" shortly after an earlier push, the served feed is still cached; wait a few minutes and run it again. If the upload succeeds but the feed push fails, retain the review directory and inspect the release and remote repository before recovery. Do not create a second release blindly.
+Publishing checks the current source commit, repository, feed URL, manifest public key, archive signing identity, and reviewed artifact hashes against the receipt. It creates the GitHub release with an explicit commit target, then pushes `appcast.xml` to the default branch from a temporary clone.
+
+If a step fails, rerun the same command with the same review directory and source checkout. Publishing reuses an existing release only when its tag targets the reviewed commit and its downloaded ZIP matches the reviewed hash. If the release has no ZIP, it uploads the reviewed one. It skips the feed commit and push when the remote feed already matches, including when a previous push succeeded before reporting an error. A cached live feed may match either the original or reviewed feed. Conflicting tags, assets, or feed changes stop publication. Pull only after publication completes, so the source commit check remains valid during retries. Older receipts without the identity fields require preparation again.
 
 ## Verify an installed update
 
@@ -50,6 +52,6 @@ Install an authorized signed, notarized build containing the public key. Publish
 
 `WAFER_SKIP_NOTARIZATION=1 WAFER_DIST_DIR=<scratch directory> scripts/package-release.sh` signs and verifies without submitting to Apple and without touching `dist`.
 
-The packaging script clears `dist` before each run but keeps `dist/updates`, which holds the reviewed artifacts of published releases.
+The packaging script removes only top-level `Wafer-*.zip`, `notarytool-submit.json`, and `notarytool-log.json` files or symlinks from its output directory. It preserves directories and unrelated files, including `dist/updates`. An output path outside the repository's `dist` must be new or empty; this check resolves symlinks and includes hidden files.
 
 Sources are Sparkle's [programmatic setup](https://sparkle-project.org/documentation/programmatic-setup/), [publishing guide](https://sparkle-project.org/documentation/publishing/), and [code signing notes](https://sparkle-project.org/documentation/sandboxing/).

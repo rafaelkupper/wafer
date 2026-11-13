@@ -1,5 +1,6 @@
 #!/bin/zsh
 set -euo pipefail
+setopt NULL_GLOB
 
 ROOT_DIR=${0:A:h:h}
 APP_NAME=Wafer
@@ -87,6 +88,16 @@ notary_credentials_args() {
   return 1
 }
 
+# Resolve symlinks before deciding whether this is a dedicated output directory.
+DIST_DIR=${DIST_DIR:A}
+if [[ "$DIST_DIR" != "$ROOT_DIR/dist" && "$DIST_DIR" != "$ROOT_DIR/dist/"* ]]; then
+  if [[ -e "$DIST_DIR" ]]; then
+    [[ -d "$DIST_DIR" ]] || fail "DIST_DIR is not a directory: $DIST_DIR"
+    entries=("$DIST_DIR"/* "$DIST_DIR"/.[!.]* "$DIST_DIR"/..?*)
+    (( ${#entries} == 0 )) || fail "DIST_DIR outside $ROOT_DIR/dist must be new or empty: $DIST_DIR"
+  fi
+fi
+
 require_tool swift
 require_tool security
 require_tool codesign
@@ -129,10 +140,10 @@ NOTARIZATION_ZIP="$DIST_DIR/$RELEASE_NAME-notarization.zip"
 FINAL_ZIP="$DIST_DIR/$RELEASE_NAME.zip"
 NOTARY_RESULT="$DIST_DIR/notarytool-submit.json"
 
-# Clear earlier output but keep dist/updates, which holds the reviewed
-# artifacts of published releases.
+# Remove only packaging outputs. Preserve review directories and unrelated files.
 mkdir -p "$DIST_DIR"
-find "$DIST_DIR" -mindepth 1 -maxdepth 1 ! -name updates -exec rm -rf {} +
+find "$DIST_DIR" -mindepth 1 -maxdepth 1 \( -type f -o -type l \) \
+  \( -name 'Wafer-*.zip' -o -name 'notarytool-submit.json' -o -name 'notarytool-log.json' \) -delete
 
 # Sparkle's helpers are signed one by one, inside out, as its documentation
 # prescribes. --deep would stamp one set of entitlements on all of them.
@@ -202,12 +213,12 @@ if unzip -l "$FINAL_ZIP" | LC_ALL=C grep -q $'[\x80-\xff]'; then
   fail "final zip contains non-ASCII file names"
 fi
 EXTRACT_DIR=$(mktemp -d)
+trap 'rm -rf "$EXTRACT_DIR"' EXIT
 unzip -qq "$FINAL_ZIP" -d "$EXTRACT_DIR"
 codesign --verify --deep --strict "$EXTRACT_DIR/$APP_NAME.app" || fail "extracted app fails signature verification"
 if [[ "$SKIP_NOTARIZATION" != "1" ]]; then
   spctl --assess --type execute "$EXTRACT_DIR/$APP_NAME.app" || fail "extracted app fails Gatekeeper assessment"
 fi
-rm -rf "$EXTRACT_DIR"
 
 print -- ""
 print -- "Release zip: $FINAL_ZIP"

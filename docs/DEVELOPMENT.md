@@ -10,6 +10,8 @@ The app manifest carries the project's update feed and public key, so a local bu
 
 ## Build
 
+Use Xcode 26.3 or a Swift 6.2 or newer toolchain. Although Wafer declares Swift tools 6.0, the pinned swift-markdown dependency requires Swift tools 6.2.
+
 Build a local unsigned app bundle:
 
 ```sh
@@ -20,7 +22,13 @@ open build/Wafer.app
 For local installation, copy `build/Wafer.app` into `~/Applications` or `/Applications`.
 Because this open-source path is unsigned, macOS may require the usual manual approval steps.
 
-Run the logic tests with `swift test` and the release-configuration tests with `python3 -m unittest discover -s Tests/ReleaseTools`.
+Local builds register with neither LaunchServices nor pluginkit by default. To register the build-directory app and Quick Look extension for local testing, run `WAFER_REGISTER_APP=1 scripts/build-app.sh release`. Registration can affect Finder previews on this Mac.
+
+The build fails if either resource bundle or a required reader asset is missing. The app retains Mermaid and KaTeX. The Quick Look extension keeps reader CSS, emoji data, and its license; its native text preview runs no scripts.
+
+Run the logic tests with `swift test` and the release-configuration tests with `python3 -m unittest discover -s Tests/ReleaseTools -v`. The release-tool tests use disposable app products and stub external signing, notarization, Git, and GitHub commands. They publish nothing.
+
+[CI](../.github/workflows/ci.yml) runs the Swift and Python tests, builds the app, and verifies the Quick Look extension on macOS 15 with Xcode 26.3. Its Swift toolchain satisfies both the package's Swift 6.0 minimum and swift-markdown's Swift 6.2 requirement, and the app retains its macOS 14 deployment target. The runner's available toolchains are listed in the [GitHub runner image manifest](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md).
 
 ## Development Files
 
@@ -37,15 +45,18 @@ Before treating a local build as release-ready on one Mac, run:
 ```sh
 swift test
 scripts/build-app.sh release
+scripts/verify-appex.sh build/Wafer.app
 test -d build/Wafer.app
-test -f build/Wafer.app/Contents/Resources/Wafer_WaferCore.bundle/reader-theme.css
-test -f build/Wafer.app/Contents/Resources/Wafer_WaferCore.bundle/mermaid.min.js
-test -f build/Wafer.app/Contents/Resources/Wafer_WaferCore.bundle/mermaid-LICENSE.txt
-test -f build/Wafer.app/Contents/Resources/Wafer_WaferCore.bundle/katex.min.js
-test -f build/Wafer.app/Contents/Resources/Wafer_WaferCore.bundle/katex.min.css
-test -f build/Wafer.app/Contents/Resources/Wafer_WaferCore.bundle/katex-LICENSE.txt
-test -f build/Wafer.app/Contents/Resources/Wafer_WaferCore.bundle/KaTeX_Main-Regular.woff2
+test -f build/Wafer.app/Contents/Resources/Wafer_WaferCore.bundle/Contents/Resources/reader-theme.css
+test -f build/Wafer.app/Contents/Resources/Wafer_WaferCore.bundle/Contents/Resources/mermaid.min.js
+test -f build/Wafer.app/Contents/Resources/Wafer_WaferCore.bundle/Contents/Resources/mermaid-LICENSE.txt
+test -f build/Wafer.app/Contents/Resources/Wafer_WaferCore.bundle/Contents/Resources/katex.min.js
+test -f build/Wafer.app/Contents/Resources/Wafer_WaferCore.bundle/Contents/Resources/katex.min.css
+test -f build/Wafer.app/Contents/Resources/Wafer_WaferCore.bundle/Contents/Resources/katex-LICENSE.txt
+test -f build/Wafer.app/Contents/Resources/Wafer_WaferCore.bundle/Contents/Resources/KaTeX_Main-Regular.woff2
 ```
+
+These resource paths match Swift 6.4.2. Earlier SwiftPM toolchains use a flat resource bundle; the build and verification scripts accept that layout.
 
 Then do a short single-machine smoke pass:
 
