@@ -158,3 +158,32 @@ class PublishTests(unittest.TestCase):
                 with self.assertRaisesRegex(SystemExit, 'does not match|feed changed'):
                     self.invoke(publish=True)
                 self.assertEqual(self.state(), state)
+
+    def test_existing_tag_without_release_is_validated_before_creation(self):
+        state = self.state()
+        state['tag'] = 'b' * 40
+        self.save_state(state)
+        with self.assertRaisesRegex(SystemExit, 'Release tag does not match source commit'):
+            self.invoke(publish=True)
+        self.assertEqual(self.state(), state)
+        self.assertFalse(any(c[:3] in (['gh', 'release', 'create'], ['gh', 'release', 'upload'])
+                             or (c[0] == 'git' and c[-1] == 'push') for c in self.fixture.calls()))
+        state['tag'] = COMMIT
+        self.save_state(state)
+        self.invoke(publish=True)
+        self.assertEqual(self.state()['release']['commit'], COMMIT)
+
+    def test_tag_lookup_failure_stops_before_mutation(self):
+        original = self.state()
+        with patch.dict(os.environ, FAIL_COMMAND='gh api repos/example/releases/commits/v1.0.0'):
+            with self.assertRaisesRegex(SystemExit, 'Cannot inspect release tag'):
+                self.invoke(publish=True)
+        self.assertEqual(self.state(), original)
+
+    def test_dirty_preparation_refuses_packaging(self):
+        with patch.dict(os.environ, SOURCE_STATUS=' M Sources/Example.swift'):
+            # Use a new destination; cleanliness is checked before packaging.
+            with self.assertRaises(subprocess.CalledProcessError):
+                release.prepare(self.root / 'new-review', '1.0.0', 2, 'fixture-key',
+                                'https://example.org/feed', BASE_FEED, self.root / 'bin', 'example/releases')
+        self.assertFalse((self.root / 'new-review').exists())
