@@ -136,12 +136,12 @@ final class MarkdownReaderDocument: NSDocument {
 
     override convenience init() {
         // Every dependency takes its production default.
-        self.init(assetResolver: AssetResolver())
+        self.init(scrollStateStore: ScrollStateStore())
     }
 
     init(
         assetResolver: AssetResolver = AssetResolver(),
-        scrollStateStore: ScrollStateStore = ScrollStateStore(),
+        scrollStateStore: ScrollStateStore,
         renderScheduler: RenderScheduler? = nil,
         markdownLinkOpener: @escaping MarkdownLinkOpener = MarkdownReaderDocument.defaultOpenMarkdownLink,
         linkTargetHandler: @escaping LinkTargetHandler = { LinkTargetOpener().handle($0) },

@@ -16,7 +16,7 @@ enum MarkdownDocumentOpener {
 
     static func open(
         url: URL, anchorID: String? = nil,
-        documentFactory: () -> MarkdownReaderDocument = { MarkdownReaderDocument() }
+        documentFactory: () -> MarkdownReaderDocument = { MarkdownReaderDocument(scrollStateStore: ScrollStateStore()) }
     ) throws {
         let normalizedURL = normalizedFileURL(for: url)
         guard supports(url: normalizedURL) else {

@@ -300,7 +300,7 @@ final class DocumentHostWindowController: DocumentWindowController {
         }
         #endif
 
-        let document = MarkdownReaderDocument()
+        let document = MarkdownReaderDocument(scrollStateStore: .init())
         document.fileURL = url
         return document
     }

@@ -243,6 +243,7 @@ final class DocumentEditModeTests: XCTestCase {
     ) throws -> (MarkdownReaderDocument, RecordingReaderViewController) {
         let reader = RecordingReaderViewController()
         let document = MarkdownReaderDocument(
+            scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { [weak self] source, baseURL, _, _, completion in
                 self?.renderedSources.append(source)
                 completion(WebKitRenderOutput(html: "<html><body><div id=\"write\"></div></body></html>", baseURL: baseURL))
@@ -1176,6 +1177,7 @@ final class EditModeEndToEndTests: XCTestCase {
         defer { directory.remove() }
         let url = try directory.createTextFile(named: "Live.md", contents: "# Title\n\nPara one\n\nPara two\n")
         let document = MarkdownReaderDocument(
+            scrollStateStore: makeTestScrollStateStore(),
             fileMonitorFactory: { _, _ in EditTestFileMonitor(onChange: {}) },
             autosaveDelay: 0.2,
             liveRenderInterval: 0.02
@@ -1241,6 +1243,7 @@ extension EditModeEndToEndTests {
         let source = (1...300).map { "Paragraph \($0) with enough words to be a real line." }.joined(separator: "\n\n")
         let url = try directory.createTextFile(named: "Long.md", contents: source)
         let document = MarkdownReaderDocument(
+            scrollStateStore: makeTestScrollStateStore(),
             fileMonitorFactory: { _, _ in EditTestFileMonitor(onChange: {}) },
             autosaveDelay: 60,
             liveRenderInterval: 0.02
@@ -1313,6 +1316,7 @@ extension EditModeEndToEndTests {
         defer { directory.remove() }
         let url = try directory.createFile(named: "Showcase.md", contents: Data(contentsOf: showcase))
         let document = MarkdownReaderDocument(
+            scrollStateStore: makeTestScrollStateStore(),
             fileMonitorFactory: { _, _ in EditTestFileMonitor(onChange: {}) },
             autosaveDelay: 60
         )

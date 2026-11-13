@@ -47,6 +47,7 @@ final class AnchorLinkEndToEndTests: XCTestCase {
         let source = "# Start\n\n[one](#x) [two](#y)\n\n\(filler)\n\n## Café\n\n\(filler)\n\n## 日本語\n\n\(filler)\n"
         let url = try directory.createTextFile(named: "Encoded.md", contents: source)
         let document = MarkdownReaderDocument(
+            scrollStateStore: makeTestScrollStateStore(),
             fileMonitorFactory: { _, _ in AnchorTestFileMonitor() },
             wikiLinkIndexProvider: { nil }
         )
@@ -97,6 +98,7 @@ final class AnchorLinkEndToEndTests: XCTestCase {
             """
         let url = try directory.createTextFile(named: "Anchors.md", contents: source)
         let document = MarkdownReaderDocument(
+            scrollStateStore: makeTestScrollStateStore(),
             fileMonitorFactory: { _, _ in AnchorTestFileMonitor() },
             wikiLinkIndexProvider: { nil }
         )

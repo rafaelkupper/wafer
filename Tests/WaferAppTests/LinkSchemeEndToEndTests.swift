@@ -28,6 +28,7 @@ final class LinkSchemeEndToEndTests: XCTestCase {
             openMarkdownFile: { opened.append($0) }
         )
         let document = MarkdownReaderDocument(
+            scrollStateStore: makeTestScrollStateStore(),
             linkTargetHandler: { opener.handle($0) },
             fileMonitorFactory: { _, _ in LinkSchemeTestFileMonitor() },
             wikiLinkIndexProvider: { nil }

@@ -142,6 +142,7 @@ final class LinkTargetOpenerTests: XCTestCase {
     func testDocumentLinksGoThroughTheOpener() throws {
         let reader = RecordingReaderViewController()
         let document = MarkdownReaderDocument(
+            scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, _, _, _ in DispatchWorkItem {} },
             linkTargetHandler: { [unowned self] in self.makeOpener().handle($0) },
             readerControllerFactory: { reader },

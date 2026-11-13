@@ -567,7 +567,7 @@ final class ReaderReliabilityTests: XCTestCase {
     ) -> MarkdownReaderDocument {
         let defaults = UserDefaults(suiteName: UUID().uuidString)!
         return MarkdownReaderDocument(
-            scrollStateStore: ScrollStateStore(defaults: defaults), renderScheduler: scheduler,
+            scrollStateStore: makeTestScrollStateStore(), renderScheduler: scheduler,
             readerControllerFactory: { reader },
             readerBehaviorPreferenceStore: ReaderBehaviorPreferenceStore(defaults: defaults),
             sourceLoader: loader, fileMonitorFactory: { _, _ in NoReaderMonitor() },
