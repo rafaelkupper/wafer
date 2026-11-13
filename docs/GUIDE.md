@@ -24,6 +24,7 @@ This guide describes Wafer's behavior in detail. For an overview and screenshots
 - Off-main-thread parsing
 - Live reload when the open file changes on disk, enabled by default through File > Automatically Reload
 - Manual reload through File > Reload or Cmd-R refreshes the reader and its assets even when the Markdown is unchanged or automatic reload is disabled
+- If an open file is deleted, Wafer checks for its return less often, up to once every five seconds; automatic reload resumes when it returns.
 - Same-document anchors that scroll in place and cross-document anchors that open at the target section
 - GitHub-authored heading links keep working through invisible anchor aliases while Wafer's outline IDs stay stable
 - Bare `http://`, `https://`, `www.`, and email addresses autolink during rendering without double-linking code or existing links
@@ -43,7 +44,7 @@ This guide describes Wafer's behavior in detail. For an overview and screenshots
 - Files must be UTF-8, or UTF-16 with a byte-order mark; other encodings show an error instead of garbled text. Files over 32 MB are refused rather than shown in part.
 - Local markdown links reuse open windows by file identity and cascade new windows when needed
 - Local images load through a custom local asset scheme in WebKit
-- Remote images load only from `https` URLs through a custom remote-image scheme in WebKit; disable them with File > Load Remote Images when privacy matters, then reload with Cmd-R
+- Remote images load only from `https` URLs through a custom remote-image scheme in WebKit. Loading is on by default. Private, loopback, link-local, CGNAT, unspecified, and multicast destinations are blocked, including redirect targets. Disable them with File > Load Remote Images when privacy matters, then reload with Cmd-R
 - Scroll position is remembered per file fingerprint and preserved across live reloads, with bottom-of-document reloads staying pinned to the bottom
 
 ## Edit Mode
@@ -125,7 +126,7 @@ theme. Dark and custom themes are exported as dark/custom output rather than bei
 
 Remote image export follows File > Load Remote Images. When remote images are disabled, HTML export
 does not fetch remote URLs and removes those images from the standalone file. When enabled, export
-fetches `https` images with the same privacy posture as the reader; failed remote images are dropped
+fetches `https` images with the same destination checks as the reader, including every redirect; failed remote images are dropped
 without failing the whole export. HTML export has a 20 MB total inlined-image budget and reports an
 error if the document would exceed it.
 
