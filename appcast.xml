@@ -2,5 +2,14 @@
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
     <channel>
         <title>Wafer</title>
+        <item>
+            <title>2.1.1</title>
+            <pubDate>Fri, 13 Nov 2026 13:03:57 -0300</pubDate>
+            <sparkle:version>21</sparkle:version>
+            <sparkle:shortVersionString>2.1.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/rafaelkupper/wafer/releases/download/v2.1.1/Wafer-2.1.1.zip" length="10192043" type="application/octet-stream" sparkle:edSignature="fJB+wtE6tW7w8t2bNe4WSZ2gUEaSLD2WaGNQRNLkre7HjVh4W7mofXrF7u+XxJlrxyC5WuEpkyxwynDMArDRAw=="/>
+        </item>
     </channel>
 </rss>
