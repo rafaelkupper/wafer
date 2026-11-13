@@ -88,10 +88,10 @@ Review threads: Astra, Fable, and Muse (xhigh) delegated reviews, 2026-11-13. Th
 
 ## Done when
 
-- [ ] Each finding is fixed, or its proportionate resolution is recorded under Decisions.
-- [ ] `swift test` passes five consecutive runs.
-- [ ] `python3 -m unittest discover -s Tests/ReleaseTools -v` passes.
-- [ ] `scripts/build-app.sh release` and `scripts/verify-appex.sh build/Wafer.app` pass.
+- [x] Each finding is fixed, or its proportionate resolution is recorded under Decisions.
+- [x] `swift test` passes five consecutive runs.
+- [x] `python3 -m unittest discover -s Tests/ReleaseTools -v` passes.
+- [x] `scripts/build-app.sh release` and `scripts/verify-appex.sh build/Wafer.app` pass.
 - [ ] The three original reviewers (Codex Company gpt-6-astra xhigh, Claude One claude-fable-5-2 xhigh, Muse muse-wonder-full-1.0 xhigh) re-run the same scored assessment on the integrated result (requested 2026-11-13).
 
 ## Decisions
@@ -106,3 +106,14 @@ Review threads: Astra, Fable, and Muse (xhigh) delegated reviews, 2026-11-13. Th
 - P2.4: sidebar shows "N files skipped (unreadable or too large)".
 
 ## Verification
+
+Integration branch `review-fixes-integration`, 2026-11-13:
+
+- `swift test`: passed five consecutive runs; each 635 tests (249 core, 379 app with 1 opt-in perf test skipped, 7 Quick Look), 0 failures, no Auto Layout conflict warnings.
+- `python3 -m unittest discover -s Tests/ReleaseTools`: passed, 20 tests.
+- Node tests (`Tests/JavaScript/*/*.cjs`): all 3 passed.
+- `scripts/build-app.sh release` and `scripts/verify-appex.sh build/Wafer.app`: passed.
+- `swift build -c release`: no `ForTesting` symbols in the release binary (`nm`).
+- Mutation checks: link-scheme end-to-end test fails when `shortcuts` is allowed; C1 reported its navigation, CRLF, stale-reload, and save-fallback tests fail without their fixes.
+- C1.3: keystroke autosave main-thread time on a 5 MB document, median about 20 ms before, about 4 ms after (release).
+- Not run: hosted CI, notarization, publication, installed Finder Quick Look smoke test.
