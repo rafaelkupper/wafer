@@ -43,7 +43,7 @@ The loader reads at most 32 MB (32,000,000 bytes) through `BoundedFileReader`. A
 Clicked links go through the document. Wiki links and links to Markdown files open in Wafer, and anchor IDs are taken from the clicked URL's fragment, percent-decoded (`MarkdownDocumentOpener.anchorID(in:)`), so `#café` reaches the heading `café`. Other targets go to `LinkTargetOpener`:
 
 - External links open only for `http`, `https`, and `mailto`; other schemes are ignored.
-- A link to a file that can run code asks first, offering Show in Finder (the default), Open, or Cancel. After symlinks are resolved, that is a file with the execute bit, or an item whose type or extension conforms to executable, application, code bundle, script (including `.command`), Terminal settings, Automator workflow, installer package, or an internet-location or shortcut file. Document packages such as `.rtfd` open without asking.
+- Known passive regular files open directly: images, PDF, audio, movies, RTF, explicit plain-text formats, and macro-free Office formats (`docx`, `xlsx`, `pptx`). The check resolves symlinks and rejects executable files. All other files, directories, and packages ask first, offering Show in Finder (the default), Open, or Cancel. HTML, disk images, projects, shortcuts, configuration profiles, notebooks, and unknown types require confirmation.
 
 ## Edit Mode
 
