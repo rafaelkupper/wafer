@@ -67,6 +67,8 @@ Limits: the panes are aligned by their top line, so a tall diagram or image can 
 
 Open a folder with File > Open Folder... or by dropping a folder on the app. Wafer indexes markdown files with extensions `.md`, `.markdown`, `.mdown`, and `.mkd`, skips hidden files plus `.git`, `.build`, `build`, `dist`, and `node_modules`, and caps the visible library at 2,000 markdown files. If the cap is reached, the Library sidebar shows a quiet truncation footer. Files that cannot be read, or that exceed the indexing budget (2 MiB per file, 128 MiB for the whole library), are left out of the index and counted in a footer such as "3 files skipped (unreadable or too large)". One unreadable file never empties the library; a file that becomes unreadable keeps its last indexed entry.
 
+Folder changes refresh the library after 500 ms without another change. If another app keeps writing, Wafer requests a rescan within two seconds rather than waiting for the writing to stop. Any cancelled scan finishes before the next scan starts.
+
 When a folder is opened without an existing reader window, Wafer opens the first markdown file from the completed background scan as the visible entry point for the library.
 
 The Library sidebar mode shows a collapsible folder tree. Selecting a file replaces the current document in the same window, and the current file stays highlighted as you browse. The selected folder is persisted and restored on next launch.
@@ -123,6 +125,8 @@ theme. Dark and custom themes are exported as dark/custom output rather than bei
   Wafer app-only chrome are stripped, and local images are inlined as `data:` URIs. KaTeX fonts are
   not inlined, so exported math can fall back to system italic fonts when opened outside Wafer.
 
+File > Load Remote Images remains a checkable toggle in the top menu and is on by default. Its checkmark shows your saved choice. Turning it off blocks subsequent remote image requests; reload with Cmd-R to apply your choice to the current document.
+
 Remote image export follows File > Load Remote Images. When remote images are disabled, HTML export
 does not fetch remote URLs and removes those images from the standalone file. When enabled, export
 fetches `https` images with the same privacy posture as the reader; failed remote images are dropped
@@ -163,6 +167,8 @@ to a new file, change its `name`, and edit the colors. It is the safest starting
 custom themes must provide a complete palette; missing keys, invalid hex colors, or alpha values
 outside `0...1` make the file invalid. Invalid files are skipped when themes reload, and valid
 files remain available.
+
+If a bundled theme is missing or unreadable, Wafer logs the packaging defect and keeps the remaining themes available. System, Light, and Dark still work, and an unavailable selected theme falls back to Dark.
 
 Custom themes use one JSON file per palette. The top-level JSON mirrors `ReaderThemePalette`:
 
