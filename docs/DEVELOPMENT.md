@@ -53,7 +53,7 @@ Icon artwork lives in `App/Resources`: `Wafer-source.png` is the original master
 
 ## Release packaging
 
-Commit or stash tracked changes before running `scripts/package-release.sh` or preparing an update with `scripts/release.py`. Packaging rejects staged and unstaged changes anywhere in the repository, plus nonignored untracked files under `Sources`, `Resources`, and `App`. It checks again after packaging; update preparation also checks before recording its receipt. There is no dirty-tree override. Ordinary local `build-app.sh` builds still accept edits.
+Commit or stash tracked changes before running `scripts/package-release.sh` or preparing an update with `scripts/release.py`. Packaging rejects staged and unstaged changes anywhere in the repository, plus untracked files under `Sources`, `Resources`, and `App`, including ignored files. It checks again after packaging; update preparation also checks before recording its receipt. There is no dirty-tree override. Ordinary local `build-app.sh` builds still accept edits.
 
 Release builds generate `build/Wafer.dSYM` and `build/WaferQuickLook.dSYM`, then strip local and debug symbols from both shipping executables before signing. Swift debug and file paths and C debug paths map the checkout to `/wafer`. The dSYM tool maps object paths back to the checkout while gathering symbols. Keep the dSYMs with the exact binaries they describe; UUIDs must match. Packaging copies both symbol bundles beside the final ZIP in `dist`, or in the directory selected by `WAFER_DIST_DIR`. They are not inside the downloadable app ZIP.
 

@@ -19,6 +19,11 @@ def check(root):
             dirty.append(path)
         if "R" in status or "C" in status:
             next(entries)  # --porcelain -z puts the old name after a rename/copy.
+    ignored = subprocess.check_output([
+        "git", "-C", str(root), "ls-files", "--others", "--ignored", "--exclude-standard", "-z",
+        "--", "Sources", "Resources", "App",
+    ])
+    dirty.extend(path for path in ignored.decode().split("\0") if path)
     if dirty:
         raise SystemExit("Release packaging requires a clean source tree. Commit or stash changes first:\n"
                          + "\n".join(dirty))

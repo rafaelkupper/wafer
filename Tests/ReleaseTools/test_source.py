@@ -51,3 +51,11 @@ class SourceIdentityTests(unittest.TestCase):
         self.git('mv', 'Sources/Example.swift', 'Sources/Renamed.swift')
         with self.assertRaisesRegex(SystemExit, 'Sources/Renamed.swift'):
             source.check(self.root)
+
+    def test_ignored_untracked_build_inputs_are_rejected(self):
+        (self.root / '.gitignore').write_text('Sources/Local.swift\n')
+        self.git('add', '.gitignore')
+        self.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.org', 'commit', '-qm', 'Ignore local input')
+        (self.root / 'Sources/Local.swift').write_text('uncommitted build input')
+        with self.assertRaisesRegex(SystemExit, 'Sources/Local.swift'):
+            source.check(self.root)
