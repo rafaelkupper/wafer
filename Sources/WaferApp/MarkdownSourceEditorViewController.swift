@@ -130,6 +130,15 @@ final class MarkdownSourceEditorViewController: NSViewController, NSTextViewDele
         textStorage.string
     }
 
+    /// Increases with every change to the text, typed or programmatic, so
+    /// saving can tell whether the text moved on without comparing it.
+    private(set) var revision = 0
+
+    /// An immutable copy of the text and the revision it belongs to.
+    var snapshot: EditSnapshot {
+        EditSnapshot(text: text, revision: revision)
+    }
+
     var textViewForTesting: NSTextView {
         textView
     }
@@ -272,6 +281,7 @@ final class MarkdownSourceEditorViewController: NSViewController, NSTextViewDele
             return
         }
 
+        revision += 1
         if let pending = pendingEditedRange {
             // Shift the earlier range by this edit and merge.
             let shifted = pending.location >= editedRange.location

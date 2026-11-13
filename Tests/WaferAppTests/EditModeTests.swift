@@ -9,7 +9,8 @@ import XCTest
 final class MarkdownEditSessionTests: XCTestCase {
     private func makeSession(
         for url: URL,
-        resolver: @escaping EditConflictResolver = { _, _ in XCTFail("unexpected conflict"); return .cancel }
+        resolver: @escaping EditConflictResolver = { _, _ in XCTFail("unexpected conflict"); return .cancel },
+        writer: @escaping MarkdownEditSession.FileWriter = MarkdownEditSession.replaceContents
     ) throws -> MarkdownEditSession {
         let data = try Data(contentsOf: url)
         let decoded = try XCTUnwrap(MarkdownTextFormat.decode(data))
@@ -18,8 +19,97 @@ final class MarkdownEditSessionTests: XCTestCase {
             text: MarkdownTextFormat.normalizingLineEndings(decoded.text),
             fingerprint: FileFingerprint.sha256Hex(for: data),
             format: decoded.format,
-            resolveConflict: resolver
+            resolveConflict: resolver,
+            worker: MarkdownSaveWorker(writer: writer)
         )
+    }
+
+    func testFailedReplacementKeepsTheOriginalAndReportsItsError() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let url = try directory.createTextFile(named: "Doc.md", contents: "original\n")
+        let failure = CocoaError(.fileWriteOutOfSpace)
+        var conflicts: [EditConflictKind] = []
+        let session = try makeSession(for: url, resolver: { kind, _ in
+            conflicts.append(kind)
+            return .cancel
+        }, writer: { _, _, beforeReplacing in
+            try beforeReplacing()
+            throw failure
+        })
+
+        XCTAssertEqual(session.save("mine\n", interactive: false), .keptInMemory)
+        XCTAssertEqual(conflicts, [], "non-interactive saves never prompt")
+        XCTAssertEqual(session.save("mine\n", interactive: true), .keptInMemory)
+        XCTAssertEqual(conflicts, [.writeFailed(failure.localizedDescription)], "the original error reaches the prompt")
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "original\n")
+        XCTAssertEqual(session.savedText, "original\n")
+    }
+
+    func testReplacementFailureNeverFallsBackToWritingInPlace() throws {
+        try XCTSkipIf(getuid() == 0, "permissions do not apply to root")
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let folder = directory.url.appendingPathComponent("Locked", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let url = folder.appendingPathComponent("Doc.md")
+        try Data("original\n".utf8).write(to: url)
+        // The file stays writable, but its folder refuses the swap.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+
+        XCTAssertThrowsError(try MarkdownEditSession.replaceContents(of: url, with: Data("new\n".utf8))) { error in
+            XCTAssertEqual((error as? CocoaError)?.code, .fileWriteNoPermission)
+        }
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "original\n")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path), ["Doc.md"])
+    }
+
+    func testDiskIsComparedAgainRightBeforeTheReplace() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let url = try directory.createTextFile(named: "Doc.md", contents: "one\n")
+        var conflicts: [EditConflictKind] = []
+        let session = try makeSession(for: url, resolver: { kind, _ in
+            conflicts.append(kind)
+            return .cancel
+        }, writer: { target, data, beforeReplacing in
+            try MarkdownEditSession.replaceContents(of: target, with: data) {
+                // Another program writes after the new bytes were staged.
+                try Data("theirs\n".utf8).write(to: target)
+                try beforeReplacing()
+            }
+        })
+
+        XCTAssertEqual(session.save("mine\n", interactive: true), .keptInMemory)
+        XCTAssertEqual(conflicts, [.changedOnDisk])
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "theirs\n")
+    }
+
+    func testBackgroundSaveRunsOffTheMainThreadAndSkipsUnchangedText() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let url = try directory.createTextFile(named: "Doc.md", contents: "one\n")
+        let writer = RecordingFileWriter()
+        let session = try makeSession(for: url, writer: { try writer.write($0, $1, $2) })
+
+        var outcomes: [MarkdownEditSession.BackgroundOutcome] = []
+        XCTAssertTrue(session.saveInBackground(EditSnapshot(text: "one\ntwo\n", revision: 7)) { outcomes.append($0) })
+        XCTAssertTrue(session.isSaving)
+        XCTAssertFalse(session.saveInBackground(EditSnapshot(text: "other", revision: 8)) { _ in }, "one save at a time")
+        let deadline = Date(timeIntervalSinceNow: 5)
+        while outcomes.isEmpty, Date() < deadline {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        }
+
+        XCTAssertEqual(outcomes, [.saved])
+        XCTAssertEqual(writer.writes, ["one\ntwo\n"])
+        XCTAssertEqual(writer.wroteOnMainThread, [false])
+        XCTAssertEqual(session.savedText, "one\ntwo\n")
+        XCTAssertEqual(session.savedRevision, 7)
+        XCTAssertEqual(session.save(EditSnapshot(text: "one\ntwo\n", revision: 7), interactive: true), .unchanged)
+        XCTAssertEqual(session.save("one\ntwo\n", interactive: true), .unchanged)
+        XCTAssertEqual(writer.writes.count, 1, "unchanged text writes nothing")
     }
 
     func testSaveKeepsByteOrderMarkAndLineEndingsAndSkipsUnchangedText() throws {
@@ -144,7 +234,9 @@ final class DocumentEditModeTests: XCTestCase {
     private func makeDocument(
         for url: URL,
         autosaveDelay: TimeInterval = 0.05,
-        makesWindow: Bool = true
+        makesWindow: Bool = true,
+        sourceLoader: @escaping MarkdownReaderDocument.SourceLoader = MarkdownReaderDocument.loadSource,
+        fileWriter: @escaping MarkdownEditSession.FileWriter = MarkdownEditSession.replaceContents
     ) throws -> (MarkdownReaderDocument, RecordingReaderViewController) {
         let reader = RecordingReaderViewController()
         let document = MarkdownReaderDocument(
@@ -154,6 +246,7 @@ final class DocumentEditModeTests: XCTestCase {
                 return DispatchWorkItem {}
             },
             readerControllerFactory: { reader },
+            sourceLoader: sourceLoader,
             fileMonitorFactory: { [weak self] _, onChange in
                 let monitor = EditTestFileMonitor(onChange: onChange)
                 self?.monitors.append(monitor)
@@ -164,6 +257,7 @@ final class DocumentEditModeTests: XCTestCase {
                 self?.conflicts.append(kind)
                 return self?.conflictResolution ?? .cancel
             },
+            editFileWriter: fileWriter,
             autosaveDelay: autosaveDelay,
             liveRenderInterval: 0.01
         )
@@ -181,7 +275,7 @@ final class DocumentEditModeTests: XCTestCase {
         textView.insertText(text, replacementRange: NSRange(location: end, length: 0))
     }
 
-    private func waitUntil(_ description: String, timeout: TimeInterval = 3, _ condition: @escaping () -> Bool) {
+    private func waitUntil(_ description: String, timeout: TimeInterval = 10, _ condition: @escaping () -> Bool) {
         let deadline = Date(timeIntervalSinceNow: timeout)
         while !condition(), Date() < deadline {
             RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
@@ -345,6 +439,100 @@ final class DocumentEditModeTests: XCTestCase {
         }
         XCTAssertTrue(document.isEditing)
         XCTAssertEqual(document.editorControllerForTesting?.undoManagerForTesting.canUndo, false)
+    }
+
+    func testFailedAutosaveKeepsTheFileAndReportsTheError() throws {
+        let url = try directory.createTextFile(named: "Doc.md", contents: "one\n")
+        let failure = CocoaError(.fileWriteVolumeReadOnly)
+        let (document, _) = try makeDocument(for: url, fileWriter: { _, _, beforeReplacing in
+            try beforeReplacing()
+            throw failure
+        })
+        defer { document.close() }
+        conflictResolution = .cancel
+        document.beginEditing()
+        try type("mine", in: document)
+
+        waitUntil("the failed save was reported") { !self.conflicts.isEmpty }
+        XCTAssertEqual(conflicts, [.writeFailed(failure.localizedDescription)])
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "one\n")
+        XCTAssertEqual(document.editorControllerForTesting?.text, "one\nmine")
+        XCTAssertTrue(document.isEditing)
+    }
+
+    func testExplicitSaveWaitsForTheBackgroundSaveAndWritesTheRest() throws {
+        let url = try directory.createTextFile(named: "Doc.md", contents: "one\n")
+        let writer = RecordingFileWriter()
+        let (document, _) = try makeDocument(for: url, autosaveDelay: 0.01, fileWriter: { try writer.write($0, $1, $2) })
+        defer { writer.release(); document.close() }
+        document.beginEditing()
+        writer.holdNextWrite()
+        try type("A", in: document)
+        waitUntil("autosave is writing") { writer.isHolding }
+        try type("B", in: document)
+
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { writer.release() }
+        XCTAssertTrue(document.flushEdits(interactive: true))
+
+        XCTAssertEqual(writer.writes, ["one\nA", "one\nAB"])
+        XCTAssertEqual(writer.wroteOnMainThread.first, false, "autosave writes off the main thread")
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "one\nAB")
+    }
+
+    func testTextTypedDuringABackgroundSaveIsSavedNext() throws {
+        let url = try directory.createTextFile(named: "Doc.md", contents: "one\n")
+        let writer = RecordingFileWriter()
+        let (document, _) = try makeDocument(for: url, autosaveDelay: 0.01, fileWriter: { try writer.write($0, $1, $2) })
+        defer { writer.release(); document.close() }
+        document.beginEditing()
+        writer.holdNextWrite()
+        try type("A", in: document)
+        waitUntil("autosave is writing") { writer.isHolding }
+        try type("B", in: document)
+        // The next autosave comes due while the first save is still running.
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+        writer.release()
+
+        waitUntil("the newer text was saved too") { (try? String(contentsOf: url, encoding: .utf8)) == "one\nAB" }
+        XCTAssertEqual(writer.writes, ["one\nA", "one\nAB"])
+        XCTAssertEqual(conflicts, [])
+    }
+
+    func testDeactivationSavesInTheBackgroundAndNeverPrompts() throws {
+        let url = try directory.createTextFile(named: "Doc.md", contents: "one\n")
+        let (document, _) = try makeDocument(for: url, autosaveDelay: 60)
+        defer { document.close() }
+        document.beginEditing()
+        try type("A", in: document)
+
+        NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+        waitUntil("saved on deactivation") { (try? String(contentsOf: url, encoding: .utf8)) == "one\nA" }
+
+        try type("B", in: document)
+        try Data("theirs\n".utf8).write(to: url)
+        NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
+        XCTAssertEqual(conflicts, [], "never prompts in the background")
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "theirs\n")
+        XCTAssertEqual(document.editorControllerForTesting?.text, "one\nAB")
+    }
+
+    func testClosingWaitsForTheBackgroundSave() throws {
+        let url = try directory.createTextFile(named: "Doc.md", contents: "one\n")
+        let writer = RecordingFileWriter()
+        let (document, _) = try makeDocument(for: url, autosaveDelay: 0.01, fileWriter: { try writer.write($0, $1, $2) })
+        defer { writer.release() }
+        document.beginEditing()
+        writer.holdNextWrite()
+        try type("A", in: document)
+        waitUntil("autosave is writing") { writer.isHolding }
+        try type("B", in: document)
+
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { writer.release() }
+        document.close()
+
+        XCTAssertEqual(writer.writes, ["one\nA", "one\nAB"])
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "one\nAB")
     }
 
     func testReadOnlyFileRefusesEditMode() throws {
@@ -1009,4 +1197,44 @@ extension EditModeEndToEndTests {
 private final class ResultBox: @unchecked Sendable {
     var value: Any?
     var finished = false
+}
+
+/// Writes through `MarkdownEditSession.replaceContents`, recording each
+/// write's text and thread, and can hold the next write until released.
+private final class RecordingFileWriter: @unchecked Sendable {
+    private let lock = NSLock()
+    private let gate = DispatchSemaphore(value: 0)
+    private var recordedWrites: [String] = []
+    private var recordedMainThread: [Bool] = []
+    private var holdsNext = false
+    private var holding = false
+
+    var writes: [String] { lock.withLock { recordedWrites } }
+    var wroteOnMainThread: [Bool] { lock.withLock { recordedMainThread } }
+    var isHolding: Bool { lock.withLock { holding } }
+
+    func holdNextWrite() {
+        lock.withLock { holdsNext = true }
+    }
+
+    func release() {
+        gate.signal()
+    }
+
+    func write(_ url: URL, _ data: Data, _ beforeReplacing: () throws -> Void) throws {
+        let holds = lock.withLock {
+            defer { holdsNext = false }
+            holding = holdsNext
+            return holdsNext
+        }
+        if holds {
+            _ = gate.wait(timeout: .now() + 10)
+            lock.withLock { holding = false }
+        }
+        lock.withLock {
+            recordedWrites.append(String(decoding: data, as: UTF8.self))
+            recordedMainThread.append(Thread.isMainThread)
+        }
+        try MarkdownEditSession.replaceContents(of: url, with: data, beforeReplacing: beforeReplacing)
+    }
 }

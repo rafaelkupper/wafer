@@ -158,6 +158,7 @@ final class MarkdownReaderDocument: NSDocument {
         librarySnapshotProvider: @escaping LibrarySnapshotProvider = { LibraryController.shared.snapshot },
         sourceLoadErrorHandler: @escaping @MainActor (Error) -> Void = { NSApp.presentError($0) },
         editConflictResolver: @escaping EditConflictResolver = MarkdownEditSession.presentConflict,
+        editFileWriter: @escaping MarkdownEditSession.FileWriter = MarkdownEditSession.replaceContents,
         autosaveDelay: TimeInterval = 1.0,
         liveRenderInterval: TimeInterval = 0.1
     ) {
@@ -180,7 +181,8 @@ final class MarkdownReaderDocument: NSDocument {
         self.editMode = MarkdownEditCoordinator(configuration: .init(
             resolveConflict: editConflictResolver,
             autosaveDelay: autosaveDelay,
-            liveRenderInterval: liveRenderInterval
+            liveRenderInterval: liveRenderInterval,
+            fileWriter: editFileWriter
         ))
         super.init()
         editMode.delegate = self
@@ -1074,7 +1076,8 @@ final class MarkdownReaderDocument: NSDocument {
         documentWindowController?.setEditingActive(isEditing)
     }
 
-    nonisolated private static func loadSource(from fileURL: URL) throws -> LoadedMarkdownSource {
+    /// The production source loader: reads, decodes, and fingerprints a file.
+    nonisolated static func loadSource(from fileURL: URL) throws -> LoadedMarkdownSource {
         let data = try Data(contentsOf: fileURL)
         guard let decoded = MarkdownTextFormat.decode(data) else {
             throw CocoaError(.fileReadInapplicableStringEncoding)

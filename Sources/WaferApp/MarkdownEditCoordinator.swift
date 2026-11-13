@@ -26,6 +26,7 @@ final class MarkdownEditCoordinator {
         var resolveConflict: EditConflictResolver
         var autosaveDelay: TimeInterval
         var liveRenderInterval: TimeInterval
+        var fileWriter: MarkdownEditSession.FileWriter = MarkdownEditSession.replaceContents
     }
 
     /// Whether the editor shows the reader's line yet. Until it does, neither
@@ -40,10 +41,15 @@ final class MarkdownEditCoordinator {
 
     weak var delegate: MarkdownEditCoordinatorDelegate?
     private let configuration: Configuration
+    /// One queue per document, so its saves never overlap, across files too.
+    private let saveWorker: MarkdownSaveWorker
     private(set) var isEditing = false
     private(set) var editor: MarkdownSourceEditorViewController?
     private(set) var session: MarkdownEditSession?
     private var autosaveWorkItem: DispatchWorkItem?
+    /// A background save requested while one was running: whether it may
+    /// prompt. It starts when the running save finishes.
+    private var queuedBackgroundSave: Bool?
     private var liveRenderWorkItem: DispatchWorkItem?
     private var alignment = Alignment.aligned
     /// Bumped by each load and by the end of edit mode, so a line reported
@@ -53,6 +59,7 @@ final class MarkdownEditCoordinator {
 
     init(configuration: Configuration) {
         self.configuration = configuration
+        self.saveWorker = MarkdownSaveWorker(writer: configuration.fileWriter)
     }
 
     // MARK: Lifecycle
@@ -77,14 +84,18 @@ final class MarkdownEditCoordinator {
     /// the reader.
     func load(_ source: LoadedMarkdownSource, fileURL: URL) {
         guard isEditing, let editor else { return }
-        session = MarkdownEditSession(
+        session?.finishPendingSave()
+        let session = MarkdownEditSession(
             fileURL: fileURL,
             text: source.sourceText,
             fingerprint: source.fingerprint,
             format: source.format,
-            resolveConflict: configuration.resolveConflict
+            resolveConflict: configuration.resolveConflict,
+            worker: saveWorker
         )
+        self.session = session
         editor.load(text: source.sourceText)
+        session.editorShowsSavedText(revision: editor.revision)
         alignment = .awaiting
         alignmentGeneration += 1
     }
@@ -93,6 +104,7 @@ final class MarkdownEditCoordinator {
     /// while its pane closes.
     func end() {
         stopTimers()
+        session?.finishPendingSave()
         isEditing = false
         editor?.endSession()
         editor = nil
@@ -118,7 +130,7 @@ final class MarkdownEditCoordinator {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 // Never prompt while the app is in the background.
-                _ = self?.flush(interactive: false)
+                self?.saveInBackground(promptsOnConflict: false)
             }
         }
     }
@@ -145,22 +157,29 @@ final class MarkdownEditCoordinator {
         editor.replaceAllUndoably(with: session.baselineText)
     }
 
-    /// Saves unsaved editor text. Returns true when nothing unsaved remains:
-    /// the text was saved or unchanged, or the user discarded the edits.
+    /// Saves unsaved editor text and waits for the result (explicit saves,
+    /// navigation, closing, quitting). A background save in flight finishes
+    /// first. Returns true when nothing unsaved remains: the text was saved
+    /// or unchanged, or the user discarded the edits.
     @discardableResult
     func flush(interactive: Bool) -> Bool {
         guard isEditing, let session, let editor else { return true }
         editor.commitComposition()
         autosaveWorkItem?.cancel()
         autosaveWorkItem = nil
+        queuedBackgroundSave = nil
 
-        let outcome = session.save(editor.text, interactive: interactive)
+        session.finishPendingSave()
+        let outcome = editor.revision == session.savedRevision
+            ? .unchanged
+            : session.save(editor.snapshot, interactive: interactive)
         delegate?.editCoordinator(self, didUpdateDiskFingerprint: session.savedFingerprint, format: session.format)
         switch outcome {
         case .unchanged, .saved:
             return true
         case .reverted(let text):
             editor.replaceTextPreservingPosition(text)
+            session.editorShowsSavedText(revision: editor.revision)
             renderLive()
             return true
         case .keptInMemory:
@@ -174,11 +193,13 @@ final class MarkdownEditCoordinator {
     /// saved, so there is nothing to adopt.
     func adoptDiskVersion(_ loadedSource: LoadedMarkdownSource) -> Bool {
         guard let session, let editor else { return true }
+        // A save that just finished may be what changed the file.
+        session.finishPendingSave()
         guard loadedSource.fingerprint != session.savedFingerprint else {
             return false
         }
 
-        guard !session.hasUnsavedChanges(editor.text) else {
+        guard editor.revision == session.savedRevision || !session.hasUnsavedChanges(editor.text) else {
             // Both sides changed: the save path detects the conflict and asks.
             flush(interactive: true)
             return true
@@ -188,6 +209,7 @@ final class MarkdownEditCoordinator {
         session.rebase(text: text, fingerprint: loadedSource.fingerprint, format: loadedSource.format)
         delegate?.editCoordinator(self, didUpdateDiskFingerprint: loadedSource.fingerprint, format: loadedSource.format)
         editor.replaceTextPreservingPosition(text)
+        session.editorShowsSavedText(revision: editor.revision)
         renderLive()
         return true
     }
@@ -202,15 +224,57 @@ final class MarkdownEditCoordinator {
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.autosaveWorkItem = nil
-            self.flush(interactive: true)
+            self.saveInBackground(promptsOnConflict: true)
         }
         autosaveWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + configuration.autosaveDelay, execute: workItem)
     }
 
+    /// Saves a snapshot of the editor text on the save worker, so typing
+    /// never waits for file I/O. One save runs at a time; a request made
+    /// meanwhile starts when it finishes. After a conflict, an interactive
+    /// save on the main thread asks the user when `promptsOnConflict`;
+    /// otherwise the edits stay in memory for the next save.
+    private func saveInBackground(promptsOnConflict: Bool) {
+        guard isEditing, let session, let editor else { return }
+        guard !session.isSaving else {
+            queuedBackgroundSave = (queuedBackgroundSave ?? false) || promptsOnConflict
+            return
+        }
+
+        editor.commitComposition()
+        guard editor.revision != session.savedRevision else { return }
+        // Refused only while a conflict prompt is open; its save covers this text.
+        session.saveInBackground(editor.snapshot) { [weak self, weak session] outcome in
+            guard let self, let session, session === self.session else { return }
+            self.backgroundSaveDidFinish(outcome, in: session, promptsOnConflict: promptsOnConflict)
+        }
+    }
+
+    private func backgroundSaveDidFinish(
+        _ outcome: MarkdownEditSession.BackgroundOutcome,
+        in session: MarkdownEditSession,
+        promptsOnConflict: Bool
+    ) {
+        delegate?.editCoordinator(self, didUpdateDiskFingerprint: session.savedFingerprint, format: session.format)
+        let queued = queuedBackgroundSave
+        queuedBackgroundSave = nil
+        switch outcome {
+        case .saved:
+            if let queued {
+                saveInBackground(promptsOnConflict: queued)
+            }
+        case .conflict:
+            if promptsOnConflict || queued == true {
+                flush(interactive: true)
+            }
+        }
+    }
+
     private func stopTimers() {
         autosaveWorkItem?.cancel()
         autosaveWorkItem = nil
+        queuedBackgroundSave = nil
         liveRenderWorkItem?.cancel()
         liveRenderWorkItem = nil
     }
