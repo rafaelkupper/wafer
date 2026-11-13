@@ -1,0 +1,259 @@
+import Foundation
+
+public struct LibraryFileFingerprint: Equatable, Hashable, Sendable {
+    public let modificationDate: Date
+    public let fileSize: UInt64
+    public let contentDigest: String?
+
+    public init(modificationDate: Date, fileSize: UInt64, contentDigest: String? = nil) {
+        self.modificationDate = modificationDate
+        self.fileSize = fileSize
+        self.contentDigest = contentDigest
+    }
+}
+
+public struct LibraryFile: Equatable, Sendable {
+    public let identity: String
+    public let relativePath: String
+    let searchFields: LibrarySearchFields
+    public let fileURL: URL
+    public let relativePathComponents: [String]
+    public let displayTitle: String
+    public let outlineItems: [DocumentOutlineItem]
+    public let plainText: String
+    public let searchableText: String
+    public let contentFingerprint: LibraryFileFingerprint
+    public let outgoingReferences: [OutgoingReference]
+
+    public init(
+        fileURL: URL,
+        relativePathComponents: [String],
+        displayTitle: String,
+        outlineItems: [DocumentOutlineItem],
+        plainText: String,
+        searchableText: String,
+        contentFingerprint: LibraryFileFingerprint,
+        outgoingReferences: [OutgoingReference] = []
+    ) {
+        self.identity = FileIdentity.identity(for: fileURL)
+        self.relativePath = relativePathComponents.joined(separator: "/")
+        self.searchFields = LibrarySearchFields(
+            fileURL: fileURL, relativePath: relativePathComponents.joined(separator: "/"),
+            title: displayTitle, headings: outlineItems, plainText: plainText, body: searchableText
+        )
+        self.fileURL = fileURL
+        self.relativePathComponents = relativePathComponents
+        self.displayTitle = displayTitle
+        self.outlineItems = outlineItems
+        self.plainText = plainText
+        self.searchableText = searchableText
+        self.contentFingerprint = contentFingerprint
+        self.outgoingReferences = outgoingReferences
+    }
+}
+
+public enum LibraryScanner {
+    public struct Failure: Equatable, Sendable {
+        public let url: URL
+        public let message: String
+
+        public init(url: URL, message: String) {
+            self.url = url
+            self.message = message
+        }
+    }
+
+    public struct Result: Sendable {
+        public let files: [LibraryFile]
+        public let truncated: Bool
+        public let failure: Failure?
+
+        public init(files: [LibraryFile], truncated: Bool, failure: Failure? = nil) {
+            self.files = files
+            self.truncated = truncated
+            self.failure = failure
+        }
+    }
+
+    public static let skippedDirectoryNames: Set<String> = [
+        ".build",
+        ".git",
+        "build",
+        "dist",
+        "node_modules",
+    ]
+
+    public static func scan(
+        rootURL: URL, fileLimit: Int = 2_000, existingFiles: [LibraryFile] = [],
+        changedPaths: Set<String>? = [], cancellation: WorkCancellation? = nil
+    ) -> Result {
+        guard fileLimit > 0 else {
+            var traversal = LibraryTraversal(rootURL: FileIdentity.normalized(rootURL), fileLimit: 1)
+            let files = traversal.markdownFileURLs()
+            return Result(files: [], truncated: !files.isEmpty, failure: traversal.failure)
+        }
+
+        let normalizedRootURL = FileIdentity.normalized(rootURL)
+        var traversal = LibraryTraversal(rootURL: normalizedRootURL, fileLimit: fileLimit, cancellation: cancellation)
+        let fileURLs = traversal.markdownFileURLs()
+        if let failure = traversal.failure {
+            return Result(files: [], truncated: traversal.truncated, failure: failure)
+        }
+        let parser = MarkdownParser()
+        let existing = Dictionary(existingFiles.map { ($0.identity, $0) }, uniquingKeysWith: { first, _ in first })
+        var files: [LibraryFile] = []
+        for url in fileURLs {
+            if cancellation?.isCancelled == true { break }
+            do {
+                let metadata = try fingerprint(for: url)
+                let identity = FileIdentity.identity(for: url)
+                if let previous = existing[identity], let changedPaths,
+                   !changedPaths.contains(identity),
+                   previous.contentFingerprint.modificationDate == metadata.modificationDate,
+                   previous.contentFingerprint.fileSize == metadata.fileSize {
+                    files.append(previous)
+                    continue
+                }
+                if let file = try autoreleasepool(invoking: { try makeLibraryFile(for: url, rootURL: normalizedRootURL, parser: parser) }) {
+                    files.append(file)
+                }
+            } catch {
+                return Result(files: [], truncated: traversal.truncated,
+                    failure: Failure(url: url, message: error.localizedDescription))
+            }
+        }
+        return Result(files: files, truncated: traversal.truncated)
+    }
+
+    private static func makeLibraryFile(for fileURL: URL, rootURL: URL, parser: MarkdownParser) throws -> LibraryFile? {
+        let before = try fingerprint(for: fileURL)
+        let data = try Data(contentsOf: fileURL)
+        guard let source = MarkdownSourceDecoding.decode(data) else {
+            return nil
+        }
+
+        let normalizedURL = FileIdentity.normalized(fileURL)
+        let document = parser.parse(source: source, baseURL: normalizedURL)
+        let plainText = RenderedTextDocumentStatistics.renderedText(from: document).collapsingWhitespace
+        let after = try fingerprint(for: fileURL)
+        // A file changed while being read. Keep a deliberately stale metadata
+        // stamp so the next scan rereads it rather than caching a mixed version.
+        let date = before == after ? after.modificationDate : .distantPast
+
+        return LibraryFile(
+            fileURL: normalizedURL,
+            relativePathComponents: relativePathComponents(for: normalizedURL, rootURL: rootURL),
+            displayTitle: DocumentSidebarDataBuilder.documentDisplayTitle(for: document, fallbackURL: normalizedURL),
+            outlineItems: DocumentSidebarDataBuilder.outlineItems(from: document),
+            plainText: plainText,
+            searchableText: plainText.libraryFoldedSearchText,
+            contentFingerprint: LibraryFileFingerprint(modificationDate: date, fileSize: UInt64(data.count), contentDigest: document.fingerprint),
+            outgoingReferences: OutgoingReferenceCollector.collect(from: document, assetResolver: AssetResolver())
+        )
+    }
+
+    private static func relativePathComponents(for fileURL: URL, rootURL: URL) -> [String] {
+        let rootPath = rootURL.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let filePath = fileURL.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let prefix = rootPath.isEmpty ? "" : rootPath + "/"
+        let relativePath = filePath.hasPrefix(prefix) ? String(filePath.dropFirst(prefix.count)) : fileURL.lastPathComponent
+        return relativePath.split(separator: "/").map(String.init)
+    }
+
+    private static func fingerprint(for fileURL: URL) throws -> LibraryFileFingerprint {
+        let values = try URL(fileURLWithPath: fileURL.path).resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+        return LibraryFileFingerprint(
+            modificationDate: values.contentModificationDate ?? Date(timeIntervalSince1970: 0),
+            fileSize: UInt64(max(values.fileSize ?? 0, 0))
+        )
+    }
+
+    private struct LibraryTraversal {
+        let rootURL: URL
+        let fileLimit: Int
+        let cancellation: WorkCancellation?
+        private(set) var truncated = false
+        private(set) var failure: Failure?
+        private var files: [URL] = []
+
+        init(rootURL: URL, fileLimit: Int, cancellation: WorkCancellation? = nil) {
+            self.rootURL = rootURL
+            self.fileLimit = fileLimit
+            self.cancellation = cancellation
+        }
+
+        mutating func markdownFileURLs() -> [URL] {
+            visitDirectory(rootURL)
+            return files
+        }
+
+        private mutating func visitDirectory(_ directoryURL: URL) {
+            guard cancellation?.isCancelled != true, failure == nil else { return }
+            guard files.count < fileLimit else {
+                truncated = true
+                return
+            }
+
+            let keys: Set<URLResourceKey> = [
+                .isDirectoryKey,
+                .isRegularFileKey,
+                .isSymbolicLinkKey,
+            ]
+            let children: [URL]
+            do {
+                children = try FileManager.default.contentsOfDirectory(
+                    at: directoryURL, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles])
+            } catch {
+                failure = Failure(url: directoryURL, message: error.localizedDescription)
+                return
+            }
+
+            for childURL in children.sorted(by: relativePathOrder) {
+                guard cancellation?.isCancelled != true, failure == nil else { return }
+                if files.count >= fileLimit {
+                    truncated = true
+                    return
+                }
+
+                let values: URLResourceValues
+                do {
+                    values = try childURL.resourceValues(forKeys: keys)
+                } catch {
+                    failure = Failure(url: childURL, message: error.localizedDescription)
+                    return
+                }
+                if values.isDirectory == true {
+                    guard values.isSymbolicLink != true else {
+                        continue
+                    }
+                    guard !LibraryScanner.skippedDirectoryNames.contains(childURL.lastPathComponent) else {
+                        continue
+                    }
+                    visitDirectory(childURL)
+                    continue
+                }
+
+                guard
+                    values.isRegularFile == true,
+                    AssetResolver.markdownExtensions.contains(childURL.pathExtension.lowercased())
+                else {
+                    continue
+                }
+
+                files.append(FileIdentity.normalized(childURL))
+            }
+        }
+
+        private func relativePathOrder(lhs: URL, rhs: URL) -> Bool {
+            lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
+        }
+    }
+}
+
+extension String {
+    var libraryFoldedSearchText: String {
+        folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .lowercased()
+            .collapsingWhitespace
+    }
+}

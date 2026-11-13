@@ -1,0 +1,4 @@
+remote fetch completed=true; fetcher retained after last external reference released=true
+sidebar-build-and-layout-100 RELEASE ms=110.575167 rows=100
+sidebar-build-and-layout-300 RELEASE ms=1214.08925 rows=300
+sidebar-build-and-layout-500 RELEASE ms=7792.298542 rows=500

@@ -1,0 +1,318 @@
+{
+  "appearanceIsDark": true,
+  "backgroundHex": "#262335",
+  "calloutBackground": {
+    "alpha": 0.04,
+    "hex": "#FFFFFF"
+  },
+  "calloutCautionBackground": {
+    "alpha": 0.12,
+    "hex": "#FE4450"
+  },
+  "calloutCautionBorder": {
+    "alpha": 0.94,
+    "hex": "#FE4450"
+  },
+  "calloutImportantBackground": {
+    "alpha": 0.11,
+    "hex": "#B893CE"
+  },
+  "calloutImportantBorder": {
+    "alpha": 0.92,
+    "hex": "#B893CE"
+  },
+  "calloutNoteBackground": {
+    "alpha": 0.11,
+    "hex": "#36F9F6"
+  },
+  "calloutNoteBorder": {
+    "alpha": 0.9,
+    "hex": "#36F9F6"
+  },
+  "calloutTipBackground": {
+    "alpha": 0.11,
+    "hex": "#72F1B8"
+  },
+  "calloutTipBorder": {
+    "alpha": 0.9,
+    "hex": "#72F1B8"
+  },
+  "calloutWarningBackground": {
+    "alpha": 0.12,
+    "hex": "#FEDE5D"
+  },
+  "calloutWarningBorder": {
+    "alpha": 0.94,
+    "hex": "#FEDE5D"
+  },
+  "codeBlockBackgroundHex": "#241B2F",
+  "diagramInspectorBackdrop": {
+    "alpha": 0.86,
+    "hex": "#191722"
+  },
+  "diagramInspectorButtonBackgroundHex": "#241B2F",
+  "diagramInspectorButtonBorder": {
+    "alpha": 0.18,
+    "hex": "#F4F0FF"
+  },
+  "diagramInspectorButtonHoverBackgroundHex": "#262335",
+  "diagramInspectorButtonHoverBorder": {
+    "alpha": 0.52,
+    "hex": "#FFFFFF"
+  },
+  "diagramInspectorButtonTextHex": "#FFFFFF",
+  "diagramInspectorTextHex": "#FFFFFF",
+  "diagramInspectorToolbarBackground": {
+    "alpha": 0.94,
+    "hex": "#201C2D"
+  },
+  "diagramInspectorToolbarBorder": {
+    "alpha": 0.14,
+    "hex": "#F4F0FF"
+  },
+  "diagramInspectorViewportBackgroundHex": "#241B2F",
+  "diagramInspectorViewportBorder": {
+    "alpha": 0.14,
+    "hex": "#F4F0FF"
+  },
+  "diagramInspectorViewportFocusOutline": {
+    "alpha": 0.54,
+    "hex": "#FFFFFF"
+  },
+  "findBarBackground": {
+    "alpha": 0.94,
+    "hex": "#444251"
+  },
+  "findBarBorder": {
+    "alpha": 0.08,
+    "hex": "#FFFFFF"
+  },
+  "headingHex": "#F4F0FF",
+  "inlineChipBackground": {
+    "alpha": 0.055,
+    "hex": "#FFFFFF"
+  },
+  "inlineChipBorder": {
+    "alpha": 0.08,
+    "hex": "#FFFFFF"
+  },
+  "inlineCodeBackgroundHex": "#2F2A45",
+  "kbdBorderHex": "#848BBD",
+  "kbdShadow": {
+    "alpha": 0.22,
+    "hex": "#000000"
+  },
+  "kbdTextHex": "#FFFFFF",
+  "linkHex": "#36F9F6",
+  "linkHoverHex": "#9FFCFA",
+  "mermaid": {
+    "activeTaskBkgColor": "#925088",
+    "activeTaskBorderColor": "#CE8ABE",
+    "altSectionBkgColor": "#261E2E",
+    "attributeBackgroundColorEven": "#1F1728",
+    "attributeBackgroundColorOdd": "#2C2535",
+    "background": "#262335",
+    "critBkgColor": "#7C3040",
+    "critBorderColor": "#FE7C84",
+    "doneTaskBkgColor": "#373545",
+    "doneTaskBorderColor": "#848BBD",
+    "edgeLabelBackground": "#1F1728",
+    "erEdgeLabelBackground": "#1F1728",
+    "fontFamily": "Helvetica Neue, Helvetica, Arial, sans-serif",
+    "gridColor": "#848BBD",
+    "lineColor": "#F4F0FF",
+    "mainBkg": "#1F1728",
+    "nodeBorder": "#9DA2CA",
+    "nodeTextColor": "#FFFFFF",
+    "primaryBorderColor": "#848BBD",
+    "primaryColor": "#241B2F",
+    "primaryTextColor": "#F4F0FF",
+    "secondaryColor": "#262335",
+    "secondaryTextColor": "#F4F0FF",
+    "sectionBkgColor": "#1F1728",
+    "sectionBkgColor2": "#2C2535",
+    "taskBkgColor": "#72436F",
+    "taskBorderColor": "#BE63A9",
+    "taskTextClickableColor": "#FFFFFF",
+    "taskTextColor": "#FFFFFF",
+    "taskTextDarkColor": "#FFFFFF",
+    "taskTextLightColor": "#FFFFFF",
+    "taskTextOutsideColor": "#F4F0FF",
+    "tertiaryColor": "#201C2D",
+    "tertiaryTextColor": "#F4F0FF",
+    "textColor": "#D8CFF0",
+    "theme": "base",
+    "titleColor": "#FFFFFF",
+    "todayLineColor": "#FF7EDB",
+    "vertLineColor": "#F4F0FF"
+  },
+  "mermaidContainerBackground": {
+    "alpha": 0.78,
+    "hex": "#241B2F"
+  },
+  "mermaidContainerBorder": {
+    "alpha": 0.12,
+    "hex": "#F4F0FF"
+  },
+  "mermaidControlBackground": {
+    "alpha": 0.92,
+    "hex": "#171321"
+  },
+  "mermaidControlBorder": {
+    "alpha": 0.26,
+    "hex": "#F4F0FF"
+  },
+  "mermaidControlHoverBackgroundHex": "#171321",
+  "mermaidControlHoverBorder": {
+    "alpha": 0.58,
+    "hex": "#FFFFFF"
+  },
+  "mermaidControlTextHex": "#FFFFFF",
+  "mermaidErrorTextHex": "#FE858D",
+  "mermaidGridStroke": {
+    "alpha": 0.34,
+    "hex": "#F4F0FF"
+  },
+  "mermaidSourceBackground": {
+    "alpha": 0.14,
+    "hex": "#000000"
+  },
+  "minorHeadingHex": "#FFFFFF",
+  "name": "Synthwave '84",
+  "ruleHex": "#495495",
+  "secondaryTextHex": "#848BBD",
+  "selectionHex": "#463465",
+  "selectionTextHex": "#FFFFFF",
+  "sidebarBackgroundHex": "#201C2D",
+  "sidebarChromeBorder": {
+    "alpha": 0.035,
+    "hex": "#FFFFFF"
+  },
+  "sidebarChromeFill": {
+    "alpha": 0.024,
+    "hex": "#FFFFFF"
+  },
+  "sidebarChromeHoverFill": {
+    "alpha": 0.04,
+    "hex": "#FFFFFF"
+  },
+  "sidebarChromeSelectedFill": {
+    "alpha": 0.065,
+    "hex": "#FFFFFF"
+  },
+  "sidebarHover": {
+    "alpha": 0.028,
+    "hex": "#FFFFFF"
+  },
+  "sidebarPrimaryText": {
+    "alpha": 0.96,
+    "hex": "#F4F0FF"
+  },
+  "sidebarSecondaryText": {
+    "alpha": 0.92,
+    "hex": "#848BBD"
+  },
+  "sidebarSelectionHex": "#171321",
+  "statisticsIcon": {
+    "alpha": 0.9,
+    "hex": "#D8CFF0"
+  },
+  "statisticsIconButton": {
+    "alpha": 0.92,
+    "hex": "#D8CFF0"
+  },
+  "statisticsIconButtonActiveBackground": {
+    "alpha": 0.12,
+    "hex": "#FFFFFF"
+  },
+  "statisticsIconButtonHoverBackground": {
+    "alpha": 0.07,
+    "hex": "#FFFFFF"
+  },
+  "statisticsIconButtonHoverBorder": {
+    "alpha": 0.12,
+    "hex": "#FFFFFF"
+  },
+  "statisticsIconButtonRestingBackground": {
+    "alpha": 0.03,
+    "hex": "#FFFFFF"
+  },
+  "statisticsLabel": {
+    "alpha": 0.98,
+    "hex": "#F4F0FF"
+  },
+  "statisticsPillHoverBackground": {
+    "alpha": 0.08,
+    "hex": "#FFFFFF"
+  },
+  "statisticsPillHoverBorder": {
+    "alpha": 0.14,
+    "hex": "#FFFFFF"
+  },
+  "statisticsPillRestingBackground": {
+    "alpha": 0.045,
+    "hex": "#FFFFFF"
+  },
+  "symbolLinkBorder": {
+    "alpha": 0.14,
+    "hex": "#36F9F6"
+  },
+  "symbolLinkTextHex": "#36F9F6",
+  "syntaxAtomHex": "#B893CE",
+  "syntaxCommentHex": "#848BBD",
+  "syntaxDefinitionHex": "#36F9F6",
+  "syntaxKeywordHex": "#FEDE5D",
+  "syntaxNegativeHex": "#FE4450",
+  "syntaxNumberHex": "#F97E72",
+  "syntaxPositiveHex": "#72F1B8",
+  "syntaxSecondaryVariableHex": "#72F1B8",
+  "syntaxStringHex": "#FF8B39",
+  "syntaxVariableHex": "#FF7EDB",
+  "tab": {
+    "barBackground": {
+      "alpha": 1,
+      "hex": "#201C2D"
+    },
+    "barBorder": {
+      "alpha": 0.06,
+      "hex": "#FFFFFF"
+    },
+    "closeHoverFill": {
+      "alpha": 0.1,
+      "hex": "#FFFFFF"
+    },
+    "closeIcon": {
+      "alpha": 0.92,
+      "hex": "#848BBD"
+    },
+    "hoverFill": {
+      "alpha": 0.06,
+      "hex": "#FFFFFF"
+    },
+    "insertionIndicator": {
+      "alpha": 0.9,
+      "hex": "#FF7EDB"
+    },
+    "restingFill": {
+      "alpha": 0.02,
+      "hex": "#FFFFFF"
+    },
+    "selectedFill": {
+      "alpha": 1,
+      "hex": "#262335"
+    },
+    "selectedText": {
+      "alpha": 0.96,
+      "hex": "#F4F0FF"
+    },
+    "unselectedText": {
+      "alpha": 0.92,
+      "hex": "#848BBD"
+    }
+  },
+  "textHex": "#D8CFF0",
+  "titlebarPrimaryText": {
+    "alpha": 0.72,
+    "hex": "#F4F0FF"
+  }
+}

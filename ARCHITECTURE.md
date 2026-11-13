@@ -1,0 +1,403 @@
+# Wafer Architecture
+
+Wafer is a SwiftPM-based macOS document viewer for Markdown files. The app is split into a reusable rendering core and a small AppKit shell.
+
+## Modules
+
+- `WaferCore` owns Markdown parsing, semantic formatting, syntax highlighting, sidebar data, reader theme data, document statistics, asset resolution, and WebKit HTML generation.
+- `WaferApp` owns the macOS application lifecycle, document windows, AppKit controllers, menu wiring, WebKit presentation, document opening, local asset loading, and user preferences.
+- `WaferQuickLook` owns the Quick Look preview extension glue. It depends on `WaferCore` for static preview composition and keeps Finder preview presentation isolated in the extension target.
+- `Tests/WaferCoreTests` and `Tests/WaferAppTests` cover the renderer, document model, UI controller behavior, and app integration seams that can run in unit tests.
+
+## App Bundle
+
+`scripts/build-app.sh` builds the SwiftPM executable product in debug or release mode, then assembles `build/Wafer.app` with:
+
+- `App/Info.plist`
+- `App/QuickLook-Info.plist`
+- `App/QuickLook.entitlements`
+- `App/Resources/Wafer.icns`
+- the Swift executable from `.build/<configuration>/Wafer` (copied to `Contents/MacOS/Wafer` to match `CFBundleExecutable`)
+- the Quick Look extension executable from `.build/<configuration>/WaferQuickLook`
+- SwiftPM resource bundles required by `WaferCore`
+- `Sparkle.framework` from `.build/<configuration>`, copied whole into `Contents/Frameworks`
+
+The bundle identifier is `dev.wafer.app`, and the minimum macOS version is 14.0.
+`CFBundleShortVersionString` follows a three-component marketing version format.
+The build script copies SwiftPM resource bundles into `Contents/Resources`; `ReaderTheme` checks that packaged location before using SwiftPM `Bundle.module` in debug and test contexts.
+
+The Quick Look extension is hand-assembled at `Contents/PlugIns/WaferQuickLook.appex`. Its bundle identifier is `dev.wafer.app.quicklook`, its extension point is `com.apple.quicklook.preview`, and its principal class is the Objective-C-visible `PreviewProvider`. SwiftPM builds it as the `WaferQuickLook` executable product with the `_NSExtensionMain` linker entry point and links QuickLookUI explicitly because the repository does not use an Xcode appex target. The appex also receives `Wafer_WaferCore.bundle` in `Contents/Resources` so `Bundle.module` can resolve reader CSS and renderer resources from inside the extension process. SwiftPM 6.4 and later emit resource bundles in the standard macOS layout (`Contents/Resources`), while earlier toolchains emitted them flat; runtime lookup goes through `Bundle` APIs and `scripts/verify-appex.sh` accepts either layout.
+
+## Document Windows
+
+`DocumentWindowController` owns the AppKit document window shell and initial placement policy. New reader windows default to 1150 points wide and use the full `NSScreen.visibleFrame.height`, so the initial height fills the usable display area while respecting the macOS menu bar and any visible Dock. The width is capped only when the visible frame is narrower than the default, with the existing 520 x 360 minimum window size preserved.
+
+`MarkdownDocumentOpener` and `DocumentHostWindowController.openTab` register and display a loading document before calling `MarkdownReaderDocument.loadInitialSource`. Initial opens, navigation, and reload use the same background source loader for bytes, decoding, and fingerprinting. A generation token discards completion after another request or close. Failed initial opens remove the placeholder document or tab before presenting the error, including navigation that supersedes an opening placeholder. Unread placeholders do not enter history. Already registered pending documents are reused, and successful reads enter Open Recent.
+
+## Edit Mode
+
+Edit mode is a per-document toggle (`MarkdownReaderDocument.toggleEditing`). The reader stays the window's hosted content; the document's `MarkdownSourceEditorViewController` is shown as an editor pane to its left (`DocumentWindowController.setEditorPane`). The tab host applies the pane of the selected tab, so tab switches show or hide it. With edit mode off, rendered output, export, Quick Look, and render goldens are unchanged; the only reader-script additions are the incremental Mermaid and KaTeX hooks and a copy-button observer, which stay idle. Export snapshots strip `data-source-line`, so exporting while editing produces the same HTML as reading.
+
+### Editor pane and window
+
+`DocumentContentSplitView` is the window's content area. It lays out the reader and the editor pane by setting frames, not constraints, so a transition can hold both layout widths fixed:
+
+- `EditorPaneExpansion.plan` decides the open frame. The window grows to the left by the content width (the reader's width; a visible sidebar is not doubled), so the reader keeps its size and screen position. With less room it takes what the screen has, moving right only when the left edge runs out, and the panes share the result equally. A full-screen window does not resize and splits in place.
+- During the transition the editor is laid out at its final width inside a clipping slot whose width follows the animation, and the window frame follows the same progress with the same rounding. When the window can double, the reader's width is identical in every frame, so WebKit never reflows it and the text view never rewraps.
+- Closing reverses the remembered growth and right shift.
+- `DisplayLinkedAnimation` drives it from the display's refresh (0.35 s, eased in and out along a half cosine, so it starts and ends at rest with a low peak speed). Each step sets final values once: pane width first, then the window frame, which triggers a single layout. A toggle or sidebar change during the animation finishes it first. Reduce Motion, hidden windows, and tab switches apply the end state at once.
+
+Neither entering nor leaving reloads the page. Entering runs one render with source-line annotations and leaving one without, and both are applied as live patches (see below): every block keeps its DOM and only gains or loses its `data-source-line` attribute. The reader therefore keeps its scroll position, images, and rendered diagrams.
+
+Measured on 2026-11-09 with `EditModeEndToEndTests.testPaneAnimationWithRealDocumentStaysCheapPerFrame` (`RenderingShowcase.md`, a 720-point window, 240 Hz display; three debug and three release runs):
+
+| | Result |
+| --- | --- |
+| Work before the first frame when opening (editor, coloring, text layout) | 19 to 39 ms |
+| Work before the first frame when closing | 1 to 3 ms |
+| Frames drawn in 0.35 s | 54 to 67 |
+| Slowest step in a run | 5.2 to 9.1 ms |
+| Reader width | identical in every frame |
+
+A step is one `NSWindow.setFrame`. Resizing an empty window the same way takes 0.4 to 7 ms per step on this machine, so most of the step cost is the window resize itself, not Wafer's layout. One of six earlier runs, with a 0.3 s cubic curve, had a single 19.7 ms step.
+
+### Saving
+
+Saving does not use NSDocument autosave. `autosavesInPlace` stays false and `writableTypes` stays empty. NSDocument autosave tracks one file and its modification date per document, which conflicts with in-place navigation, and tab close bypasses `canClose`. Instead, `MarkdownEditSession` owns the saved text (LF-normalized), the fingerprint of the bytes last loaded or saved, the file's `MarkdownTextFormat` (encoding, byte-order mark, dominant line ending), and the baseline text used by Revert Edits.
+
+When the save runs:
+
+- Autosave is a 1 s debounce after the last edit.
+- Navigation, leaving edit mode, `Cmd-R`, tab close, window close (`DocumentWindow.performClose` and `prepareToCloseWindow`), and quit (`applicationShouldTerminate`) all save interactively and can be cancelled.
+- App deactivation saves without prompting.
+- `close()` makes a final non-interactive attempt.
+
+How the write is made:
+
+1. Before writing, the session hashes the file on disk.
+2. A mismatch with the last loaded or saved fingerprint is a conflict, and so is a missing file or a read or write failure. Conflicts go to an injectable resolver; the default is an app-modal alert offering Keep My Edits, Use Disk Version, or Save a Copy….
+3. Writes go to an item-replacement directory and are swapped in with `FileManager.replaceItemAt`, which keeps permissions and creation date. Symlinks are resolved first. Where replacement is unavailable, the file is written in place.
+4. Unchanged text writes nothing.
+
+The file monitor stays active while editing:
+
+- If there are no unsaved edits, a changed file is adopted into the editor (selection kept, undo cleared).
+- Otherwise the change triggers an interactive save, which reports the conflict.
+
+The editor has a private `UndoManager` (via `undoManager(for:)`), so typing never marks the NSDocument edited.
+
+### Editor coloring
+
+`MarkdownSourceHighlighter` in WaferCore is AppKit-free and covered by unit tests. It works in two passes:
+
+- `structure(of:)` makes one linear pass over UTF-16 code units. It finds line starts, front matter (same rules as `MarkdownParser`), and fenced code blocks; an unclosed fence runs to the end of the text.
+- `tokens(in:structure:lines:)` emits line tokens (headings, quotes, lists and tasks, rules, tables, reference definitions) and inline tokens (strong, emphasis, strike, highlight, HTML, links, autolinks, wiki links, footnotes, escapes, code spans last). Fenced code content is colored with `CodeSyntaxHighlighter.presentationRuns` over the whole block.
+
+How the editor recolors after each user edit (TextKit 1 with non-contiguous layout):
+
+1. It rescans the structure.
+2. It predicts the block list from the previous one: blocks after the edit shift, and the block containing it grows or shrinks.
+3. It recolors only the edited lines, widened to any enclosing fence. When the prediction fails, for example when a fence opened or closed, it recolors from the first differing block to the end.
+
+Colors come from `MarkdownEditorColors(palette:)`, so built-in and custom themes apply without new theme fields.
+
+Measured on 2026-11-09 with `MarkdownSourceEditorTests.testLargeDocumentHighlightAndEditStayFast`, two release and three debug runs on a 159,000-character document with 1,500 fenced blocks:
+
+| Build | Full coloring on load | One keystroke |
+| --- | ---: | ---: |
+| Release | 97 to 127 ms | 8 to 10 ms |
+| Debug | 137 to 140 ms | 23 ms |
+
+The keystroke cost scales with document length because of the linear structure scan; ordinary notes are far smaller.
+
+### Live preview
+
+Edit-mode renders set `WebKitHTMLRenderer(annotatesSourceLines: true)`:
+
+- Top-level blocks, list items, and table body rows get `data-source-line`.
+- Lines are mapped back through `MarkdownDocument.sourceLineMap`, which accounts for stripped front matter and extracted multi-line footnote definitions. Footnote content is never annotated.
+
+Every reader render carries `bodyHTML` and whether Mermaid or math is present, so a page loaded for reading can later be patched.
+
+Renders are throttled to one per 100 ms rather than debounced, so the preview keeps up during continuous typing. They push statistics and the sidebar only when those changed.
+
+`WebKitReaderViewController.applyLiveUpdate` runs `ReaderLivePreviewScript` in the page world. It patches `#write` in place:
+
+1. Top-level nodes are keyed by their rendered HTML with line attributes stripped. Keys come from the HTML as rendered, not from the live DOM, so Mermaid SVG, KaTeX output, and copy buttons do not affect matching.
+2. The diff keeps the common prefix and suffix. Inside the changed middle, any old node whose key still appears is reused.
+3. Kept nodes get their line attributes updated. When the set of annotated elements differs (the render that starts or ends edit mode), elements are paired by tag and position and attributes are added or removed. Only new nodes are inserted.
+4. New Mermaid figures and math blocks render through `window.waferRenderMermaidFigures` and `window.waferRenderMathBlocks`. These are incremental hooks in the bootstraps; theme re-renders re-query figures, so added diagrams follow theme changes.
+5. A content-world MutationObserver adds copy buttons to new code blocks.
+
+The reader falls back to a full load that keeps the scroll position when:
+
+- the page is not ready;
+- the page lacks a renderer the new content needs (the first diagram or math block);
+- the DOM no longer matches the recorded state.
+
+### Scroll sync
+
+Both panes are aligned by the source line at their top, and either can lead.
+
+The editor describes its position as an `EditorScrollPosition`: the fractional source line at the top, the lines at the top when scrolled all the way up and all the way down (its scroll range), how many lines are visible, and the line count. Texts up to 80,000 UTF-16 units are fully laid out before the position is read, so the range is exact; this costs about 0.4 ms per 1,000 units, once per text or width change. Longer texts use TextKit's estimate until background layout catches up.
+
+The page script builds one mapping from editor line to preview offset for that geometry:
+
+1. Annotated elements are cached as sorted `(line, top)` pairs with non-decreasing tops. A line's raw offset is interpolated between the pairs around it.
+2. The editor's first and last scroll positions map to offset 0 and the preview's scroll limit. The difference between those and the raw offsets is blended in with a smoothstep over about one screen of lines at each end.
+3. The result is continuous and monotonic, so its inverse (a bisection) maps a preview offset back to a line.
+
+Who leads:
+
+- Editor scrolls (reported once per run-loop turn, skipping notifications that change nothing) call `scrollToLine`; at most one call is in flight.
+- Preview scrolls are detected in the page. A scroll event at the offset the script last set is its own; anything else (wheel, scroll bar, keyboard, anchor link, outline jump) is inverted to a line and posted to `waferLiveScroll`, and the editor scrolls there without reporting back.
+- After a patch, an image load, a `details` toggle, a size change, or async diagram rendering, the script realigns: the preview moves to the editor's line, unless the preview was scrolled in the last 250 ms, in which case the editor follows.
+- Live patches carry the editor's position, so typing realigns in the same step.
+
+Entering edit mode never moves the reader. The editor is first placed by the reader's scroll fraction, then `lineAtTop` returns the exact line for the preview's current offset and the page adopts that as the synced position. Until that answer arrives neither pane follows the other.
+
+## Folder Library
+
+The folder library is split between reusable indexing/search code in `WaferCore` and AppKit orchestration in `WaferApp`.
+
+`LibraryScanner` walks a selected directory off the main thread, collecting markdown files with extensions `.md`, `.markdown`, `.mdown`, and `.mkd`. It skips hidden files, symbolic links, and generated/heavy directories named `.git`, `.build`, `build`, `dist`, and `node_modules`, and it caps scans at 2,000 markdown files so large trees stay responsive. Each `LibraryFile` stores normalized identity and relative path, display title, outline items, plain text, prepared search fields, outgoing references, and a modification-date/size/content-digest fingerprint. Refreshes enumerate the tree but read and parse only new or changed files. Explicit changed-file events force a reread even when size and modification date match; dropped or coalesced events force a recovery scan.
+
+The scanner reuses the same document semantics as the reader sidebar: `DocumentSidebarDataBuilder` provides title and outline extraction, and `FileIdentity` centralizes normalized path identity for the library, linked-document sidebar, and `MarkdownDocumentOpener`. This avoids separate slugging or file-identity rules between library search, current-window navigation, and open-window reuse.
+
+`LibrarySearch` owns ranking for both library entry points. Quick Open fuzzy-matches filename and relative path subsequences, ranks tighter and boundary-aligned matches higher, and returns at most 50 files. Full-text search tokenizes the query, searches filename, relative path, title, headings, and body text, ranks filename/path/title/heading/body hits in that order, and returns snippets plus an optional matched heading anchor.
+
+`LibraryController` owns app-level library state. It persists the selected folder through `LibraryPreferenceStore` and allows one active scan plus one pending refresh, with cancellation checkpoints between files. It computes the diff and complete `LibrarySnapshot`, including backlinks and a shared wiki index, off the main thread. Publication only swaps the immutable snapshot; notifications distinguish scanning status from content changes. `DirectoryChangeMonitor` retains FSEvents file paths, filters excluded directories and unrelated files, and debounces relevant changes. Dirty paths survive events arriving during an active scan. Tests inject fake monitors and scanner closures.
+
+`LibraryScanner.Result.failure` distinguishes failed directory enumeration, metadata access, and source reads from a successful empty scan. Failures retain the previous complete snapshot and dirty paths. `scanFailure` publishes availability separately from content; the sidebar labels stale results without rebuilding the tree on ordinary scanning-status updates. Persisted folders remain selected when unavailable. File > Retry Library forces a recovery scan and restarts the monitor; Close Library explicitly clears the preference. Successful recovery clears the warning, and successful deletions still update the snapshot normally.
+
+The native UI consumes `LibraryController.shared`. `DocumentSidebarViewController` adds a window-local `Library` mode with a collapsible tree keyed by relative folder path, a pinned search field, result rows, no-results state, current-file highlighting by normalized URL, and theme reapplication through the existing `ThemeApplying` walk. Search snapshots are value-copied and evaluated off the main thread; result activation routes through `DocumentWindowController` to `MarkdownReaderDocument.navigateInCurrentWindow(to:anchorID:)`, reusing the existing pending-anchor render completion path. `QuickOpenPanelController` is built lazily from the File menu and reads the same library files without doing work at app launch.
+
+The sidebar uses one reusable `NSTableView` for all modes. Folder expansion determines a flat row model, but AppKit realizes only the viewport's rows. Stable identities allow updates to existing rows without rebuilding the constraint graph. Scanning-status notifications do not rebuild content. Both search entry points use a serial `LatestWorkQueue` with a 60 ms debounce and cooperative cancellation. Filename/path fuzzy characters, folded fields, and body word counts are prepared during indexing; the sidebar generates snippets only for realized results.
+
+`LibraryInitialDocumentOpener` bridges the app-level library state to the document UI without doing its own filesystem walk. `LibraryController.openLibrary(at:onFirstScanCompletion:)` pairs a one-shot hook with the background scan generation started by the folder open; when that scan completes, the opener checks whether a markdown window is still absent and opens the first scanned `LibraryFile` through `MarkdownDocumentOpener`.
+
+## Reader Rendering
+
+`MarkdownSourceDecoding` is the single Markdown byte-decoding path for the app reader sidebar, library indexer, and Quick Look composer. It accepts UTF-8 and UTF-16 with or without a BOM so in-app indexing and Finder previews agree on which documents are readable.
+
+The renderer has a narrow dialect-compatibility layer around swift-markdown rather than a forked parser. `MarkdownParser` strips valid YAML front matter before AST construction and carries the metadata on `MarkdownDocument`; it also extracts GitHub-style footnote definitions with a fenced-code-aware block scanner after front matter is removed. Footnote references are resolved at render time from text nodes so inline code and fenced code stay literal. `WebKitHTMLRenderVisitor.visitText` autolinks bare URLs and email addresses while staying disabled inside existing links and code nodes, then decorates plain text segments with Gemoji-derived Unicode shortcodes and same-node `==highlight==` pairs. GitHub alert blockquotes are detected in `MarkdownSemanticFormatting` and rendered through the same callout path as directive callouts, while sidebar preview and plain-text extraction strip the alert marker. These compatibility features are expected to hold across the reader, standalone export, and Quick Look preview whenever the feature does not require JavaScript.
+
+Footnotes are document-scoped sidecar data, not swift-markdown AST nodes. The reader and Quick Look append a static `<section class="md-footnotes">` after the rendered body once a known reference is encountered; export keeps that section as ordinary sanitized HTML. Sidebar titles, outline slug input, library indexing, and statistics use document-aware stripping so known references do not leak into headings or search snippets, while the referenced definition text is indexed and counted once. References without definitions remain literal.
+
+Emoji shortcodes use the bundled `gemoji-shortcodes.json` resource generated from GitHub's MIT-licensed Gemoji aliases, with `gemoji-LICENSE.txt` shipped beside it. Replacement is intentionally renderer-only: known `:shortcode:` values become Unicode emoji in reader, Quick Look, and export, unknown shortcodes stay literal, and library/sidebar/search text keeps the raw Markdown source. Highlight rendering is similarly local to text nodes; it does not pair markers across Markdown node boundaries and leaves unmatched or triple-equals text literal.
+
+Each document has a serial render worker retaining only its last parsed source and source-derived metadata. Wiki-index changes reuse that parse. The first reader render includes filename placeholders for linked notes and performs no linked-file reads. Visible Documents rows request summaries through a shared 256-entry cache or reuse the library snapshot. Summaries read at most the first 256 KiB of each linked note; initial row order stays stable while titles arrive. Preview rendering omits reader statistics and sidebar metadata.
+
+Empty files follow the normal render path. Source loads, render completions, WebKit navigation completion, and scripted-renderer readiness are generation checked. Pending anchors are consumed only after renderable content is ready, never by a loading placeholder. WebKit message handlers hold weak reader references; production document close cancels rendering and shuts down the reader. The remote-image session owns a separate delegate with no reference back to its fetcher, allowing fetcher teardown to invalidate the session.
+
+`WebKitHTMLRenderer` emits the complete reader document, including the bundled CSS from `reader-theme.css`. Fenced code blocks continue through the native Swift syntax highlighter unless the fence language is `mermaid`, `mmd`, or `math`.
+`CodeSyntaxHighlighter` keeps compiled syntax regexes in a static lock-protected cache keyed by options and pattern so concurrent document renders reuse expressions safely. It intentionally uses shallow semantic regex rule sets; the goal is readable fenced-code coloring for common README languages, not full compiler-grade tokenization.
+
+Rendered headings keep Wafer's existing primary IDs for outline selection, search navigation, and scroll restoration. When a GitHub-compatible slug differs from the primary ID, the renderer inserts an empty `md-anchor-alias` anchor inside the heading so GitHub-authored fragment links still resolve. Alias generation reserves the complete primary heading ID set before emission, so aliases never duplicate current or later primary IDs; reader scroll tracking queries heading elements only and ignores alias anchors.
+
+Local file assets referenced by rendered HTML are served through the custom `wafer-local://asset` scheme. The scheme handler only serves files whose resolved paths are equal to or inside the current document directory or the bundled WaferCore resource directory, with symlinks resolved on both the requested file and each allowed root before comparison. Absolute image paths and `..` traversals that escape the document directory are intentionally rejected and render as failed asset requests.
+
+Remote images referenced by Markdown or sanitized raw HTML are never emitted as bare `https://` image sources. `AssetResolver` accepts only `https` remote image URLs, and `WebKitHTMLRenderer` rewrites them to `wafer-remote://image?url=...`. `RemoteImageSchemeHandler` performs the fetch through an ephemeral `URLSession` with no cookie storage, no credential storage, no persistent cache, a 15-second timeout, and a generic Wafer user agent. The handler rejects non-HTTPS URLs and redirects, non-image MIME types, and responses over 25 MB by content length or accumulated bytes. It also cancels and suppresses task callbacks after WebKit stops a scheme task.
+
+Remote image loading is controlled by `ReaderBehaviorPreferenceStore.loadsRemoteImages`, defaulting to true. File > Load Remote Images toggles the preference. The scheme handler reads the preference at fetch time, so disabling it applies to subsequent loads and a manual Cmd-R reload applies the choice to already-rendered documents.
+
+Raw HTML is sanitized by `HTMLSanitizer` before rendering. The sanitizer is a token-level streaming filter rather than a per-fragment tree parser so cross-block Markdown patterns like `<details><summary>Click</summary>` followed by Markdown content and a later `</details>` keep working. Tags and attributes are allowlisted; unsafe tags, event handlers, inline styles, classes, IDs, `data-*` attributes, unsafe URL schemes, `data:` images, and raw-text payloads such as scripts/styles/iframes are dropped or unwrapped safely. Raw HTML images reuse the same local and remote proxy paths as Markdown images. The allowlist includes the GitHub-compatible structural subset used by common README content, including lists, headings, blockquotes, figure/figcaption, captions, definition lists, small/u/q/cite/time/wbr, and `picture/source` image candidates. `source srcset` URLs are resolved through the same image policy as `img src`; unresolved candidates are removed and empty `source` elements are dropped. Quick Look preview strips `source` elements and keeps the fallback `img`, while reader WebKit keeps valid `source` candidates so `prefers-color-scheme` media queries follow the active reader theme appearance.
+
+Render compatibility changes use a standing reader/export/preview triangle. Reader HTML is the primary WebKit output, export starts from that DOM and must not strip newly supported markup, and `.preview` mode must remain scriptless with `cid:` local images and no remote fetches. Fixture goldens are used only for deterministic output: reader/preview corpus hashes normalize local fixture paths, the reader golden excludes Mermaid and path-dependent images, and any intentional golden drift must be committed with an explanation of the behavior that changed.
+
+Mermaid diagrams render offline inside WebKit using the full bundled `mermaid.min.js` resource from Mermaid 11.14.0. The renderer emits stable diagram containers and a single bootstrap script per document; the bootstrap configures Mermaid with strict security, Wafer theme colors, Gantt/ER dark-mode variables, and no network dependency. Reader CSS also scopes SVG overrides under `.md-mermaid-output` for Mermaid classes whose generated styles otherwise wash out text on the dark reader background, including ER table rows emitted as `row-rect-odd` and `row-rect-even` paths. Invalid Mermaid source stays visible with a quiet inline error instead of replacing the block with a blank area.
+
+Rendered Mermaid diagrams also expose an explicit `Open` control in the figure corner. The diagram body itself is passive reader content; only the control opens the shared in-reader diagram inspector. The inspector is implemented in the bundled Mermaid bootstrap script, clones the already-rendered SVG, rewrites cloned SVG IDs to avoid collisions, captures wheel and trackpad gestures while open, and provides pan, zoom, fit, reset, copy SVG, and close actions without network access.
+
+Math fences render offline inside WebKit using bundled KaTeX 0.17.0 runtime assets from the WaferCore resource bundle. The renderer emits `md-math-display` figures only for `math` fenced blocks in reader mode; preview mode keeps the same source as a highlighted code fence so Quick Look remains scriptless. KaTeX CSS is loaded only when a math fence is present, and its bundled `fonts/...` URLs are rewritten to `wafer-local://asset` URLs that resolve inside the app and Quick Look resource bundle. KaTeX uses `displayMode: true` and `throwOnError: false`, so invalid TeX stays visible as red source text instead of becoming a blank block. Inline `$...$` math is intentionally not parsed.
+
+Because Mermaid SVG generation and KaTeX rendering can change document height after WebKit finishes navigation, documents with either renderer set `waitsForContentReady` on `WebKitRenderOutput`. `WebKitHTMLRenderer` emits one shared page-world readiness coordinator when scripted renderers are present, and `WebKitReaderViewController` waits for the resulting `waferContentReady` script message before restoring scroll position, consuming pending anchor navigation, or allowing export snapshots.
+The injected reader scroll script still clamps page-level horizontal rubber-band scrolling, but it lets horizontally scrollable inner elements handle horizontal wheel gestures natively.
+
+Theme changes replace a palette stylesheet in the current DOM and rerender only Mermaid figures through the page's existing renderer. Ordinary Markdown, images, KaTeX, and scroll state remain in place. Tabs compare their rendered palette on activation, so inactive tabs catch up without reparsing. Export waits for a pending diagram theme update. The scroll bridge coalesces its animation-frame and timer callbacks, caches heading offsets, and uses binary search during scrolling. Resize, DOM changes, image loads, details toggles, and font readiness invalidate the offsets.
+
+## Export Pipeline
+
+Print and PDF export use the visible `WKWebView` from the active document window. `DocumentExportController`
+builds a shared `NSPrintOperation` with 36-point margins, fit-to-width horizontal pagination, automatic
+vertical pagination, and WebKit's modal print operation path. Print shows the system panel; PDF export
+sets `NSPrintInfo.jobDisposition` to save with the user-selected URL and hides the print panels. Both
+paths are enabled only after the reader has finished navigation and any scripted-renderer `waferContentReady`
+signal has arrived.
+
+Standalone HTML export also starts from the visible reader. `WebKitReaderViewController` snapshots
+`document.documentElement.outerHTML` only when the same export-readiness gate is satisfied, then
+`ExportSanitizer` rewrites the document for offline use. It removes scripts, strips nodes marked with
+the shared `data-wafer-chrome` export-chrome contract, rewrites the CSP to `default-src 'none'; img-src
+data:; style-src 'unsafe-inline'`, removes remaining `wafer-*` scheme attributes, preserves already
+rendered Mermaid SVG and KaTeX HTML, and ensures a doctype. KaTeX font files are not inlined in exported
+HTML, so exported math can fall back to system fonts outside Wafer. `ExportAssetInliner` turns allowed local images into
+`data:` URIs through `LocalAssetLoader`, so symlink and root-directory validation is identical to the
+live WebKit local-asset scheme. Remote image export is lookup-only inside the sanitizer; the controller
+prefetches `https` images asynchronously when File > Load Remote Images is enabled, uses a 10-second
+request timeout, omits unavailable images, rejects byte-budget overflow, and writes the final HTML atomically.
+`source srcset` candidates are discovered, prefetched, and inlined through the same path as `img src`;
+if any candidate in a `source` element cannot be inlined, that `source` is dropped so exported HTML
+never contains unresolved `wafer-*` image URLs. The total raw inlined image payload is capped at 20 MB.
+
+The HTML export controller keeps UI-facing state on the main actor, but the heavy sanitize, inline, and atomic-write stage runs in a detached utility-priority task. The inliner is created inside that background task so its mutable state never crosses actor boundaries, and completion hops back to the main actor only to clear the re-entry guard or present errors.
+
+Reader scroll positions are persisted by `ScrollStateStore` with keys derived from the document path and content fingerprint. Scroll updates use a trailing debounce in `MarkdownReaderDocument`, flush immediately when a document closes or navigates in the current window, and prune entries older than 180 days once per app launch.
+
+Live reload is owned by `MarkdownReaderDocument` through the `FileChangeMonitor` seam. `FileChangeMonitor` watches the open file with a kqueue-backed `DispatchSourceFileSystemObject`, debounces write bursts, and re-arms by path after rename/delete events so atomic saves continue to be observed. Automatic reload fingerprints bytes before rendering, so metadata-only changes and re-arm false positives do not refresh the reader. Explicit Cmd-R renders even with an unchanged fingerprint, retrying assets and applying the remote-image preference while reusing the cached parse. Both preserve the live scroll fraction and pin to the bottom when the reader was already there. Explicit read failures are reported; automatic failures leave the current reader available.
+
+The outline sidebar rebuilds rows when documents or outline data changes, but active-heading updates only change existing row selection state in place so scrolling does not recreate the outline list.
+
+HTML export fetches remote images serially, passing the remaining aggregate 20 MiB byte allowance to the streaming fetcher before each request. Local image reads use the remaining inline budget and recheck growth while reading. Closing the exporting window cancels outstanding work. Resolved wiki links are rewritten relative to the chosen output location, with absolute file URLs when needed; copy-code controls follow the shared export-chrome contract.
+
+## Quick Look Preview Rendering
+
+Quick Look uses `PreviewComposer` in `WaferCore` plus a view-based `NSViewController` and `QLPreviewingController` bridge in `WaferQuickLook`. The composer reads markdown through the shared `MarkdownSourceDecoding` path used by the app and library indexer, accepting UTF-8 plus UTF-16 with or without a BOM, then applies the 2 MB source budget before parsing. The truncation note is appended to the markdown source so the renderer handles it like normal content. Unreadable or undecodable files throw instead of returning empty HTML, allowing Quick Look to fall back to another provider.
+
+`WebKitHTMLRenderer` has an explicit `RenderTarget.preview` mode that keeps reader output unchanged while producing scriptless preview HTML. Preview mode does not emit CSP script tags, Mermaid figure chrome, KaTeX mounts, Wafer custom URL schemes, or remote image URLs. Mermaid and math fences render through the normal code-block path, remote images become placeholders, and local images become `cid:` references with a matching `previewAttachments` map. `PreviewComposer` enforces the 10 MB total local-attachment budget and removes skipped `cid:` images from the HTML so Quick Look never receives dangling attachment references. `PreviewProvider` inlines the remaining attachments as `data:` URLs before importing the HTML into the native text view.
+
+`PreviewProvider` presents the preview with a native `NSScrollView` and non-editable `NSTextView`. It imports the scriptless preview HTML as an attributed string, forces the selected light/dark palette foreground and background colors for readability, and keeps the content selectable and scrollable. The extension intentionally does not set `QLIsDataBasedPreview`; empirical validation showed the data-based path produced unreadably small or blank previews on this macOS release. An embedded WKWebView also produced blank captured surfaces, so the shipped view-based path avoids a WKWebView and uses native AppKit text presentation.
+
+`PreviewProvider` chooses `.dark` or `.light` from `NSAppearance.currentDrawing()` and falls back to the `AppleInterfaceStyle` user default only if the current drawing appearance cannot be matched. App-selected custom themes are intentionally not available in the extension; Finder previews follow the system appearance.
+
+## Theming
+
+Wafer uses a single `ReaderThemePalette` model for both the WebKit reader and native AppKit chrome.
+The built-in palettes are `ReaderThemePalette.dark` and `.light`; Dark remains the compatibility
+baseline for the pre-v0.6 look. `ReaderTheme.current` is the process-wide active palette and posts
+`.readerThemeDidChange` whenever it changes.
+
+The WebKit path captures the active palette when `MarkdownReaderDocument` schedules a render, then
+passes it into `WebKitHTMLRenderer`. The renderer emits a generated `:root` block of CSS custom
+properties before the bundled `reader-theme.css` body. Mermaid receives the same palette through
+its generated JavaScript theme variables, and KaTeX output inherits `--text-color`, so Markdown,
+sanitized raw HTML, diagrams, math, inspector chrome, syntax highlighting, and image placeholders all
+use the same token source. The bundled CSS
+body must stay token-only for theme colors; hard-coded colors belong in `ReaderThemePalette`.
+
+The native path uses `ThemeApplying` plus `.readerThemeDidChange` observers. `DocumentWindowController`
+sets the window appearance/background, re-applies titlebar suppression, and asks the active document
+to update its existing DOM palette and Mermaid figures so scroll position is preserved. `DocumentChromeViewController`,
+`DocumentSidebarViewController`, `DocumentStatisticsAccessoryViewController`, and
+`WebKitReaderViewController` apply their layer/text colors from `ReaderTheme` and are re-applied
+recursively when the theme changes.
+
+`AppearancePreferenceStore` owns the persisted appearance selection. The default selection is
+`System`, resolved through an injected `systemIsDark` closure so tests do not read the CI machine's
+real appearance. Explicit `Light`, `Dark`, and custom selections ignore system appearance changes.
+`AppDelegate.applicationDidFinishLaunching` reloads custom themes and applies the resolved palette
+before documents render, preventing a first-paint mismatch.
+
+Custom themes are loaded by `ThemeLibrary` from two sources: bundled themes shipped as SwiftPM
+resources in `Sources/WaferApp/Resources/Themes` (resolved from the packaged
+`Wafer_WaferApp.bundle` in the .app, or `Bundle.module` under `swift run` and tests), then user
+themes from `~/Library/Application Support/Wafer/Themes/*.json`, which override bundled themes
+with the same `name`. The library creates the user directory and writes `Example.json` on launch,
+decodes each file independently through `ThemeFile`, and keeps valid palettes keyed by `name`.
+`Example.json` is a copy-me template and is excluded from the loaded palettes. Invalid files are
+skipped with diagnostics rather than aborting app startup. Theme JSON mirrors `ReaderThemePalette`, requires all fields, validates every color as
+`#RRGGBB` or `#RRGGBBAA`, and validates `ReaderThemeColor.alpha` in `0...1`. If a persisted custom
+selection no longer resolves, the store deterministically falls back to Dark; choosing a missing
+custom name from code shows one non-fatal notice per name. Bundled resource filenames stay ASCII so
+the signed app bundle's sealed resource paths remain stable across Archive Utility, Finder, and
+third-party extraction or copy paths; user-visible theme names may still use Unicode inside JSON.
+
+Theme selection lives in a dedicated top-level Theme menu.
+It is rebuilt by `AppearanceMenuController` when opened so custom themes, Reload Themes, and Reveal
+Themes Folder in Finder reflect the current theme directory. Tests inject temporary theme
+directories and reveal handlers; no test writes to the real Application Support directory.
+
+## Vault Browsing (v1.2)
+
+Back/forward history is a pure per-document `WindowNavigationHistory` (each tab
+bundles its own document, so document-owned history IS per-tab). The single
+choke point is `MarkdownReaderDocument.replaceCurrentFile`: every successful
+cross-document replace-in-window navigation pushes the departing file unless
+the navigation is itself a history traversal. Traversal computes a candidate
+history value and commits it only after the target source loads successfully.
+Back/Forward are disabled during a pending navigation read. Reload requests arriving during
+any source read are coalesced and run against the resulting current file, preserving
+an explicit refresh request. Failed or superseded reads leave committed history
+unchanged. Scroll restoration reuses the existing `ScrollStateStore`.
+
+Tabs: `DocumentHostWindowController` (a `DocumentWindowController` subclass)
+owns ordered `DocumentTab`s (document + reader + history) in one window with a
+fully custom, palette-token strip (`DocumentTabStripView`; drag-reorder is
+local mouse tracking with a pure projection function). NSDocument allows one
+owning document per window controller, so selection transfers ownership to the
+active tab's document; inactive tab documents stay alive via their tabs and
+`OpenDocumentRegistry` and are closed explicitly when their tab or the window
+closes. Window-level chrome writes are gated by `isActiveInHost` so background
+renders never clobber the visible tab. Tab tokens are an OPTIONAL palette
+group; absent groups derive from sidebar/background tokens so pre-tab custom
+themes load unchanged.
+
+Wiki links are detected in the renderer's inline-text pass (composing with
+autolinks, emoji, highlights, and footnotes; never inside code) and resolved
+against an immutable `WikiLinkIndex` built once per library snapshot; the renderer never touches live library state, exactly
+like the palette. The index prefers explicit library-relative paths, including
+extensions and extensionless paths with directories, before the existing
+filename/title fallback. Bare-name ambiguity still picks the shortest file
+path, then the lexicographically first path. Reader and backlinks use the same
+index. Resolved links use the `wafer-wiki:` scheme so clicks
+navigate in the current tab; exports rewrite them to relative hrefs and Quick
+Look renders the unresolved styling. Wiki-bearing documents re-render
+flash-free when the index content actually changes (snapshot comparison).
+
+Backlinks: scans collect outgoing references (markdown links + wiki targets
+with paragraph context) during the existing parse; `BacklinkIndex` inverts
+them in a pure second pass, resolving wiki targets against the scan's own
+snapshot. The Outline sidebar appends a "Linked From" section for the current
+document when a library is open.
+
+## Security Model
+
+The containing app is currently unsandboxed. Its only network use besides remote images is Sparkle: it fetches the update feed, and an update archive once the user chooses to install. Archives are accepted only with a valid EdDSA signature from the key in `App/Info.plist`. The Quick Look extension is sandboxed with `com.apple.security.app-sandbox=true` in `App/QuickLook.entitlements` and intentionally has no network-client entitlement. Preview rendering strips remote image URLs before presentation, so Finder previews do not fetch remote images. Release verification fails if the sandbox entitlement is missing or if the appex requests network client access.
+
+The WebKit reader is built around a deny-by-default render shell plus narrow local schemes:
+
+- HTML passthrough uses an allowlist, not a denylist. Only known-safe tags are emitted.
+- Attributes are allowlisted per tag. Event handlers, arbitrary styles, classes, IDs, and `data-*` attributes are dropped.
+- URL-bearing attributes are parsed through explicit policy. Image sources allow local asset paths and `https` remote images only; links allow local paths, `http`, `https`, and `mailto`.
+- `data:` image URIs are not rendered in v0.5.
+- Every rendered document includes a CSP meta tag. It keeps `default-src 'none'`, `object-src 'none'`, `connect-src 'none'`, `base-uri 'none'`, and `form-action 'none'`. `img-src` allows only `wafer-local:` and `wafer-remote:`, `font-src` allows only `wafer-local:`, and `style-src` allows inline reader CSS plus local resource styles. Documents without scripted renderers use `script-src 'none'`; Mermaid or KaTeX documents use a per-render nonce on the bundled renderer scripts and shared bootstrap.
+- Sanitized HTML is emitted only inside `#write`; scripts, styles, iframes, objects, embeds, metadata tags, forms, and unsafe layout attributes are removed so raw HTML cannot escape the reader shell.
+- Remote images are opt-out and non-blocking. Disabling File > Load Remote Images blocks future remote image fetches; failed remote images fail the scheme request instead of hanging rendering.
+
+`WebKitReaderViewController` uses two WebKit content-world paths. Scripted renderer readiness (`waferContentReady`) remains page-world because Mermaid and KaTeX bootstraps run in the page. Reader scroll and active-heading instrumentation runs in the named reader content world so page CSP does not block the app-owned observer scripts.
+
+## In-App Updates
+
+Wafer updates itself with Sparkle 2.10.1, a binary SwiftPM dependency of `WaferApp` only; the Quick Look extension does not link it. `Package.swift` adds the `@executable_path/../Frameworks` rpath so the bundled executable finds the embedded framework.
+
+`UpdateController` owns one `SPUStandardUpdaterController` and is the target of the two items in the Wafer menu. The feed URL and EdDSA public key come from `App/Info.plist` (`SUFeedURL`, `SUPublicEDKey`), which also turns off automatic downloads and system profiling; the controller sets both off again at launch. A process whose bundle has no `SUFeedURL`, such as the test host, gets no updater, so tests never start Sparkle or reach the network.
+
+The app quits when its last window closes, and Sparkle's windows count. `AppDelegate` therefore asks `UpdateController` first: while an update session is in progress the quit is postponed, and it is honored when the session ends if no window is visible. Installing terminates the app through `applicationShouldTerminate`, so edit mode flushes unsaved text as on any quit.
+
+`App/Info.plist` sets `SUFeedURL` and `SUPublicEDKey` to the project's feed and public key. Wafer's releases and feed live in the source repository, which is passed to `scripts/release.py --repository OWNER/REPO`. Anyone distributing their own builds replaces both values and passes the repository that holds their releases and `appcast.xml`. [docs/UPDATES.md](docs/UPDATES.md) covers preparing, reviewing and publishing an update.
+
+## Direct Distribution
+
+Direct distribution outside the Mac App Store is handled by `scripts/package-release.sh`. The release path is:
+
+1. Run `swift test`.
+2. Build `build/Wafer.app` in release mode.
+3. Sign Sparkle's helpers and framework inside out with a `Developer ID Application` identity, hardened runtime, and secure timestamp, never with `--deep`. Then sign `Contents/PlugIns/WaferQuickLook.appex` the same way with `App/QuickLook.entitlements`.
+4. Verify the appex layout, bundled WaferCore resources, signature, sandbox entitlement, and absence of preview network entitlement with `scripts/verify-appex.sh`.
+5. Sign the containing app with the same Developer ID identity, hardened runtime, and secure timestamp.
+6. Verify the signed app with `codesign --verify --deep --strict` and re-run the appex verifier.
+7. Create a ZIP archive for Apple notarization.
+8. Submit the ZIP with `xcrun notarytool`.
+9. Staple the notarization ticket to the app bundle.
+10. Create the final distributable ZIP in `dist/` without AppleDouble resource metadata, so third-party ZIP extractors cannot materialize `._*` files inside the signed app bundle and invalidate the nested signatures.
+11. Verify the signed app with `codesign`, `stapler`, and `spctl`.
+
+`scripts/release.py` wraps this script to prepare an in-app update: it packages into `dist/updates/<version>-<build>`, generates the signed appcast, and publishes only when run again with `--publish`. `WAFER_DIST_DIR` redirects the packaging output; without it the script clears `dist` except `dist/updates`.
+
+Use `WAFER_SKIP_NOTARIZATION=1 scripts/package-release.sh` for local release packaging without submitting to Apple. Finder Quick Look provider selection still needs a manual smoke test against the signed app installed in `/Applications` because modern Quick Look extension election is not reliably proven by build output alone. Repeat the same smoke after notarization and stapling when preparing a public release.
+
+## Performance verification
+
+Run `python3 scripts/benchmark-performance.py` for optimized synthetic core and sidebar measurements. Fixtures, binaries, resource links, and isolated benchmark preferences are cleaned up automatically. The script builds release products but does not assemble, sign, register, or install the app. Run `node scripts/benchmarks/scroll.cjs` to verify scheduling and heading-cache behavior against the actual injected JavaScript. Measured results and limitations are recorded in `docs/performance-review-fixes.md`.
+
+Quick Look reads only a bounded 2 MiB source prefix, preserving complete UTF-8/UTF-16 characters at truncation. Parsing, rendering, and attachment inlining run on a serial background queue with cancellation between phases. Attachment reads enforce the remaining 10 MiB allowance at read time. Only AppKit HTML import and text-view updates remain on the main thread.

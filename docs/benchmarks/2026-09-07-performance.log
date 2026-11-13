@@ -1,0 +1,41 @@
+[0/1] Planning build
+Building for production...
+[0/5] Write sources
+[2/5] Write swift-version--58304C5D6DBC2206.txt
+[4/6] Compiling WaferCore AssetResolver.swift
+[5/6] Compiling WaferApp AppDelegate.swift
+[5/7] Write Objects.LinkFileList
+[6/7] Linking Wafer
+Build complete! (17.91s)
+Fixture: 2000 files, 3774 bytes each
+scan2000-cold-index: ms=4161.98,4219.43,4192.07 checksum=6000
+scan2000-cached: ms=114.95,110.06,109.33,110.02,112.89 checksum=10000
+scan2000-one-dirty-file: ms=113.97,111.18,111.49 checksum=6000
+fullText2000-visible-snippets: ms=11.36,11.49,11.84 checksum=6000
+quickOpen2000-query-note: ms=3.83,3.63,3.49,4.50,3.53 checksum=250
+fullText2000-query-performance: ms=42.80,40.37,40.94 checksum=6000
+diff2000-unchanged: ms=3.06,1.88,1.71,1.72,2.76 checksum=10000
+backlinks2000-no-links: ms=9.93,9.70,9.74,9.61,9.79 checksum=0
+backlinks2000-20k-links: ms=121.70,121.87,122.18 checksum=6000
+render-index-0-local-links: ms=3.47,0.33,0.26 checksum=77556
+render-index-100-local-links: ms=6.96,6.94,6.99 checksum=89196
+render-index-1000-local-links: ms=68.80,68.50,67.05 checksum=199896
+nested-wiki-1000: ms=0.06,0.02,0.02 checksum=3
+nested-wiki-5000: ms=0.10,0.09,0.09 checksum=3
+nested-wiki-10000: ms=0.19,0.19,0.19 checksum=3
+code-render-lines-1000: ms=10.32,9.91,9.77 checksum=314814
+code-render-lines-10000: ms=96.49,96.54,98.01 checksum=2447814
+<checkout>/scripts/benchmarks/sidebar.swift:14:18: warning: weak variable 'weakFetcher' was never mutated; consider changing to 'let' constant [#WeakMutability]
+12 |         sessionConfig.protocolClasses = [FixtureURLProtocol.self]
+13 |         var fetcher: RemoteImageURLSessionFetcher? = RemoteImageURLSessionFetcher(configuration: sessionConfig)
+14 |         weak var weakFetcher = fetcher
+   |                  `- warning: weak variable 'weakFetcher' was never mutated; consider changing to 'let' constant [#WeakMutability]
+15 |         var done = false
+16 |         _ = fetcher!.fetch(URLRequest(url: URL(string: "https://fixture.invalid/image.png")!)) { _ in done = true }
+
+[#WeakMutability]: <https://docs.swift.org/compiler/documentation/diagnostics/weak-mutability>
+remote fetch completed=true; fetcher retained after last external reference released=false
+sidebar-build-and-layout-100 RELEASE ms=9.229584 rows=100
+sidebar-build-and-layout-300 RELEASE ms=6.6385 rows=300
+sidebar-build-and-layout-500 RELEASE ms=7.934458 rows=500
+sidebar-build-and-layout-2000 RELEASE ms=9.3285 rows=2000

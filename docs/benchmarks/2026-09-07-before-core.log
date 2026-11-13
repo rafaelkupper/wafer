@@ -1,0 +1,19 @@
+Fixture: 2000 files, 3774 bytes each
+scan2000: ms=3620.44,3653.80,3642.59 checksum=6000
+quickOpen2000-query-note: ms=40.38,39.99,40.99,39.88,40.69 checksum=250
+fullText2000-query-performance: ms=475.87,471.52,471.64 checksum=6000
+diff2000-unchanged: ms=47.29,46.77,46.57,44.38,45.74 checksum=10000
+backlinks2000-no-links: ms=9.41,9.37,10.06,9.50,9.86 checksum=0
+backlinks2000-20k-links: ms=219.97,215.47,216.58 checksum=6000
+render-index-0-local-links: ms=3.05,0.35,0.27 checksum=77556
+render-index-100-local-links: ms=95.73,95.00,94.51 checksum=89196
+render-index-1000-local-links: ms=956.86,939.15,945.80 checksum=199896
+nested-wiki-1000: ms=16.69,17.48,18.65 checksum=3
+nested-wiki-5000: ms=421.00,454.67,426.51 checksum=3
+nested-wiki-10000: ms=1697.69,1692.43,1683.47 checksum=3
+code-render-lines-1000: ms=10.31,10.90,10.44 checksum=314814
+code-render-lines-10000: ms=99.16,97.49,96.39 checksum=2447814
+heading-ids: ["foo", "foo-2", "foo-2"]
+default-export: <!doctype html>
+<meta http-equiv="Content-Security-Policy" content="default-src &#39;none&#39;; img-src data:; style-src &#39;unsafe-inline&#39;;">
+<html><body><a>Note</a><pre><code>let a = 1</code><button class="md-copy-button">Copy</button></pre></body></html>

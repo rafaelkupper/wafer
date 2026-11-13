@@ -1,0 +1,424 @@
+import Foundation
+import XCTest
+@testable import WaferApp
+@testable import WaferCore
+
+@MainActor
+final class LibraryControllerTests: XCTestCase {
+    func testOpenLibraryScansFilesAndPersistsPreference() throws {
+        let tempDirectory = try TemporaryTestDirectory()
+        defer { tempDirectory.remove() }
+        _ = try tempDirectory.createTextFile(named: "Guide.md", contents: "# Guide")
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let store = LibraryPreferenceStore(defaults: defaults)
+        let controller = LibraryController(
+            preferenceStore: store,
+            monitorFactory: { rootURL, onChange in FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange) }
+        )
+
+        try controller.openLibrary(at: tempDirectory.url)
+        waitForLibraryIdle(controller)
+
+        XCTAssertEqual(controller.files.map(\.displayTitle), ["Guide"])
+        XCTAssertEqual(store.libraryFolderURL, FileIdentity.normalized(tempDirectory.url))
+        XCTAssertFalse(controller.truncated)
+    }
+
+    func testReopenPersistedLibraryLoadsExistingFolderAndRetainsUnavailableFolder() throws {
+        let tempDirectory = try TemporaryTestDirectory()
+        defer { tempDirectory.remove() }
+        _ = try tempDirectory.createTextFile(named: "Guide.md", contents: "# Guide")
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let store = LibraryPreferenceStore(defaults: defaults)
+        store.libraryFolderURL = tempDirectory.url
+        let controller = LibraryController(
+            preferenceStore: store,
+            monitorFactory: { rootURL, onChange in FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange) }
+        )
+
+        controller.reopenPersistedLibraryIfAvailable()
+        waitForLibraryIdle(controller)
+
+        XCTAssertEqual(controller.files.map(\.displayTitle), ["Guide"])
+
+        let missingStore = LibraryPreferenceStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        missingStore.libraryFolderURL = tempDirectory.url.appendingPathComponent("Missing", isDirectory: true)
+        let missingController = LibraryController(preferenceStore: missingStore)
+
+        missingController.reopenPersistedLibraryIfAvailable()
+        waitForLibraryIdle(missingController)
+
+        XCTAssertEqual(missingStore.libraryFolderURL?.path, tempDirectory.url.appendingPathComponent("Missing").path)
+        XCTAssertTrue(missingController.hasLibrary)
+        XCTAssertNotNil(missingController.scanFailure)
+        missingController.closeLibrary()
+    }
+
+    func testCloseLibraryClearsStatePreferenceAndMonitor() throws {
+        let tempDirectory = try TemporaryTestDirectory()
+        defer { tempDirectory.remove() }
+        let store = LibraryPreferenceStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        var monitor: FakeDirectoryMonitor?
+        let controller = LibraryController(
+            preferenceStore: store,
+            monitorFactory: { rootURL, onChange in
+                let fake = FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange)
+                monitor = fake
+                return fake
+            }
+        )
+
+        try controller.openLibrary(at: tempDirectory.url)
+        waitForLibraryIdle(controller)
+
+        controller.closeLibrary()
+
+        XCTAssertFalse(controller.hasLibrary)
+        XCTAssertTrue(controller.files.isEmpty)
+        XCTAssertNil(store.libraryFolderURL)
+        XCTAssertEqual(monitor?.stopCount, 1)
+    }
+
+    func testOpeningNewLibraryStopsPreviousMonitorBeforeReplacingIt() throws {
+        let firstDirectory = try TemporaryTestDirectory()
+        defer { firstDirectory.remove() }
+        let secondDirectory = try TemporaryTestDirectory()
+        defer { secondDirectory.remove() }
+        var monitors: [FakeDirectoryMonitor] = []
+        let controller = LibraryController(
+            preferenceStore: LibraryPreferenceStore(defaults: UserDefaults(suiteName: UUID().uuidString)!),
+            scanner: { _ in LibraryScanner.Result(files: [], truncated: false) },
+            monitorFactory: { rootURL, onChange in
+                let fake = FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange)
+                monitors.append(fake)
+                return fake
+            }
+        )
+
+        try controller.openLibrary(at: firstDirectory.url)
+        waitForLibraryIdle(controller)
+
+        try controller.openLibrary(at: secondDirectory.url)
+        waitForLibraryIdle(controller)
+
+        XCTAssertEqual(monitors.count, 2)
+        XCTAssertEqual(monitors[0].stopCount, 1)
+        XCTAssertEqual(monitors[1].stopCount, 0)
+    }
+
+    func testMonitorBurstTriggersOneDebouncedRescan() throws {
+        let tempDirectory = try TemporaryTestDirectory()
+        defer { tempDirectory.remove() }
+        _ = try tempDirectory.createTextFile(named: "Guide.md", contents: "# Guide")
+        let scanner = RecordingLibraryScanner()
+        var monitor: FakeDirectoryMonitor?
+        let controller = LibraryController(
+            preferenceStore: LibraryPreferenceStore(defaults: UserDefaults(suiteName: UUID().uuidString)!),
+            scanner: scanner.scan(rootURL:),
+            monitorFactory: { rootURL, onChange in
+                let fake = FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange)
+                monitor = fake
+                return fake
+            },
+            monitorDebounceInterval: 0.02
+        )
+
+        try controller.openLibrary(at: tempDirectory.url)
+        waitForLibraryIdle(controller)
+        XCTAssertEqual(scanner.count, 1)
+
+        for _ in 0..<5 {
+            monitor?.fire()
+        }
+        waitUntil(timeout: 2) {
+            scanner.count >= 2 && !controller.isScanning
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.08))
+
+        XCTAssertEqual(scanner.count, 2)
+    }
+
+    func testOpenLibraryRunsScannerOffMainThread() throws {
+        let tempDirectory = try TemporaryTestDirectory()
+        defer { tempDirectory.remove() }
+        let scanner = ThreadRecordingLibraryScanner()
+        let controller = LibraryController(
+            preferenceStore: LibraryPreferenceStore(defaults: UserDefaults(suiteName: UUID().uuidString)!),
+            scanner: scanner.scan(rootURL:),
+            monitorFactory: { rootURL, onChange in FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange) }
+        )
+
+        try controller.openLibrary(at: tempDirectory.url)
+        waitForLibraryIdle(controller)
+
+        XCTAssertEqual(scanner.count, 1)
+        XCTAssertFalse(scanner.ranOnMainThread)
+    }
+
+    func testOpenLibraryFirstScanCompletionFiresOnceWithScannedFiles() throws {
+        let tempDirectory = try TemporaryTestDirectory()
+        defer { tempDirectory.remove() }
+        let firstFile = libraryFile(
+            url: tempDirectory.url.appendingPathComponent("A.md"),
+            title: "A"
+        )
+        let scanner = StaticLibraryScanner(result: LibraryScanner.Result(files: [firstFile], truncated: false))
+        let controller = LibraryController(
+            preferenceStore: LibraryPreferenceStore(defaults: UserDefaults(suiteName: UUID().uuidString)!),
+            scanner: scanner.scan(rootURL:),
+            monitorFactory: { rootURL, onChange in FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange) }
+        )
+        var completedFileLists: [[LibraryFile]] = []
+
+        try controller.openLibrary(at: tempDirectory.url) { files in
+            completedFileLists.append(files)
+        }
+        waitForLibraryIdle(controller)
+
+        XCTAssertEqual(completedFileLists, [[firstFile]])
+
+        controller.refreshLibrary()
+        waitForLibraryIdle(controller)
+
+        XCTAssertEqual(completedFileLists, [[firstFile]])
+    }
+
+    func testFirstScanCompletionDoesNotFireAfterCloseLibrarySupersedesScan() throws {
+        let tempDirectory = try TemporaryTestDirectory()
+        defer { tempDirectory.remove() }
+        let scanner = BlockingLibraryScanner(
+            result: LibraryScanner.Result(
+                files: [libraryFile(url: tempDirectory.url.appendingPathComponent("A.md"), title: "A")],
+                truncated: false
+            )
+        )
+        let controller = LibraryController(
+            preferenceStore: LibraryPreferenceStore(defaults: UserDefaults(suiteName: UUID().uuidString)!),
+            scanner: scanner.scan(rootURL:),
+            monitorFactory: { rootURL, onChange in FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange) }
+        )
+        var completedFileLists: [[LibraryFile]] = []
+
+        try controller.openLibrary(at: tempDirectory.url) { files in
+            completedFileLists.append(files)
+        }
+        XCTAssertTrue(scanner.waitUntilStarted(timeout: 2))
+
+        controller.closeLibrary()
+        scanner.release()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertTrue(completedFileLists.isEmpty)
+    }
+
+    func testFirstScanCompletionDoesNotFireForScanSupersededBySecondOpenLibrary() throws {
+        let firstDirectory = try TemporaryTestDirectory()
+        defer { firstDirectory.remove() }
+        let secondDirectory = try TemporaryTestDirectory()
+        defer { secondDirectory.remove() }
+        let firstFile = libraryFile(url: firstDirectory.url.appendingPathComponent("A.md"), title: "A")
+        let secondFile = libraryFile(url: secondDirectory.url.appendingPathComponent("B.md"), title: "B")
+        let scanner = SupersedingLibraryScanner(
+            firstResult: LibraryScanner.Result(files: [firstFile], truncated: false),
+            secondResult: LibraryScanner.Result(files: [secondFile], truncated: false)
+        )
+        let controller = LibraryController(
+            preferenceStore: LibraryPreferenceStore(defaults: UserDefaults(suiteName: UUID().uuidString)!),
+            scanner: scanner.scan(rootURL:),
+            monitorFactory: { rootURL, onChange in FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange) }
+        )
+        var firstCompletions: [[LibraryFile]] = []
+        var secondCompletions: [[LibraryFile]] = []
+
+        try controller.openLibrary(at: firstDirectory.url) { files in
+            firstCompletions.append(files)
+        }
+        XCTAssertTrue(scanner.waitUntilFirstScanStarted(timeout: 2))
+
+        try controller.openLibrary(at: secondDirectory.url) { files in
+            secondCompletions.append(files)
+        }
+        // Scans are serialized: the replacement starts after the cancelled scan exits.
+        XCTAssertTrue(secondCompletions.isEmpty)
+        scanner.releaseFirstScan()
+        waitUntil(timeout: 2) {
+            secondCompletions == [[secondFile]] && !controller.isScanning
+        }
+
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertTrue(firstCompletions.isEmpty)
+        XCTAssertEqual(secondCompletions, [[secondFile]])
+    }
+
+    func testOpeningNonDirectoryThrows() {
+        let controller = LibraryController()
+
+        XCTAssertThrowsError(try controller.openLibrary(at: URL(fileURLWithPath: "/tmp/DefinitelyMissing-\(UUID())")))
+    }
+
+    private func waitForLibraryIdle(_ controller: LibraryController, timeout: TimeInterval = 2) {
+        waitUntil(timeout: timeout) {
+            !controller.isScanning
+        }
+    }
+
+    private func waitUntil(timeout: TimeInterval, condition: () -> Bool) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition(), Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        XCTAssertTrue(condition())
+    }
+
+    private func libraryFile(url: URL, title: String) -> LibraryFile {
+        LibraryFile(
+            fileURL: url,
+            relativePathComponents: [url.lastPathComponent],
+            displayTitle: title,
+            outlineItems: [],
+            plainText: "",
+            searchableText: "",
+            contentFingerprint: LibraryFileFingerprint(
+                modificationDate: Date(timeIntervalSince1970: 0),
+                fileSize: 0
+            )
+        )
+    }
+}
+
+@MainActor
+private final class FakeDirectoryMonitor: DirectoryMonitoring {
+    let rootURL: URL
+    let onChange: () -> Void
+    private(set) var startCount = 0
+    private(set) var stopCount = 0
+
+    init(rootURL: URL, onChange: @escaping () -> Void) {
+        self.rootURL = rootURL
+        self.onChange = onChange
+    }
+
+    func start() {
+        startCount += 1
+    }
+
+    func stop() {
+        stopCount += 1
+    }
+
+    func fire() {
+        onChange()
+    }
+}
+
+private final class RecordingLibraryScanner: @unchecked Sendable {
+    private let lock = NSLock()
+    private var scanCount = 0
+
+    var count: Int {
+        lock.withLock { scanCount }
+    }
+
+    func scan(rootURL: URL) -> LibraryScanner.Result {
+        lock.withLock {
+            scanCount += 1
+        }
+        return LibraryScanner.scan(rootURL: rootURL)
+    }
+}
+
+private final class ThreadRecordingLibraryScanner: @unchecked Sendable {
+    private let lock = NSLock()
+    private var scanCount = 0
+    private var mainThreadResults: [Bool] = []
+
+    var count: Int {
+        lock.withLock { scanCount }
+    }
+
+    var ranOnMainThread: Bool {
+        lock.withLock { mainThreadResults.contains(true) }
+    }
+
+    func scan(rootURL: URL) -> LibraryScanner.Result {
+        lock.withLock {
+            scanCount += 1
+            mainThreadResults.append(Thread.isMainThread)
+        }
+        return LibraryScanner.Result(files: [], truncated: false)
+    }
+}
+
+private final class StaticLibraryScanner: @unchecked Sendable {
+    private let result: LibraryScanner.Result
+
+    init(result: LibraryScanner.Result) {
+        self.result = result
+    }
+
+    func scan(rootURL: URL) -> LibraryScanner.Result {
+        result
+    }
+}
+
+private final class BlockingLibraryScanner: @unchecked Sendable {
+    private let result: LibraryScanner.Result
+    private let started = DispatchSemaphore(value: 0)
+    private let releaseSemaphore = DispatchSemaphore(value: 0)
+
+    init(result: LibraryScanner.Result) {
+        self.result = result
+    }
+
+    func scan(rootURL: URL) -> LibraryScanner.Result {
+        started.signal()
+        releaseSemaphore.wait()
+        return result
+    }
+
+    func waitUntilStarted(timeout: TimeInterval) -> Bool {
+        started.wait(timeout: .now() + timeout) == .success
+    }
+
+    func release() {
+        releaseSemaphore.signal()
+    }
+}
+
+private final class SupersedingLibraryScanner: @unchecked Sendable {
+    private let lock = NSLock()
+    private let firstResult: LibraryScanner.Result
+    private let secondResult: LibraryScanner.Result
+    private let firstStarted = DispatchSemaphore(value: 0)
+    private let releaseFirst = DispatchSemaphore(value: 0)
+    private var count = 0
+
+    init(firstResult: LibraryScanner.Result, secondResult: LibraryScanner.Result) {
+        self.firstResult = firstResult
+        self.secondResult = secondResult
+    }
+
+    func scan(rootURL: URL) -> LibraryScanner.Result {
+        let scanNumber = lock.withLock {
+            count += 1
+            return count
+        }
+
+        if scanNumber == 1 {
+            firstStarted.signal()
+            releaseFirst.wait()
+            return firstResult
+        }
+
+        return secondResult
+    }
+
+    func waitUntilFirstScanStarted(timeout: TimeInterval) -> Bool {
+        firstStarted.wait(timeout: .now() + timeout) == .success
+    }
+
+    func releaseFirstScan() {
+        releaseFirst.signal()
+    }
+}

@@ -1,0 +1,27 @@
+# SwiftPM and local build output
+.build/
+build/
+dist/
+.cache/
+DerivedData/
+benchmark-output/
+
+# Python bytecode
+__pycache__/
+
+# macOS Finder metadata
+.DS_Store
+
+# Xcode user state
+*.xcuserstate
+*.xccheckout
+xcuserdata/
+
+# Editor noise
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Private references and Git history backups
+/reference/

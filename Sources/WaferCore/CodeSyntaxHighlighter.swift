@@ -1,0 +1,1004 @@
+import Foundation
+
+struct CodeSyntaxHighlighter {
+    private static let regexCache = RegexCache()
+
+    enum TokenKind: String, CaseIterable {
+        case keyword
+        case type
+        case string
+        case number
+        case comment
+        case function
+        case member
+        case meta
+        case addition
+        case deletion
+    }
+
+    struct PresentationRun: Equatable {
+        let range: NSRange
+        let kind: TokenKind?
+    }
+
+    private enum TokenColor {
+        case keyword
+        case type
+        case string
+        case number
+        case comment
+        case function
+        case member
+        case meta
+        case addition
+        case deletion
+    }
+
+    private struct HighlightRule {
+        let pattern: String
+        let options: NSRegularExpression.Options
+        let color: TokenColor
+        let captureGroup: Int?
+    }
+
+    private final class RegexCache: @unchecked Sendable {
+        private var storage: [String: NSRegularExpression] = [:]
+        private let lock = NSLock()
+
+        func regex(pattern: String, options: NSRegularExpression.Options) -> NSRegularExpression? {
+            let key = "\(options.rawValue)|\(pattern)"
+            lock.lock()
+            defer { lock.unlock() }
+
+            if let cached = storage[key] {
+                return cached
+            }
+
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else {
+                return nil
+            }
+
+            storage[key] = regex
+            return regex
+        }
+    }
+
+    func highlightedHTML(code: String, language: String?) -> String {
+        let runs = presentationRuns(code: code, language: language)
+        guard !runs.isEmpty else {
+            return ""
+        }
+
+        var output = ""
+        let nsCode = code as NSString
+        for run in runs where run.range.length > 0 {
+            let substring = nsCode.substring(with: run.range).escapedHTML
+            if let kind = run.kind, let tokenClass = cssClass(for: kind) {
+                output += "<span class=\"\(tokenClass)\">\(substring)</span>"
+            } else {
+                output += substring
+            }
+        }
+
+        return output
+    }
+
+    func presentationRuns(code: String, language: String?) -> [PresentationRun] {
+        let stringLength = (code as NSString).length
+        guard let normalizedLanguage = normalized(language), !code.isEmpty else {
+            return [PresentationRun(range: NSRange(location: 0, length: stringLength), kind: nil)]
+        }
+
+        var kinds = Array<TokenKind?>(repeating: nil, count: stringLength)
+        let fullRange = NSRange(location: 0, length: stringLength)
+
+        for rule in rules(for: normalizedLanguage) {
+            guard let regex = Self.regexCache.regex(pattern: rule.pattern, options: rule.options) else {
+                continue
+            }
+
+            regex.enumerateMatches(in: code, options: [], range: fullRange) { match, _, _ in
+                guard let match else {
+                    return
+                }
+
+                let targetRange: NSRange
+                if let captureGroup = rule.captureGroup {
+                    let captureRange = match.range(at: captureGroup)
+                    guard captureRange.location != NSNotFound, captureRange.length > 0 else {
+                        return
+                    }
+                    targetRange = captureRange
+                } else {
+                    targetRange = match.range
+                }
+
+                let kind = tokenKind(for: rule.color)
+                let upperBound = NSMaxRange(targetRange)
+                guard targetRange.location < upperBound else {
+                    return
+                }
+
+                for index in targetRange.location..<upperBound where index < kinds.count {
+                    kinds[index] = kind
+                }
+            }
+        }
+
+        var runs: [PresentationRun] = []
+        var currentKind: TokenKind?
+        var currentLocation = 0
+
+        for index in 0..<stringLength {
+            let kind = kinds[index]
+            if index == 0 {
+                currentKind = kind
+                currentLocation = 0
+                continue
+            }
+
+            if kind != currentKind {
+                runs.append(
+                    PresentationRun(
+                        range: NSRange(location: currentLocation, length: index - currentLocation),
+                        kind: currentKind
+                    )
+                )
+                currentKind = kind
+                currentLocation = index
+            }
+        }
+
+        runs.append(
+            PresentationRun(
+                range: NSRange(location: currentLocation, length: stringLength - currentLocation),
+                kind: currentKind
+            )
+        )
+
+        return runs
+    }
+
+    private func normalized(_ language: String?) -> String? {
+        guard let trimmed = language?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !trimmed.isEmpty else {
+            return nil
+        }
+
+        switch trimmed {
+        case "shell", "shellscript":
+            return "bash"
+        case "xhtml", "xml", "svg":
+            return "html"
+        case "scss":
+            return "css"
+        case "golang":
+            return "go"
+        case "rb":
+            return "ruby"
+        case "py":
+            return "python"
+        case "ex", "exs":
+            return "elixir"
+        case "js", "jsx", "mjs", "cjs":
+            return "javascript"
+        case "ts", "tsx":
+            return "typescript"
+        case "c++", "cc", "cxx", "hpp", "hh", "hxx":
+            return "cpp"
+        case "h":
+            return "c"
+        case "rs":
+            return "rust"
+        case "hs":
+            return "haskell"
+        case "patch":
+            return "diff"
+        case "docker":
+            return "dockerfile"
+        case "postgres", "postgresql", "mysql", "sqlite":
+            return "sql"
+        case "kt", "kts":
+            return "kotlin"
+        case "cs":
+            return "csharp"
+        case "objc", "objectivec":
+            return "objective-c"
+        case "make", "mk":
+            return "makefile"
+        case "conf", "properties":
+            return "ini"
+        case "gql":
+            return "graphql"
+        case "terraform", "tf":
+            return "hcl"
+        case "proto":
+            return "protobuf"
+        default:
+            return trimmed
+        }
+    }
+
+    private func rules(for language: String) -> [HighlightRule] {
+        switch language {
+        case "swift":
+            swiftRules
+        case "bash", "sh", "zsh":
+            shellRules
+        case "json":
+            jsonRules
+        case "yaml", "yml":
+            yamlRules
+        case "markdown", "md":
+            markdownRules
+        case "html":
+            htmlRules
+        case "css":
+            cssRules
+        case "toml":
+            tomlRules
+        case "go":
+            goRules
+        case "ruby":
+            rubyRules
+        case "python":
+            pythonRules
+        case "elixir":
+            elixirRules
+        case "javascript":
+            javaScriptRules
+        case "typescript":
+            typeScriptRules
+        case "php":
+            phpRules
+        case "c":
+            cRules
+        case "cpp":
+            cppRules
+        case "rust":
+            rustRules
+        case "zig":
+            zigRules
+        case "haskell":
+            haskellRules
+        case "java":
+            javaRules
+        case "diff":
+            diffRules
+        case "dockerfile":
+            dockerfileRules
+        case "sql":
+            sqlRules
+        case "kotlin":
+            kotlinRules
+        case "csharp":
+            cSharpRules
+        case "objective-c":
+            objectiveCRules
+        case "lua":
+            luaRules
+        case "makefile":
+            makefileRules
+        case "ini":
+            iniRules
+        case "graphql":
+            graphQLRules
+        case "hcl":
+            hclRules
+        case "protobuf":
+            protobufRules
+        default:
+            []
+        }
+    }
+
+    private func tokenKind(for tokenColor: TokenColor) -> TokenKind {
+        switch tokenColor {
+        case .keyword:
+            .keyword
+        case .type:
+            .type
+        case .string:
+            .string
+        case .number:
+            .number
+        case .comment:
+            .comment
+        case .function:
+            .function
+        case .member:
+            .member
+        case .meta:
+            .meta
+        case .addition:
+            .addition
+        case .deletion:
+            .deletion
+        }
+    }
+
+    private func cssClass(for kind: TokenKind) -> String? {
+        switch kind {
+        case .keyword:
+            return "cm-keyword"
+        case .type:
+            return "cm-def"
+        case .string:
+            return "cm-string"
+        case .number:
+            return "cm-number"
+        case .comment:
+            return "cm-comment"
+        case .function:
+            return "cm-variable-2"
+        case .member:
+            return "cm-property"
+        case .meta:
+            return "cm-atom"
+        case .addition:
+            return "cm-positive"
+        case .deletion:
+            return "cm-negative"
+        }
+    }
+
+    private func rule(
+        _ pattern: String,
+        options: NSRegularExpression.Options = [],
+        color: TokenColor,
+        captureGroup: Int? = nil
+    ) -> HighlightRule {
+        HighlightRule(
+            pattern: pattern,
+            options: options,
+            color: color,
+            captureGroup: captureGroup
+        )
+    }
+
+    private func wordRule(
+        _ words: [String],
+        options: NSRegularExpression.Options = [],
+        color: TokenColor
+    ) -> HighlightRule {
+        rule(#"\b(?:\#(escapedAlternation(words)))\b"#, options: options, color: color)
+    }
+
+    private func escapedAlternation(_ words: [String]) -> String {
+        words
+            .map { NSRegularExpression.escapedPattern(for: $0) }
+            .joined(separator: "|")
+    }
+
+    private var numberRule: HighlightRule {
+        rule(#"\b(?:0x[0-9A-Fa-f]+|0b[01]+|0o[0-7]+|\d+(?:\.\d+)?)\b"#, color: .number)
+    }
+
+    private var quotedStringRule: HighlightRule {
+        rule(#""(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'"#, color: .string)
+    }
+
+    private var quotedAndBacktickStringRule: HighlightRule {
+        rule(#""(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`[^`]*`"#, color: .string)
+    }
+
+    private var sqlStringRule: HighlightRule {
+        rule(#"'(?:''|\\.|[^'\\])*'"#, color: .string)
+    }
+
+    private var sqlQuotedIdentifierRule: HighlightRule {
+        rule(#""(?:""|[^"])*""#, color: .type)
+    }
+
+    private var pythonStringRule: HighlightRule {
+        rule(##"\"\"\"[\s\S]*?\"\"\"|'''[\s\S]*?'''|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'"##, color: .string)
+    }
+
+    private var cSharpStringRule: HighlightRule {
+        rule(##"\$?@\"(?:\"\"|[^\"])*\"|\$?\"(?:\\.|[^\"\\])*\""##, color: .string)
+    }
+
+    private var objectiveCStringRule: HighlightRule {
+        rule(##"@\"(?:\\.|[^\"\\])*\"|\"(?:\\.|[^\"\\])*\""##, color: .string)
+    }
+
+    private var luaStringRule: HighlightRule {
+        rule(#"\[\[[\s\S]*?\]\]|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'"#, color: .string)
+    }
+
+    private var graphQLStringRule: HighlightRule {
+        rule(##"\"\"\"[\s\S]*?\"\"\"|\"(?:\\.|[^\"\\])*\""##, color: .string)
+    }
+
+    private var slashCommentRule: HighlightRule {
+        rule(#"//.*$|/\*[\s\S]*?\*/"#, options: [.anchorsMatchLines], color: .comment)
+    }
+
+    private var sqlCommentRule: HighlightRule {
+        rule(#"--.*$|/\*[\s\S]*?\*/"#, options: [.anchorsMatchLines], color: .comment)
+    }
+
+    private var luaCommentRule: HighlightRule {
+        rule(#"--\[\[[\s\S]*?\]\]|--.*$"#, options: [.anchorsMatchLines], color: .comment)
+    }
+
+    private var hashCommentRule: HighlightRule {
+        rule(#"#.*$"#, options: [.anchorsMatchLines], color: .comment)
+    }
+
+    private var iniCommentRule: HighlightRule {
+        rule(#"^\s*[;#].*$"#, options: [.anchorsMatchLines], color: .comment)
+    }
+
+    private var haskellCommentRule: HighlightRule {
+        rule(#"--.*$|\{-(?!#)[\s\S]*?-\}"#, options: [.anchorsMatchLines], color: .comment)
+    }
+
+    private var memberAccessRule: HighlightRule {
+        rule(#"(?:\.|->)\s*([A-Za-z_][A-Za-z0-9_]*)"#, color: .member, captureGroup: 1)
+    }
+
+    private var phpMemberAccessRule: HighlightRule {
+        rule(#"(?:->|::)\s*([A-Za-z_][A-Za-z0-9_]*)"#, color: .member, captureGroup: 1)
+    }
+
+    private var annotationRule: HighlightRule {
+        rule(#"@[A-Za-z_][A-Za-z0-9_\.]*"#, color: .meta)
+    }
+
+    private var cPreprocessorRule: HighlightRule {
+        rule(#"^\s*#\s*(?:include|define|if|ifdef|ifndef|elif|else|endif|pragma|error|warning)\b.*$"#, options: [.anchorsMatchLines], color: .meta)
+    }
+
+    private var objectiveCPreprocessorRule: HighlightRule {
+        rule(#"^\s*#\s*(?:import|include|define|if|ifdef|ifndef|elif|else|endif|pragma|error|warning)\b.*$"#, options: [.anchorsMatchLines], color: .meta)
+    }
+
+    private var rustAttributeRule: HighlightRule {
+        rule(#"#\!?\[[^\]]+\]"#, color: .meta)
+    }
+
+    private var elixirAtomRule: HighlightRule {
+        rule(#":[A-Za-z_][A-Za-z0-9_!?]*"#, color: .meta)
+    }
+
+    private var haskellPragmaRule: HighlightRule {
+        rule(#"\{\-#[\s\S]*?#-\}"#, color: .meta)
+    }
+
+    private var swiftRules: [HighlightRule] {
+        [
+            wordRule([
+                "associatedtype", "actor", "as", "async", "await", "break", "case", "catch", "class", "continue",
+                "default", "defer", "deinit", "do", "else", "enum", "extension", "false", "fileprivate", "for",
+                "func", "guard", "if", "import", "in", "init", "inout", "internal", "let", "nil", "nonisolated",
+                "open", "private", "protocol", "public", "repeat", "return", "static", "struct", "subscript",
+                "super", "switch", "throw", "throws", "true", "try", "typealias", "var", "where", "while"
+            ], color: .keyword),
+            rule(#"\b[A-Z][A-Za-z0-9_]*\b"#, color: .type),
+            rule(#"\bfunc\s+([A-Za-z_][A-Za-z0-9_]*)"#, color: .function, captureGroup: 1),
+            memberAccessRule,
+            numberRule,
+            quotedStringRule,
+            rule(#"^#(?:if|elseif|else|endif|available|warning|error)\b.*$"#, options: [.anchorsMatchLines], color: .meta),
+            slashCommentRule,
+        ]
+    }
+
+    private var shellRules: [HighlightRule] {
+        [
+            wordRule([
+                "case", "do", "done", "elif", "else", "esac", "exit", "export", "fi", "for", "function",
+                "if", "in", "local", "return", "source", "then", "while"
+            ], color: .keyword),
+            rule(#"\$[A-Za-z_][A-Za-z0-9_]*|\$\{[^}]+\}"#, color: .type),
+            quotedStringRule,
+            hashCommentRule,
+        ]
+    }
+
+    private var jsonRules: [HighlightRule] {
+        [
+            rule(#""(?:\\.|[^"\\])*"\s*:"# , color: .type),
+            quotedStringRule,
+            numberRule,
+            wordRule(["true", "false", "null"], color: .keyword),
+        ]
+    }
+
+    private var yamlRules: [HighlightRule] {
+        [
+            rule(#"^\s*[-?]?\s*[A-Za-z0-9_-]+\s*:"# , options: [.anchorsMatchLines], color: .type),
+            quotedStringRule,
+            numberRule,
+            wordRule(["true", "false", "null", "yes", "no", "on", "off"], color: .keyword),
+            hashCommentRule,
+        ]
+    }
+
+    private var markdownRules: [HighlightRule] {
+        [
+            rule(#"^#{1,6}\s.*$"#, options: [.anchorsMatchLines], color: .type),
+            rule(#"^```.*$"#, options: [.anchorsMatchLines], color: .keyword),
+            rule(#"`[^`]+`"#, color: .string),
+            rule(#"<!--[\s\S]*?-->"#, color: .comment),
+        ]
+    }
+
+    private var htmlRules: [HighlightRule] {
+        [
+            rule(#"</?\s*([A-Za-z_:][A-Za-z0-9:._-]*)\b"#, color: .type, captureGroup: 1),
+            rule(#"\b([A-Za-z_:][A-Za-z0-9:._-]*)(?=\s*=)"#, color: .member, captureGroup: 1),
+            quotedStringRule,
+            rule(#"<!DOCTYPE[^>]*>|<\?xml[\s\S]*?\?>"#, options: [.caseInsensitive], color: .meta),
+            rule(#"<!--[\s\S]*?-->"#, color: .comment),
+        ]
+    }
+
+    private var cssRules: [HighlightRule] {
+        [
+            rule(#"^\s*([^\{\n][^{}\n]*?)(?=\s*\{)"#, options: [.anchorsMatchLines], color: .type, captureGroup: 1),
+            rule(#"^\s*([A-Za-z_-][A-Za-z0-9_-]*)\s*:"#, options: [.anchorsMatchLines], color: .member, captureGroup: 1),
+            rule(#"@[A-Za-z_-][A-Za-z0-9_-]*"#, color: .meta),
+            rule(#"\b([A-Za-z_-][A-Za-z0-9_-]*)(?=\()"#, color: .function, captureGroup: 1),
+            rule(#"#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{4}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})\b"#, color: .number),
+            numberRule,
+            quotedStringRule,
+            rule(#"//.*$|/\*[\s\S]*?\*/"#, options: [.anchorsMatchLines], color: .comment),
+        ]
+    }
+
+    private var tomlRules: [HighlightRule] {
+        [
+            rule(#"^\s*\[\[?[^\]]+\]\]?\s*$"#, options: [.anchorsMatchLines], color: .meta),
+            rule(#"^\s*([A-Za-z0-9_.-]+)\s*="#, options: [.anchorsMatchLines], color: .type, captureGroup: 1),
+            quotedStringRule,
+            numberRule,
+            wordRule(["true", "false"], color: .keyword),
+            hashCommentRule,
+        ]
+    }
+
+    private var goRules: [HighlightRule] {
+        [
+            wordRule([
+                "break", "case", "chan", "const", "continue", "default", "defer", "else", "fallthrough",
+                "for", "func", "go", "goto", "if", "import", "interface", "package", "range", "return",
+                "select", "struct", "switch", "type", "var"
+            ], color: .keyword),
+            wordRule(["any", "bool", "byte", "complex64", "complex128", "error", "float32", "float64", "int", "int8", "int16", "int32", "int64", "rune", "string", "uint", "uint8", "uint16", "uint32", "uint64"], color: .type),
+            rule(#"\btype\s+([A-Z][A-Za-z0-9_]*)\b"#, color: .type, captureGroup: 1),
+            rule(#"\bfunc(?:\s*\([^)]*\))?\s+([A-Za-z_][A-Za-z0-9_]*)"#, color: .function, captureGroup: 1),
+            memberAccessRule,
+            numberRule,
+            quotedAndBacktickStringRule,
+            slashCommentRule,
+        ]
+    }
+
+    private var rubyRules: [HighlightRule] {
+        [
+            wordRule([
+                "BEGIN", "END", "alias", "and", "begin", "break", "case", "class", "def", "defined?",
+                "do", "else", "elsif", "end", "ensure", "false", "for", "if", "in", "module", "next",
+                "nil", "not", "or", "redo", "rescue", "retry", "return", "self", "super", "then",
+                "true", "undef", "unless", "until", "when", "while", "yield"
+            ], color: .keyword),
+            rule(#"\b(?:class|module)\s+([A-Z][A-Za-z0-9_:]*)"#, color: .type, captureGroup: 1),
+            rule(#"\bdef\s+(?:self\.)?([A-Za-z_][A-Za-z0-9_!?=]*)"#, color: .function, captureGroup: 1),
+            rule(#"(?:@@?[A-Za-z_][A-Za-z0-9_]*|@[A-Za-z_][A-Za-z0-9_]*|\$[A-Za-z_][A-Za-z0-9_]*)"#, color: .member),
+            rule(#":[A-Za-z_][A-Za-z0-9_!?=]*"#, color: .meta),
+            numberRule,
+            quotedStringRule,
+            hashCommentRule,
+        ]
+    }
+
+    private var pythonRules: [HighlightRule] {
+        [
+            wordRule([
+                "and", "as", "assert", "async", "await", "break", "case", "class", "continue", "def", "del",
+                "elif", "else", "except", "False", "finally", "for", "from", "global", "if", "import",
+                "in", "is", "lambda", "match", "None", "nonlocal", "not", "or", "pass", "raise", "return",
+                "True", "try", "while", "with", "yield"
+            ], color: .keyword),
+            rule(#"\bclass\s+([A-Z][A-Za-z0-9_]*)"#, color: .type, captureGroup: 1),
+            rule(#"\bdef\s+([A-Za-z_][A-Za-z0-9_]*)"#, color: .function, captureGroup: 1),
+            memberAccessRule,
+            annotationRule,
+            numberRule,
+            pythonStringRule,
+            hashCommentRule,
+        ]
+    }
+
+    private var elixirRules: [HighlightRule] {
+        [
+            wordRule([
+                "after", "case", "catch", "cond", "def", "defdelegate", "defexception", "defguard",
+                "defguardp", "defimpl", "defmacro", "defmacrop", "defmodule", "defoverridable", "defp",
+                "defprotocol", "defstruct", "do", "else", "end", "false", "fn", "for", "if", "import",
+                "in", "nil", "quote", "raise", "receive", "require", "rescue", "reraise", "super", "throw",
+                "true", "try", "unless", "unquote", "use", "when", "with"
+            ], color: .keyword),
+            rule(#"\bdefmodule\s+([A-Z][A-Za-z0-9_\.]*)"#, color: .type, captureGroup: 1),
+            rule(#"\b(?:def|defp|defmacro|defmacrop)\s+([A-Za-z_][A-Za-z0-9_!?]*)"#, color: .function, captureGroup: 1),
+            memberAccessRule,
+            elixirAtomRule,
+            numberRule,
+            quotedStringRule,
+            hashCommentRule,
+        ]
+    }
+
+    private var javaScriptRules: [HighlightRule] {
+        [
+            wordRule([
+                "async", "await", "break", "case", "catch", "class", "const", "continue", "debugger", "default",
+                "delete", "do", "else", "export", "extends", "false", "finally", "for", "function", "if",
+                "import", "in", "instanceof", "let", "new", "null", "of", "return", "super", "switch",
+                "this", "throw", "true", "try", "typeof", "var", "void", "while", "yield"
+            ], color: .keyword),
+            rule(#"\bclass\s+([A-Z][A-Za-z0-9_]*)"#, color: .type, captureGroup: 1),
+            rule(#"\b[A-Z][A-Za-z0-9_]*\b"#, color: .type),
+            rule(#"\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\b"#, color: .member, captureGroup: 1),
+            rule(#"\bfunction\s+([A-Za-z_$][A-Za-z0-9_$]*)"#, color: .function, captureGroup: 1),
+            rule(#"\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][A-Za-z0-9_$]*)\s*=>"#, color: .function, captureGroup: 1),
+            memberAccessRule,
+            numberRule,
+            quotedAndBacktickStringRule,
+            annotationRule,
+            slashCommentRule,
+        ]
+    }
+
+    private var typeScriptRules: [HighlightRule] {
+        [
+            wordRule([
+                "abstract", "any", "as", "async", "await", "bigint", "boolean", "break", "case", "catch",
+                "class", "const", "constructor", "continue", "declare", "default", "delete", "do", "else",
+                "enum", "export", "extends", "false", "finally", "for", "from", "function", "if", "implements",
+                "import", "in", "infer", "instanceof", "interface", "is", "keyof", "let", "module", "namespace",
+                "never", "new", "null", "number", "object", "override", "private", "protected", "public",
+                "readonly", "return", "satisfies", "static", "string", "super", "switch", "symbol", "this",
+                "throw", "true", "try", "type", "typeof", "undefined", "unknown", "var", "void", "while",
+                "yield"
+            ], color: .keyword),
+            rule(#"\b(?:class|interface|type|enum|namespace)\s+([A-Z][A-Za-z0-9_]*)"#, color: .type, captureGroup: 1),
+            rule(#"\b[A-Z][A-Za-z0-9_]*\b"#, color: .type),
+            rule(#"\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\b"#, color: .member, captureGroup: 1),
+            rule(#"\bfunction\s+([A-Za-z_$][A-Za-z0-9_$]*)"#, color: .function, captureGroup: 1),
+            rule(#"\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][A-Za-z0-9_$]*)\s*=>"#, color: .function, captureGroup: 1),
+            memberAccessRule,
+            numberRule,
+            quotedAndBacktickStringRule,
+            annotationRule,
+            slashCommentRule,
+        ]
+    }
+
+    private var phpRules: [HighlightRule] {
+        [
+            wordRule([
+                "abstract", "as", "break", "case", "catch", "class", "clone", "const", "continue", "declare",
+                "default", "do", "echo", "else", "elseif", "enum", "extends", "false", "final", "finally",
+                "fn", "for", "foreach", "function", "if", "implements", "include", "include_once", "instanceof",
+                "interface", "match", "namespace", "new", "null", "private", "protected", "public", "readonly",
+                "require", "require_once", "return", "static", "switch", "throw", "trait", "true", "try",
+                "use", "while"
+            ], color: .keyword),
+            rule(#"\b(?:class|interface|trait|enum)\s+([A-Z][A-Za-z0-9_]*)"#, color: .type, captureGroup: 1),
+            rule(#"\bfunction\s+([A-Za-z_][A-Za-z0-9_]*)"#, color: .function, captureGroup: 1),
+            rule(#"\$[A-Za-z_][A-Za-z0-9_]*"#, color: .member),
+            phpMemberAccessRule,
+            numberRule,
+            quotedStringRule,
+            rule(#"#\[[^\]]+\]|@[A-Za-z_\\][A-Za-z0-9_\\]*"#, color: .meta),
+            rule(#"//.*$|#.*$|/\*[\s\S]*?\*/"#, options: [.anchorsMatchLines], color: .comment),
+        ]
+    }
+
+    private var cRules: [HighlightRule] {
+        [
+            wordRule([
+                "auto", "break", "case", "const", "continue", "default", "do", "else", "enum", "extern",
+                "for", "goto", "if", "inline", "register", "restrict", "return", "sizeof", "static",
+                "struct", "switch", "typedef", "union", "volatile", "while"
+            ], color: .keyword),
+            wordRule(["bool", "char", "double", "FILE", "float", "int", "long", "short", "signed", "size_t", "ssize_t", "unsigned", "void"], color: .type),
+            rule(#"\b(?:struct|enum|union|typedef)\s+([A-Za-z_][A-Za-z0-9_]*)"#, color: .type, captureGroup: 1),
+            rule(#"^\s*(?:static\s+|inline\s+|extern\s+)?(?:[A-Za-z_][A-Za-z0-9_]*\s+)+([A-Za-z_][A-Za-z0-9_]*)\s*\("#, options: [.anchorsMatchLines], color: .function, captureGroup: 1),
+            memberAccessRule,
+            numberRule,
+            quotedStringRule,
+            cPreprocessorRule,
+            slashCommentRule,
+        ]
+    }
+
+    private var cppRules: [HighlightRule] {
+        [
+            wordRule([
+                "alignas", "alignof", "asm", "auto", "break", "case", "catch", "class", "const", "constexpr",
+                "consteval", "constinit", "continue", "co_await", "co_return", "co_yield", "decltype", "default",
+                "delete", "do", "else", "enum", "explicit", "export", "extern", "false", "final", "for",
+                "friend", "goto", "if", "inline", "mutable", "namespace", "new", "noexcept", "nullptr", "operator",
+                "override", "private", "protected", "public", "register", "return", "sizeof", "static", "struct",
+                "switch", "template", "this", "throw", "true", "try", "typedef", "typename", "union", "using",
+                "virtual", "volatile", "while"
+            ], color: .keyword),
+            wordRule(["bool", "char", "double", "float", "int", "long", "short", "signed", "size_t", "std", "string", "unsigned", "void"], color: .type),
+            rule(#"\b(?:class|struct|enum|namespace|typename)\s+([A-Z][A-Za-z0-9_]*)"#, color: .type, captureGroup: 1),
+            rule(#"^\s*(?:template\s*<[^>]+>\s*)?(?:(?:inline|virtual|static|constexpr|friend|explicit)\s+)*(?:[A-Za-z_][A-Za-z0-9_:<>\*&\s]+)\s+([A-Za-z_~][A-Za-z0-9_]*)\s*\("#, options: [.anchorsMatchLines], color: .function, captureGroup: 1),
+            memberAccessRule,
+            numberRule,
+            quotedStringRule,
+            cPreprocessorRule,
+            slashCommentRule,
+        ]
+    }
+
+    private var rustRules: [HighlightRule] {
+        [
+            wordRule([
+                "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
+                "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub",
+                "ref", "return", "self", "Self", "static", "struct", "super", "trait", "true", "type", "unsafe",
+                "use", "where", "while"
+            ], color: .keyword),
+            wordRule(["bool", "char", "f32", "f64", "i8", "i16", "i32", "i64", "i128", "isize", "str", "String", "u8", "u16", "u32", "u64", "u128", "usize"], color: .type),
+            rule(#"\b(?:struct|enum|trait|type|union|impl)\s+([A-Z][A-Za-z0-9_]*)"#, color: .type, captureGroup: 1),
+            rule(#"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)"#, color: .function, captureGroup: 1),
+            memberAccessRule,
+            numberRule,
+            quotedStringRule,
+            rustAttributeRule,
+            rule(#"\b([A-Za-z_][A-Za-z0-9_]*)!"#, color: .meta, captureGroup: 1),
+            slashCommentRule,
+        ]
+    }
+
+    private var zigRules: [HighlightRule] {
+        [
+            wordRule([
+                "addrspace", "align", "allowzero", "and", "anyframe", "asm", "async", "await", "break",
+                "catch", "comptime", "const", "continue", "defer", "else", "enum", "errdefer", "error", "export",
+                "extern", "false", "fn", "for", "if", "inline", "linksection", "noalias", "nosuspend", "null",
+                "opaque", "or", "orelse", "packed", "pub", "resume", "return", "struct", "suspend", "switch",
+                "test", "threadlocal", "true", "try", "union", "unreachable", "usingnamespace", "var", "volatile",
+                "while"
+            ], color: .keyword),
+            wordRule(["anytype", "bool", "f16", "f32", "f64", "f80", "f128", "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize", "void"], color: .type),
+            rule(#"\b(?:const|var)\s+([A-Z][A-Za-z0-9_]*)\b"#, color: .type, captureGroup: 1),
+            rule(#"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)"#, color: .function, captureGroup: 1),
+            memberAccessRule,
+            numberRule,
+            quotedStringRule,
+            rule(#"@[A-Za-z_][A-Za-z0-9_]*"#, color: .meta),
+            slashCommentRule,
+        ]
+    }
+
+    private var haskellRules: [HighlightRule] {
+        [
+            wordRule([
+                "case", "class", "data", "default", "deriving", "do", "else", "if", "import", "in", "infix",
+                "infixl", "infixr", "instance", "let", "module", "newtype", "of", "then", "type", "where"
+            ], color: .keyword),
+            rule(#"\b(?:data|newtype|type|class|instance)\s+([A-Z][A-Za-z0-9_']*)"#, color: .type, captureGroup: 1),
+            rule(#"\b[A-Z][A-Za-z0-9_']*\b"#, color: .type),
+            rule(#"^\s*(?!data\b|newtype\b|type\b|class\b|instance\b|module\b|import\b|if\b|then\b|else\b|case\b|let\b|in\b|where\b|do\b)([a-z][A-Za-z0-9_']*)\b(?:(?:\s+[A-Za-z_][A-Za-z0-9_']*)*\s*=|\s*::)"#, options: [.anchorsMatchLines], color: .function, captureGroup: 1),
+            numberRule,
+            quotedStringRule,
+            haskellPragmaRule,
+            haskellCommentRule,
+        ]
+    }
+
+    private var javaRules: [HighlightRule] {
+        [
+            wordRule([
+                "abstract", "assert", "break", "case", "catch", "class", "continue", "default", "do", "else",
+                "enum", "extends", "false", "final", "finally", "for", "if", "implements", "import", "instanceof",
+                "interface", "native", "new", "null", "package", "private", "protected", "public", "record",
+                "return", "sealed", "static", "super", "switch", "synchronized", "this", "throw", "throws",
+                "transient", "true", "try", "volatile", "while"
+            ], color: .keyword),
+            wordRule(["boolean", "byte", "char", "double", "float", "int", "Integer", "List", "long", "Map", "Object", "short", "String", "void"], color: .type),
+            rule(#"\b(?:class|interface|enum|record)\s+([A-Z][A-Za-z0-9_]*)"#, color: .type, captureGroup: 1),
+            rule(#"^\s*(?:(?:public|private|protected|static|final|abstract|synchronized|native|default|strictfp)\s+)*(?:[A-Za-z_][A-Za-z0-9_<>\[\]]*\s+)+([A-Za-z_][A-Za-z0-9_]*)\s*\("#, options: [.anchorsMatchLines], color: .function, captureGroup: 1),
+            memberAccessRule,
+            numberRule,
+            quotedStringRule,
+            annotationRule,
+            slashCommentRule,
+        ]
+    }
+
+    private var diffRules: [HighlightRule] {
+        [
+            rule(#"^\+(?!\+\+).*$"#, options: [.anchorsMatchLines], color: .addition),
+            rule(#"^-(?!--).*$"#, options: [.anchorsMatchLines], color: .deletion),
+            rule(#"^(?:diff --git .*|index [0-9A-Fa-f]+\.\.[0-9A-Fa-f]+.*|@@ .* @@.*|--- .*|\+\+\+ .*|new file mode .*|deleted file mode .*|similarity index .*|rename from .*|rename to .*|Binary files .*|old mode .*|new mode .*)$"#, options: [.anchorsMatchLines], color: .meta),
+        ]
+    }
+
+    private var dockerfileRules: [HighlightRule] {
+        [
+            rule(#"^\s*(FROM|RUN|CMD|LABEL|EXPOSE|ENV|ADD|COPY|ENTRYPOINT|VOLUME|USER|WORKDIR|ARG|ONBUILD|STOPSIGNAL|HEALTHCHECK|SHELL|MAINTAINER)\b"#, options: [.anchorsMatchLines, .caseInsensitive], color: .keyword, captureGroup: 1),
+            rule(#"\b(AS)\b"#, options: [.caseInsensitive], color: .keyword, captureGroup: 1),
+            rule(#"^\s*FROM\s+([^\s]+)"#, options: [.anchorsMatchLines, .caseInsensitive], color: .string, captureGroup: 1),
+            quotedStringRule,
+            numberRule,
+            rule(#"\$\{[^}]+\}|\$[A-Za-z_][A-Za-z0-9_]*"#, color: .member),
+            hashCommentRule,
+        ]
+    }
+
+    private var sqlRules: [HighlightRule] {
+        [
+            wordRule([
+                "add", "all", "alter", "and", "as", "asc", "between", "by", "case", "check", "constraint",
+                "create", "cross", "delete", "desc", "distinct", "drop", "else", "end", "exists", "false",
+                "foreign", "from", "full", "group", "having", "in", "index", "inner", "insert", "into", "is",
+                "join", "key", "left", "like", "limit", "not", "null", "offset", "on", "or", "order", "outer",
+                "primary", "recursive", "references", "returning", "right", "select", "set", "table", "then",
+                "true", "union", "unique", "update", "values", "view", "when", "where", "with"
+            ], options: [.caseInsensitive], color: .keyword),
+            wordRule([
+                "bigint", "blob", "boolean", "char", "date", "datetime", "decimal", "double", "float", "int",
+                "integer", "json", "jsonb", "numeric", "real", "serial", "smallint", "text", "timestamp",
+                "uuid", "varchar"
+            ], options: [.caseInsensitive], color: .type),
+            sqlQuotedIdentifierRule,
+            rule(#"\b([A-Za-z_][A-Za-z0-9_]*)\s*\("#, color: .function, captureGroup: 1),
+            numberRule,
+            sqlStringRule,
+            sqlCommentRule,
+        ]
+    }
+
+    private var kotlinRules: [HighlightRule] {
+        [
+            wordRule([
+                "as", "break", "by", "catch", "class", "companion", "const", "constructor", "continue", "data",
+                "do", "else", "enum", "false", "finally", "for", "fun", "if", "import", "in", "inline",
+                "interface", "internal", "is", "lateinit", "null", "object", "open", "operator", "out",
+                "override", "package", "private", "protected", "public", "return", "sealed", "super",
+                "suspend", "this", "throw", "true", "try", "typealias", "val", "var", "when", "where", "while"
+            ], color: .keyword),
+            wordRule(["Any", "Boolean", "Double", "Float", "Int", "List", "Long", "Map", "MutableList", "Nothing", "String", "Unit"], color: .type),
+            rule(#"\b(?:data\s+class|sealed\s+class|enum\s+class|class|interface|object)\s+([A-Z][A-Za-z0-9_]*)"#, color: .type, captureGroup: 1),
+            rule(#"\bfun\s+([A-Za-z_][A-Za-z0-9_]*)"#, color: .function, captureGroup: 1),
+            memberAccessRule,
+            numberRule,
+            quotedAndBacktickStringRule,
+            annotationRule,
+            slashCommentRule,
+        ]
+    }
+
+    private var cSharpRules: [HighlightRule] {
+        [
+            wordRule([
+                "abstract", "as", "async", "await", "base", "break", "case", "catch", "class", "const",
+                "continue", "default", "delegate", "do", "else", "enum", "event", "false", "finally", "fixed",
+                "for", "foreach", "get", "if", "in", "interface", "internal", "is", "lock", "namespace", "new",
+                "null", "override", "private", "protected", "public", "readonly", "record", "return", "sealed",
+                "set", "static", "struct", "switch", "this", "throw", "true", "try", "using", "var", "virtual",
+                "void", "while", "yield"
+            ], color: .keyword),
+            wordRule(["bool", "byte", "char", "decimal", "double", "float", "int", "long", "object", "short", "string", "String", "uint", "ulong"], color: .type),
+            rule(#"\b(?:class|interface|record|struct|enum)\s+([A-Z][A-Za-z0-9_]*)"#, color: .type, captureGroup: 1),
+            rule(#"^\s*(?:(?:public|private|protected|internal|static|virtual|override|sealed|async|readonly)\s+)*(?:[A-Za-z_][A-Za-z0-9_<>,\[\]\?]*\s+)+([A-Za-z_][A-Za-z0-9_]*)\s*\("#, options: [.anchorsMatchLines], color: .function, captureGroup: 1),
+            memberAccessRule,
+            numberRule,
+            cSharpStringRule,
+            rule(#"\[[A-Za-z_][A-Za-z0-9_]*(?:\([^\]]*\))?\]"#, color: .meta),
+            slashCommentRule,
+        ]
+    }
+
+    private var objectiveCRules: [HighlightRule] {
+        [
+            rule(#"@(?:autoreleasepool|catch|class|defs|dynamic|encode|end|finally|implementation|interface|optional|package|private|property|protocol|protected|public|required|selector|synthesize|throw|try)\b"#, color: .keyword),
+            wordRule([
+                "BOOL", "NO", "NULL", "YES", "break", "case", "continue", "do", "else", "for", "if", "nil",
+                "return", "self", "super", "switch", "while"
+            ], color: .keyword),
+            wordRule(["BOOL", "CGFloat", "NSInteger", "NSObject", "NSString", "NSUInteger", "id", "instancetype", "void"], color: .type),
+            rule(#"@(?:class|implementation|interface|protocol)\s+([A-Z][A-Za-z0-9_]*)"#, color: .type, captureGroup: 1),
+            rule(#"^[+-]\s*\([^)]*\)\s*([A-Za-z_][A-Za-z0-9_]*)"#, options: [.anchorsMatchLines], color: .function, captureGroup: 1),
+            memberAccessRule,
+            numberRule,
+            objectiveCStringRule,
+            objectiveCPreprocessorRule,
+            slashCommentRule,
+        ]
+    }
+
+    private var luaRules: [HighlightRule] {
+        [
+            wordRule([
+                "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if",
+                "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while"
+            ], color: .keyword),
+            rule(#"\bfunction\s+([A-Za-z_][A-Za-z0-9_\.]*)"#, color: .function, captureGroup: 1),
+            memberAccessRule,
+            numberRule,
+            luaStringRule,
+            luaCommentRule,
+        ]
+    }
+
+    private var makefileRules: [HighlightRule] {
+        [
+            rule(#"^\s*(include|sinclude|-include|ifdef|ifndef|ifeq|ifneq|else|endif|define|endef|export|unexport|override|private|vpath)\b"#, options: [.anchorsMatchLines], color: .keyword, captureGroup: 1),
+            rule(#"^([A-Za-z0-9_.%/\-]+)(?=\s*:)"#, options: [.anchorsMatchLines], color: .function, captureGroup: 1),
+            rule(#"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:[:+?]?=)"#, options: [.anchorsMatchLines], color: .type, captureGroup: 1),
+            rule(#"^\t[^\n]*$"#, options: [.anchorsMatchLines], color: .string),
+            rule(#"\$\([^)]+\)|\$\{[^}]+\}"#, color: .member),
+            numberRule,
+            quotedStringRule,
+            hashCommentRule,
+        ]
+    }
+
+    private var iniRules: [HighlightRule] {
+        [
+            rule(#"^\s*\[[^\]]+\]\s*$"#, options: [.anchorsMatchLines], color: .meta),
+            rule(#"^\s*([A-Za-z0-9_.-]+)\s*[=:]"#, options: [.anchorsMatchLines], color: .type, captureGroup: 1),
+            quotedStringRule,
+            numberRule,
+            wordRule(["false", "no", "off", "on", "true", "yes"], color: .keyword),
+            iniCommentRule,
+        ]
+    }
+
+    private var graphQLRules: [HighlightRule] {
+        [
+            wordRule([
+                "directive", "enum", "extend", "fragment", "implements", "input", "interface", "mutation",
+                "on", "query", "scalar", "schema", "subscription", "type", "union", "false", "null", "true"
+            ], color: .keyword),
+            rule(#"\b[A-Z][A-Za-z0-9_]*\b"#, color: .type),
+            rule(#"\b([A-Za-z_][A-Za-z0-9_]*)\s*(?=\()"#, color: .function, captureGroup: 1),
+            annotationRule,
+            numberRule,
+            graphQLStringRule,
+            hashCommentRule,
+        ]
+    }
+
+    private var hclRules: [HighlightRule] {
+        [
+            wordRule([
+                "data", "dynamic", "false", "for", "in", "locals", "module", "null", "output", "provider",
+                "resource", "terraform", "true", "variable"
+            ], color: .keyword),
+            rule(#"^\s*([A-Za-z_][A-Za-z0-9_-]*)\s*="#, options: [.anchorsMatchLines], color: .type, captureGroup: 1),
+            rule(#"\b([A-Za-z_][A-Za-z0-9_]*)\s*\("#, color: .function, captureGroup: 1),
+            memberAccessRule,
+            numberRule,
+            quotedStringRule,
+            rule(#"//.*$|#.*$|/\*[\s\S]*?\*/"#, options: [.anchorsMatchLines], color: .comment),
+        ]
+    }
+
+    private var protobufRules: [HighlightRule] {
+        [
+            wordRule([
+                "enum", "false", "import", "map", "message", "oneof", "option", "optional", "package",
+                "repeated", "reserved", "returns", "rpc", "service", "stream", "syntax", "true"
+            ], color: .keyword),
+            wordRule([
+                "bool", "bytes", "double", "fixed32", "fixed64", "float", "int32", "int64", "sfixed32",
+                "sfixed64", "sint32", "sint64", "string", "uint32", "uint64"
+            ], color: .type),
+            rule(#"\b(?:message|enum|service|oneof)\s+([A-Z][A-Za-z0-9_]*)"#, color: .type, captureGroup: 1),
+            rule(#"^\s*(?:optional|required|repeated)?\s*(?:[A-Za-z_][A-Za-z0-9_]*|map<[^>]+>)\s+([a-z_][A-Za-z0-9_]*)\s*="#, options: [.anchorsMatchLines], color: .member, captureGroup: 1),
+            numberRule,
+            quotedStringRule,
+            slashCommentRule,
+        ]
+    }
+}
