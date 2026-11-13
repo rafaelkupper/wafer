@@ -1,4 +1,5 @@
 import AppKit
+import JavaScriptCore
 import XCTest
 @testable import WaferApp
 @testable import WaferCore
@@ -708,6 +709,17 @@ final class WebKitReaderViewControllerTests: XCTestCase {
         XCTAssertTrue(script.contains("window.scrollTo"))
         XCTAssertTrue(script.contains("const offset = 28;"))
         XCTAssertFalse(script.contains("scrollIntoView"))
+    }
+
+    func testScrollToHeadingTreatsHostileIDsAsData() throws {
+        let ids = ["line\nbreak", "quote\"slash\\", "</script><script>throw 1</script>", "\u{2028}\u{2029}", "\"); throw new Error('injected'); //"]
+        for id in ids {
+            let context = try XCTUnwrap(JSContext())
+            context.evaluateScript("var received; var document = { getElementById: function(id) { received = id; return null; } };")
+            context.evaluateScript(WebKitReaderViewController.scrollToHeadingScript(for: id))
+            XCTAssertNil(context.exception, "ID: \(id)")
+            XCTAssertEqual(context.objectForKeyedSubscript("received")?.toString(), id)
+        }
     }
 
     func testHandleActivatedLinkForwardsExternalMarkdownAndOtherFileURLs() {
