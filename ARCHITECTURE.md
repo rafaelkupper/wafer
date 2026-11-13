@@ -19,7 +19,7 @@ Wafer is a SwiftPM-based macOS document viewer for Markdown files. The app is sp
 - `App/Resources/Wafer.icns`
 - the Swift executable from `.build/<configuration>/Wafer` (copied to `Contents/MacOS/Wafer` to match `CFBundleExecutable`)
 - the Quick Look extension executable from `.build/<configuration>/WaferQuickLook`
-- SwiftPM resource bundles required by `WaferCore` and `WaferApp`
+- exactly the SwiftPM resource bundles `Wafer_WaferCore.bundle` and `Wafer_WaferApp.bundle` (the appex gets only `Wafer_WaferCore.bundle`); a missing bundle fails assembly, and `scripts/verify-appex.sh` fails on any other bundle, so test-fixture bundles from the shared build directory never ship
 - `Sparkle.framework` from `.build/<configuration>`, copied whole into `Contents/Frameworks`
 
 The bundle identifier is `dev.wafer.app`, and the minimum macOS version is 14.0.
@@ -435,8 +435,8 @@ The app quits when its last window closes, and Sparkle's windows count. `AppDele
 
 Direct distribution outside the Mac App Store is handled by `scripts/package-release.sh`. The release path is:
 
-1. Run `swift test`.
-2. Build `build/Wafer.app` in release mode.
+1. Refuse a dirty source tree (`scripts/check-source.py`), then run `scripts/check.sh`, the same Swift, Python, Node and vendored-asset checksum checks CI runs.
+2. Build `build/Wafer.app` in release mode with build paths remapped, keep matching dSYMs, and strip the shipping executables before signing.
 3. Sign Sparkle's helpers and framework inside out with a `Developer ID Application` identity, hardened runtime, and secure timestamp, never with `--deep`. Then sign `Contents/PlugIns/WaferQuickLook.appex` the same way with `App/QuickLook.entitlements`.
 4. Verify the appex layout, bundled WaferCore resources, signature, sandbox entitlement, and absence of preview network entitlement with `scripts/verify-appex.sh`.
 5. Sign the containing app with the same Developer ID identity, hardened runtime, and secure timestamp.
