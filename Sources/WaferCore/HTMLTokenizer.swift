@@ -357,4 +357,3 @@ struct HTMLSourceSetCandidate {
     let source: String
     let descriptor: String?
 }
-

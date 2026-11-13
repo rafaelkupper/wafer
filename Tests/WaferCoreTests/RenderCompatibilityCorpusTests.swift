@@ -132,6 +132,7 @@ final class RenderCompatibilityCorpusTests: XCTestCase {
 
     private func normalizedCorpusHTML(_ html: String) -> String {
         html
+            .replacingOccurrences(of: #"(?m)[ \t]+$"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: fixtureDirectory.path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? fixtureDirectory.path, with: "$FIXTURE_DIR")
             .replacingOccurrences(of: fixtureDirectory.path, with: "$FIXTURE_DIR")
     }

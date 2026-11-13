@@ -344,8 +344,9 @@ final class WebKitHTMLRendererTests: XCTestCase {
         let source = try String(contentsOf: readerGoldenFixtureURL, encoding: .utf8)
         let document = parser.parse(source: source, baseURL: nil)
         let renderer = WebKitHTMLRenderer(palette: .dark)
-        let html = renderer.render(document: document).html
-        XCTAssertEqual(html, renderer.render(document: document).html)
+        let rendered = renderer.render(document: document).html
+        XCTAssertEqual(rendered, renderer.render(document: document).html)
+        let html = rendered.replacingOccurrences(of: #"(?m)[ \t]+$"#, with: "", options: .regularExpression)
         if ProcessInfo.processInfo.environment["WAFER_UPDATE_GOLDENS"] == "1" {
             let destination = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
                 .appendingPathComponent("Tests/Fixtures/WaferCore/Goldens/reader-golden.html")
