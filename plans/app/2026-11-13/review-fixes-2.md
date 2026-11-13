@@ -91,16 +91,35 @@ Owns `WebKitReaderViewController.swift`, `DocumentWindowController.swift`, `Docu
 
 ## Done when
 
-- [ ] Each finding is fixed, or its proportionate resolution is recorded under Decisions.
-- [ ] `swift test` passes five consecutive runs, and tests write nothing to the real scroll-state domain.
-- [ ] Python release tests, Node tests, `scripts/build-app.sh release` and `scripts/verify-appex.sh build/Wafer.app` pass.
-- [ ] The built app contains only the expected resource bundles.
+- [x] Each finding is fixed, or its proportionate resolution is recorded under Decisions.
+- [x] `swift test` passes five consecutive runs, and tests write nothing to the real scroll-state domain.
+- [x] Python release tests, Node tests, `scripts/build-app.sh release` and `scripts/verify-appex.sh build/Wafer.app` pass.
+- [x] The built app contains only the expected resource bundles.
 - [ ] Astra, Fable and Muse (xhigh) re-run the scored assessment on the integrated result.
 
 ## Decisions
 
-- Remote images: keep the existing File > Load Remote Images toggle (default on). The fix is loader hardening only.
+- Remote images: keep the existing File > Load Remote Images toggle (default on). The fix is loader hardening only (`RemoteAssetURLGuard`). Residual DNS-rebind race between resolve and connect is documented in ARCHITECTURE.md.
+- Sandbox: deferred to the user; not a runtime option.
+- R8: warnings are errors for production targets only. Three existing test-target warnings are listed in `docs/DEVELOPMENT.md`.
+- R10: tools version 6.2. `unsafeFlags` stay on the two executable targets; SwiftPM allows them in the root package and WaferCore has none.
+- R11: performance tests stay opt-in (`scripts/check.sh --perf`); hosted runners are too noisy for timing assertions.
+- K1: no fallback to a literal percent-encoded filename; a literal `%` must be written `%25`.
+- K4: post-scan footprint for 2,000 x 20 KB files went from 359.8 MiB to 137.1 MiB (median of 5); all-match query 814.9 ms to 651.3 ms.
+- D5, K8, W6: `MarkdownReaderDocument` 1,143 to 1,052 lines (`MarkdownSourceLoader`); `WebKitHTMLRenderer` 1,274 to 1,087 (`WebKitRendererScripts`, `WebKitAssets`); `DocumentWindowController.swift` 1,368 to 636 (integrator moved `DocumentChromeViewController` to its own file, because W's routing target lived in a D-owned file).
+- L2: the last two stringly reads of library-change payloads were migrated to `LibraryChange.value(from:)` at integration.
+- Resource lookup: WaferCore exposes `BundledResources.resourceURL(named:bundleName:)`. `ReaderScriptResource` and `ThemeLibrary` keep small app-local lookups with injected-bundle tests; all three log faults and degrade instead of trapping.
+- `escapedJavaScriptString` removed as dead code after W1.
+- Scroll-state entries written by earlier test runs remain in the user's `dev.wafer.scroll-state` domain; they are not deleted because the domain also holds real reading positions. Entries expire after 180 days.
 
 ## Verification
 
-(Filled in after integration.)
+Integration branch `review-fixes-integration`, 2026-11-13, after merging L, R, W, D and K:
+
+- `swift test`: passed five consecutive runs; each 671 tests (257 core, 407 app with 1 opt-in perf test skipped, 7 Quick Look), 0 failures, no Auto Layout conflict warnings.
+- Real `dev.wafer.scroll-state` key count: 2,633 before and after each of the five runs.
+- `scripts/check.sh`: passed (Swift tests, 40 Python release tests, Node tests, 25 vendored asset checksums).
+- `scripts/build-app.sh release` and `scripts/verify-appex.sh build/Wafer.app`: passed. Bundles: `Contents/Resources/Wafer_WaferApp.bundle`, `Contents/Resources/Wafer_WaferCore.bundle`, appex `Wafer_WaferCore.bundle`. dSYMs: `build/Wafer.dSYM`, `build/WaferQuickLook.dSYM`.
+- Shipped executable: 0 `ForTesting` symbols, 0 checkout paths.
+- Stream regressions verified failing before their fixes: L1, D1, D3, D4, W1, W4, W5, K2.
+- Not run: hosted CI, notarization, publication, installed Finder Quick Look smoke test.
