@@ -114,9 +114,7 @@ final class AnchorLinkEndToEndTests: XCTestCase {
         click(linkAt: 0, reaches: "the-end", in: reader)
 
         let hrefs = evaluate("Array.from(document.querySelectorAll('#write a[href]')).map(a => a.getAttribute('href')).join(' ')", in: reader) as? String ?? ""
-        if hrefs.contains("%25") {
-            XCTExpectFailure("WaferCore percent-encodes fragment hrefs twice (\(hrefs)); this passes once the renderer fix is integrated")
-        }
+        XCTAssertFalse(hrefs.contains("%25"), "fragment hrefs must be percent-encoded exactly once: \(hrefs)")
         click(linkAt: 1, reaches: "café", in: reader)
         click(linkAt: 2, reaches: "日本語", in: reader)
     }

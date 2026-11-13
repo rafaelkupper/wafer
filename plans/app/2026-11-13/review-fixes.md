@@ -92,7 +92,7 @@ Review threads: Astra, Fable, and Muse (xhigh) delegated reviews, 2026-11-13. Th
 - [ ] `swift test` passes five consecutive runs.
 - [ ] `python3 -m unittest discover -s Tests/ReleaseTools -v` passes.
 - [ ] `scripts/build-app.sh release` and `scripts/verify-appex.sh build/Wafer.app` pass.
-- [ ] A fresh-context reviewer finds no remaining unresolved finding.
+- [ ] The three original reviewers (Codex Company gpt-6-astra xhigh, Claude One claude-fable-5-2 xhigh, Muse muse-wonder-full-1.0 xhigh) re-run the same scored assessment on the integrated result (requested 2026-11-13).
 
 ## Decisions
 

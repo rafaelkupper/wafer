@@ -16,8 +16,8 @@ struct LinkTargetOpener {
         case cancel
     }
 
-    /// The external schemes links may open.
-    nonisolated static let allowedExternalSchemes: Set<String> = ["http", "https", "mailto"]
+    /// The external schemes links may open; the same policy the renderer applies.
+    nonisolated static let allowedExternalSchemes = LinkURLPolicy.externalSchemes
 
     var openURL: @MainActor (URL) -> Void = { NSWorkspace.shared.open($0) }
     var revealInFinder: @MainActor (URL) -> Void = { NSWorkspace.shared.activateFileViewerSelecting([$0]) }
