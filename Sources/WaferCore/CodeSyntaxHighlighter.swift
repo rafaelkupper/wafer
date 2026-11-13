@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 struct CodeSyntaxHighlighter {
     private static let regexCache = RegexCache()
@@ -41,25 +42,17 @@ struct CodeSyntaxHighlighter {
         let captureGroup: Int?
     }
 
-    private final class RegexCache: @unchecked Sendable {
-        private var storage: [String: NSRegularExpression] = [:]
-        private let lock = NSLock()
+    private final class RegexCache: Sendable {
+        private let storage = OSAllocatedUnfairLock(initialState: [String: NSRegularExpression]())
 
         func regex(pattern: String, options: NSRegularExpression.Options) -> NSRegularExpression? {
             let key = "\(options.rawValue)|\(pattern)"
-            lock.lock()
-            defer { lock.unlock() }
-
-            if let cached = storage[key] {
-                return cached
+            return storage.withLock { storage in
+                if let cached = storage[key] { return cached }
+                guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { return nil }
+                storage[key] = regex
+                return regex
             }
-
-            guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else {
-                return nil
-            }
-
-            storage[key] = regex
-            return regex
         }
     }
 
