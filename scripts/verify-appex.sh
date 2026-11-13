@@ -32,6 +32,18 @@ require_plist_value() {
 }
 
 [[ -d "$APP_BUNDLE" ]] || fail "app bundle not found: $APP_BUNDLE"
+expected_bundles=(
+  Contents/Resources/Wafer_WaferCore.bundle
+  Contents/Resources/Wafer_WaferApp.bundle
+  Contents/PlugIns/WaferQuickLook.appex/Contents/Resources/Wafer_WaferCore.bundle
+)
+for bundle in "${expected_bundles[@]}"; do
+  [[ -d "$APP_BUNDLE/$bundle" ]] || fail "missing required resource bundle: $bundle"
+done
+while IFS= read -r -d '' bundle; do
+  relative=${bundle#"$APP_BUNDLE/"}
+  (( ${expected_bundles[(Ie)$relative]} )) || fail "unexpected resource bundle: $relative"
+done < <(find "$APP_BUNDLE" -name '*.bundle' -print0)
 [[ -d "$QUICKLOOK_APPEX" ]] || fail "Quick Look extension bundle not found: $QUICKLOOK_APPEX"
 [[ -f "$INFO_PLIST" ]] || fail "Quick Look Info.plist not found: $INFO_PLIST"
 [[ -x "$EXECUTABLE" ]] || fail "Quick Look executable not found or not executable: $EXECUTABLE"

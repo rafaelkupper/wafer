@@ -10,7 +10,7 @@ The app manifest carries the project's update feed and public key, so a local bu
 
 ## Build
 
-Use Xcode 26.3 or a Swift 6.2 or newer toolchain. Although Wafer declares Swift tools 6.0, the pinned swift-markdown dependency requires Swift tools 6.2.
+Use Xcode 26.3 or a Swift 6.2 or newer toolchain. Both Wafer and the pinned swift-markdown dependency require Swift tools 6.2.
 
 Build a local unsigned app bundle:
 
@@ -24,20 +24,24 @@ Because this open-source path is unsigned, macOS may require the usual manual ap
 
 Local builds register with neither LaunchServices nor pluginkit by default. To register the build-directory app and Quick Look extension for local testing, run `WAFER_REGISTER_APP=1 scripts/build-app.sh release`. Registration can affect Finder previews on this Mac.
 
-The build fails if either resource bundle or a required reader asset is missing. The app retains Mermaid and KaTeX. The Quick Look extension keeps reader CSS, emoji data, and its license; its native text preview runs no scripts.
+The build copies only `Wafer_WaferCore.bundle` and `Wafer_WaferApp.bundle` into the app, plus a scriptless `Wafer_WaferCore.bundle` inside the Quick Look extension. It fails if either bundle or a required reader asset is missing. `verify-appex.sh` rejects any extra `.bundle`, including stale test bundles. The app retains Mermaid and KaTeX. The Quick Look extension keeps reader CSS, emoji data, and its license; its native text preview runs no scripts.
 
-Run the logic tests with `swift test` and the release-configuration tests with `python3 -m unittest discover -s Tests/ReleaseTools -v`. The release-tool tests use disposable app products and stub external signing, notarization, Git, and GitHub commands. They publish nothing.
+Run the same checks as CI with `scripts/check.sh`. It verifies the vendored asset checksums, runs Swift tests, runs Python release tests, then runs every `Tests/JavaScript/*/*.cjs` test. Swift compiler warnings are errors for WaferCore, WaferApp, and WaferQuickLook; dependencies and test targets keep their own warning policies.
+
+The current Swift 6.4.2 test build reports three existing warnings outside those production targets: `ReaderThemeCurrentTests.swift:12` calls an actor-isolated reset from a nonisolated context, `DirectoryChangeMonitorTests.swift:39` never mutates a weak variable, and `WikiLinkAppIntegrationTests.swift:144` mutates a value after capture by a Sendable closure.
+
+Run the logic tests separately with `swift test` and the release-configuration tests with `python3 -m unittest discover -s Tests/ReleaseTools -v`. The release-tool tests use disposable app products and stub external signing, notarization, Git, and GitHub commands. They publish nothing.
 
 Run the JavaScript tests with `for test in Tests/JavaScript/*/*.cjs; do node "$test"; done`. They execute the bundled reader and renderer scripts against a controlled DOM.
 
 Test switches:
 
-- `WAFER_PERF_TESTS=1 swift test` also runs the wall-clock performance assertions (for example `EditSavePerformanceTests`), which are skipped by default because they depend on machine load.
+- `scripts/check.sh --perf` or `WAFER_PERF_TESTS=1 scripts/check.sh` also runs the wall-clock performance assertions (for example `EditSavePerformanceTests`), which are skipped by default because they depend on machine load.
 - `WAFER_UPDATE_GOLDENS=1 swift test --filter RenderCompatibilityCorpusTests` rewrites the golden HTML files under `Tests/Fixtures/WaferCore/Goldens`. Review the diff before committing.
 
 Runtime failures that are handled without user interaction are written to unified logging. Watch them with `log stream --predicate 'subsystem == "dev.wafer.app"'`.
 
-[CI](../.github/workflows/ci.yml) runs the Swift, Python, and JavaScript tests, builds the app, and verifies the Quick Look extension on macOS 15 with Xcode 26.3. Its Swift toolchain satisfies both the package's Swift 6.0 minimum and swift-markdown's Swift 6.2 requirement, and the app retains its macOS 14 deployment target. The runner's available toolchains are listed in the [GitHub runner image manifest](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md).
+[CI](../.github/workflows/ci.yml) calls `scripts/check.sh`, builds the app, and verifies the Quick Look extension on macOS 15 with Xcode 26.3. Performance assertions remain opt-in because hosted runners have variable load. Both packages require Swift 6.2, and the app retains its macOS 14 deployment target. The runner's available toolchains are listed in the [GitHub runner image manifest](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md).
 
 ## Development Files
 
@@ -45,14 +49,41 @@ Keep `Sources`, `Tests`, `App`, `Package.swift`, `Package.resolved`, and `script
 
 Icon artwork lives in `App/Resources`: `Wafer-source.png` is the original master, `Wafer.iconset` contains the editable sizes, and `Wafer.icns` is the shipping icon. Keep the iconset because its smallest sizes do not round-trip exactly through `iconutil`.
 
-`swift package clean` removes compiled output while retaining downloaded dependencies. The next build recompiles the app. Compiler caches and old release backups can be discarded. Keep the latest signed `build/Wafer.app`, final ZIP and checksum in `dist`, and their release receipt, source hashes, packaging output, and notarization response. Keep `dist/updates`, which holds the reviewed artifacts of each published update; [UPDATES.md](UPDATES.md) describes that flow. Superseded tracked plans remain available in Git history.
+`swift package clean` removes compiled output while retaining downloaded dependencies. The next build recompiles the app. Compiler caches and old release backups can be discarded. Keep the latest signed `build/Wafer.app`, its matching `build/Wafer.dSYM` and `build/WaferQuickLook.dSYM`, final ZIP and checksum in `dist`, and their release receipt, source hashes, packaging output, and notarization response. Keep `dist/updates`, which holds the reviewed artifacts of each published update; [UPDATES.md](UPDATES.md) describes that flow. Superseded tracked plans remain available in Git history.
 
-## Release Confidence Checks
+## Release packaging
+
+Commit or stash tracked changes before running `scripts/package-release.sh` or preparing an update with `scripts/release.py`. Packaging rejects staged and unstaged changes anywhere in the repository, plus untracked files under `Sources`, `Resources`, and `App`, including ignored files. It checks again after packaging; update preparation also checks before recording its receipt. There is no dirty-tree override. Ordinary local `build-app.sh` builds still accept edits.
+
+Release builds generate `build/Wafer.dSYM` and `build/WaferQuickLook.dSYM`, then strip local and debug symbols from both shipping executables before signing. Swift debug and file paths and C debug paths map the checkout to `/wafer`. The dSYM tool maps object paths back to the checkout while gathering symbols. Keep the dSYMs with the exact binaries they describe; UUIDs must match. Packaging copies both symbol bundles beside the final ZIP in `dist`, or in the directory selected by `WAFER_DIST_DIR`. They are not inside the downloadable app ZIP.
+
+`scripts/package-release.sh` runs `scripts/check.sh` before the release build. `WAFER_SKIP_TESTS=1` bypasses these checks only for deliberate local packaging. `WAFER_SKIP_NOTARIZATION=1` skips submission and stapling. These switches do not bypass the clean-tree requirement.
+
+Notarization accepts only `WAFER_NOTARY_PROFILE`, passed as `--keychain-profile`. Store credentials interactively so passwords never appear in command arguments:
+
+```sh
+xcrun notarytool store-credentials VibeMD
+WAFER_NOTARY_PROFILE=VibeMD scripts/package-release.sh
+```
+
+The older Apple ID/password and API-key environment-variable fallbacks are no longer supported. For reviewed updates, follow [the update guide](UPDATES.md). Publication validates the receipt, archive, feed, existing release and tag before creating or uploading a release. A tag without a release must still resolve to the reviewed commit. Feed transport failures report the URL and underlying error.
+
+## Vendored assets
+
+[vendored-assets.json](vendored-assets.json) records the upstream version, source URL and SHA-256 of every shipped Mermaid and KaTeX file, including licenses and WOFF2 fonts. The pinned npm archives were used to verify provenance. KaTeX CSS removes only WOFF and TTF URLs; its manifest entry records the upstream hash and modification. No runtime assets changed in this release-tooling update.
+
+Run `python3 scripts/verify-vendored-assets.py` to check the inventory and checksums offline. `scripts/check.sh` also runs it. When updating a vendor, compare against the pinned upstream archive, record any transformations, update the manifest, and run the checks again.
+
+## SwiftPM flags
+
+`WaferCore` has no unsafe flags. The existing unsafe flags belong to the executable targets: WaferApp's Sparkle rpath and WaferQuickLook's application-extension and `_NSExtensionMain` flags. SwiftPM allows them when building this root package. The restriction applies to products containing unsafe flags when consumed as dependencies by another package, so no change is needed for Wafer's app build or the clean WaferCore library product. Warning enforcement uses Swift 6.2's safe `treatAllWarnings(as: .error)` setting.
+
+## Release confidence checks
 
 Before treating a local build as release-ready on one Mac, run:
 
 ```sh
-swift test
+scripts/check.sh
 scripts/build-app.sh release
 scripts/verify-appex.sh build/Wafer.app
 test -d build/Wafer.app

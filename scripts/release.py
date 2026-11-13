@@ -60,6 +60,8 @@ def live_feed(feed):
             return response.read()
     except urllib.error.HTTPError as error:
         raise SystemExit(f"The live feed answered {error.code}: {feed}")
+    except urllib.error.URLError as error:
+        raise SystemExit(f"Cannot fetch the live feed {feed}: {error.reason}")
 
 
 def feed_build(data):
@@ -167,13 +169,16 @@ def publish(review, version, build, public_key, feed, current_feed, repository):
         if existing.returncode:
             if "release not found" not in existing.stderr.lower():
                 raise SystemExit(f"Cannot inspect existing release: {existing.stderr.strip()}")
-            run("gh", "release", "create", tag, archive, "--repo", repository,
-                "--target", receipt["sourceCommit"], "--title", f"{APP} {version}", "--notes", f"{APP} {version}")
         else:
             state = json.loads(existing.stdout)
             if state["isDraft"]:
                 raise SystemExit("Existing release is a draft")
-        if output_of("gh", "api", f"repos/{repository}/commits/{tag}", "--jq", ".sha").strip() != receipt["sourceCommit"]:
+        tag_commit = subprocess.run(["gh", "api", f"repos/{repository}/commits/{tag}", "--jq", ".sha"],
+                                    capture_output=True, text=True)
+        if tag_commit.returncode:
+            if not existing.returncode or "HTTP 404" not in tag_commit.stderr:
+                raise SystemExit(f"Cannot inspect release tag: {tag_commit.stderr.strip()}")
+        elif tag_commit.stdout.strip() != receipt["sourceCommit"]:
             raise SystemExit("Release tag does not match source commit")
         if not existing.returncode:
             if any(asset["name"] == archive.name for asset in state["assets"]):
@@ -182,7 +187,12 @@ def publish(review, version, build, public_key, feed, current_feed, repository):
                     "--pattern", archive.name, "--output", downloaded)
                 if sha256(downloaded) != receipt["sha256"][archive.name]:
                     raise SystemExit("Existing release archive does not match reviewed artifact")
-            else:
+        # All artifact, feed, release, and existing-tag checks precede mutation.
+        if existing.returncode:
+            run("gh", "release", "create", tag, archive, "--repo", repository,
+                "--target", receipt["sourceCommit"], "--title", f"{APP} {version}", "--notes", f"{APP} {version}")
+        else:
+            if not any(asset["name"] == archive.name for asset in state["assets"]):
                 run("gh", "release", "upload", tag, archive, "--repo", repository)
         if remote_feed != desired_feed:
             shutil.copy2(review / "appcast.xml", checkout / "appcast.xml")
@@ -192,6 +202,7 @@ def publish(review, version, build, public_key, feed, current_feed, repository):
 
 
 def prepare(output, version, build, public_key, feed, current_feed, tools, repository):
+    run("python3", ROOT / "scripts/check-source.py")
     if output.exists():
         raise SystemExit(f"Output directory already exists: {output}")
     commit = source_commit()
@@ -207,6 +218,7 @@ def prepare(output, version, build, public_key, feed, current_feed, tools, repos
     (output / "appcast.xml").write_bytes(current_feed)
     run(tools / "generate_appcast", "--maximum-deltas", "0", "--download-url-prefix", f"https://github.com/{repository}/releases/download/v{version}/", output)
     verify_update(final, output / "appcast.xml", public_key)
+    run("python3", ROOT / "scripts/check-source.py")
     if source_commit() != commit:
         raise SystemExit("Source commit changed during preparation; prepare again")
     receipt = dict(version=version, build=build, zip=final.name, publicKey=public_key,

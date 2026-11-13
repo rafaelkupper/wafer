@@ -3,6 +3,7 @@ import plistlib
 from pathlib import Path
 import tempfile
 import unittest
+import urllib.error
 from unittest.mock import patch
 
 
@@ -13,6 +14,17 @@ spec.loader.exec_module(release)
 
 
 class ReleaseConfigurationTests(unittest.TestCase):
+    def test_feed_transport_failure_has_a_clear_error(self):
+        with patch.object(release.urllib.request, 'urlopen', side_effect=urllib.error.URLError('DNS unavailable')):
+            with self.assertRaisesRegex(SystemExit, 'Cannot fetch the live feed https://example.org/feed: DNS unavailable'):
+                release.live_feed('https://example.org/feed')
+
+    def test_feed_http_failure_keeps_the_status_code(self):
+        error = urllib.error.HTTPError('https://example.org/feed', 503, 'unavailable', None, None)
+        with patch.object(release.urllib.request, 'urlopen', side_effect=error):
+            with self.assertRaisesRegex(SystemExit, 'live feed answered 503'):
+                release.live_feed('https://example.org/feed')
+
     def test_unconfigured_checkout_stops_before_network_or_packaging(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

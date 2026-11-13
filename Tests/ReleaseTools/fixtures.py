@@ -1,4 +1,5 @@
 """Disposable app products and external-command stubs for release script tests."""
+import hashlib
 import json
 import os
 import plistlib
@@ -42,6 +43,8 @@ if command == 'codesign':
     elif '-dv' in args:
         print('Authority=' + os.environ.get('SIGNING_IDENTITY', 'Developer ID Application: Fixture Publisher (FIXTURE)'))
         print('TeamIdentifier=FIXTURE\nTimestamp=fixture\nflags=runtime')
+elif command == 'swift' and args == ['test']:
+    (root / 'perf-test-mode.txt').write_text(os.environ.get('WAFER_PERF_TESTS', '0'))
 elif command == 'ditto':
     if '-c' in args:
         app, archive = map(Path, args[-2:])
@@ -55,7 +58,11 @@ elif command == 'ditto':
             for info in z.infolist():
                 (Path(args[-1]) / info.filename).chmod(info.external_attr >> 16)
 elif command == 'xcrun':
-    if args[:2] == ['notarytool', 'submit']:
+    if args[0] == 'dsymutil':
+        symbols = Path(args[args.index('-o') + 1]) / 'Contents/Resources/DWARF'
+        symbols.mkdir(parents=True, exist_ok=True)
+        (symbols / Path(args[1]).name).write_text('fixture symbols')
+    elif args[:2] == ['notarytool', 'submit']:
         print(json.dumps({'id': 'fixture-submission', 'status': os.environ.get('NOTARY_STATUS', 'Accepted')}))
     elif args[:2] == ['notarytool', 'log']:
         Path(args[-1]).write_text('{}')
@@ -71,6 +78,8 @@ elif command == 'git':
     fail = os.environ.get('FAIL_COMMAND') == 'git ' + operation
     if operation == 'rev-parse':
         print(os.environ.get('SOURCE_COMMIT', 'a' * 40))
+    elif operation == 'status':
+        print(os.environ.get('SOURCE_STATUS', ''), end='')
     elif operation == 'push':
         if os.environ.get('PUSH_APPLIED') or not fail:
             state['feed'] = (Path(args[1]) / 'appcast.xml').read_text()
@@ -99,7 +108,13 @@ elif command == 'gh':
         name = args[args.index('--pattern') + 1]
         Path(args[args.index('--output') + 1]).write_bytes(bytes.fromhex(state['release']['assets'][name]))
     elif args[0] == 'api':
-        print(state['release']['commit'])
+        if fail:
+            sys.exit('fixture API failure')
+        commit = state.get('tag') or (state['release']['commit'] if state.get('release') else None)
+        if not commit:
+            print('gh: Not Found (HTTP 404)', file=sys.stderr)
+            sys.exit(1)
+        print(commit)
     else:
         sys.exit('unexpected gh invocation: ' + repr(args))
 if fail:
@@ -112,7 +127,8 @@ class Fixture:
         self.temporary = tempfile.TemporaryDirectory(prefix='wafer-release-test-')
         self.root = Path(self.temporary.name).resolve()
         (self.root / 'scripts').mkdir()
-        for name in ('build-app.sh', 'verify-appex.sh', 'package-release.sh', 'release.py', 'verify-update.swift'):
+        for name in ('build-app.sh', 'verify-appex.sh', 'package-release.sh', 'release.py', 'verify-update.swift',
+                     'check.sh', 'check-source.py', 'verify-vendored-assets.py'):
             shutil.copy2(ROOT / 'scripts' / name, self.root / 'scripts' / name)
         shutil.copytree(ROOT / 'App', self.root / 'App')
         version = {'CFBundleShortVersionString': '1.0.0', 'CFBundleVersion': '2'}
@@ -132,9 +148,21 @@ class Fixture:
         (self.products / 'Sparkle.framework/Versions/B').mkdir(parents=True)
         (self.products / 'Sparkle.framework/Versions/B/Sparkle').write_text('fixture')
         self.resources = self.make_resources(nested=True)
+        (self.root / 'Tests/ReleaseTools').mkdir(parents=True)
+        (self.root / 'Tests/JavaScript/app').mkdir(parents=True)
+        (self.root / 'Tests/JavaScript/app/fixture.cjs').write_text('// fixture')
+        (self.root / 'docs').mkdir()
+        assets = []
+        for name in ('mermaid.min.js', 'mermaid-LICENSE.txt', 'katex/katex.min.js'):
+            path = Path('Sources/WaferCore/Resources') / name
+            (self.root / path).parent.mkdir(parents=True, exist_ok=True)
+            (self.root / path).write_text('fixture')
+            assets.append(dict(path=str(path), version='fixture', url='https://example.org/' + name,
+                               sha256=hashlib.sha256(b'fixture').hexdigest()))
+        (self.root / 'docs/vendored-assets.json').write_text(json.dumps(dict(assets=assets)))
         bindir = self.root / 'bin'
         bindir.mkdir()
-        for name in ('swift', 'codesign', 'ditto', 'xcrun', 'security', 'spctl', 'pluginkit', 'lsregister', 'gh', 'git', 'generate_appcast', 'otool'):
+        for name in ('swift', 'codesign', 'ditto', 'xcrun', 'security', 'spctl', 'pluginkit', 'lsregister', 'gh', 'git', 'generate_appcast', 'otool', 'strip', 'node'):
             path = bindir / name
             path.write_text('#!' + sys.executable + '\n' + STUB)
             path.chmod(0o755)

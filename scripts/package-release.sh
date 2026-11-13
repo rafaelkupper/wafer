@@ -54,40 +54,6 @@ detect_sign_identity() {
   esac
 }
 
-notary_credentials_args() {
-  if [[ -n "$NOTARY_PROFILE" ]]; then
-    print -r -- "--keychain-profile"
-    print -r -- "$NOTARY_PROFILE"
-    return
-  fi
-
-  if [[ -n "${WAFER_NOTARY_KEY:-}" && -n "${WAFER_NOTARY_KEY_ID:-}" ]]; then
-    print -r -- "--key"
-    print -r -- "$WAFER_NOTARY_KEY"
-    print -r -- "--key-id"
-    print -r -- "$WAFER_NOTARY_KEY_ID"
-
-    if [[ -n "${WAFER_NOTARY_ISSUER:-}" ]]; then
-      print -r -- "--issuer"
-      print -r -- "$WAFER_NOTARY_ISSUER"
-    fi
-
-    return
-  fi
-
-  if [[ -n "${WAFER_APPLE_ID:-}" && -n "${WAFER_APP_PASSWORD:-}" && -n "${WAFER_TEAM_ID:-}" ]]; then
-    print -r -- "--apple-id"
-    print -r -- "$WAFER_APPLE_ID"
-    print -r -- "--password"
-    print -r -- "$WAFER_APP_PASSWORD"
-    print -r -- "--team-id"
-    print -r -- "$WAFER_TEAM_ID"
-    return
-  fi
-
-  return 1
-}
-
 # Resolve symlinks before deciding whether this is a dedicated output directory.
 DIST_DIR=${DIST_DIR:A}
 if [[ "$DIST_DIR" != "$ROOT_DIR/dist" && "$DIST_DIR" != "$ROOT_DIR/dist/"* ]]; then
@@ -97,6 +63,8 @@ if [[ "$DIST_DIR" != "$ROOT_DIR/dist" && "$DIST_DIR" != "$ROOT_DIR/dist/"* ]]; t
     (( ${#entries} == 0 )) || fail "DIST_DIR outside $ROOT_DIR/dist must be new or empty: $DIST_DIR"
   fi
 fi
+
+python3 "$ROOT_DIR/scripts/check-source.py"
 
 require_tool swift
 require_tool security
@@ -116,12 +84,13 @@ fi
 step "Using signing identity: $SIGN_IDENTITY"
 
 if [[ "$SKIP_NOTARIZATION" != "1" ]]; then
-  NOTARY_ARGS=("${(@f)$(notary_credentials_args)}") || fail "notarization credentials are missing. Set WAFER_NOTARY_PROFILE to a notarytool keychain profile, or provide App Store Connect/API key environment variables."
+  [[ -n "$NOTARY_PROFILE" ]] || fail "notarization credentials are missing. Set WAFER_NOTARY_PROFILE to a notarytool keychain profile."
+  NOTARY_ARGS=(--keychain-profile "$NOTARY_PROFILE")
 fi
 
 if [[ "$SKIP_TESTS" != "1" ]]; then
-  step "Running tests"
-  swift test
+  step "Running checks"
+  "$ROOT_DIR/scripts/check.sh"
 fi
 
 step "Building release app bundle"
@@ -144,6 +113,12 @@ NOTARY_RESULT="$DIST_DIR/notarytool-submit.json"
 mkdir -p "$DIST_DIR"
 find "$DIST_DIR" -mindepth 1 -maxdepth 1 \( -type f -o -type l \) \
   \( -name 'Wafer-*.zip' -o -name 'notarytool-submit.json' -o -name 'notarytool-log.json' \) -delete
+
+for product in "$APP_NAME" "$QUICKLOOK_NAME"; do
+  [[ -d "$ROOT_DIR/build/$product.dSYM" ]] || fail "missing release symbols: $product.dSYM"
+  rm -rf "$DIST_DIR/$product.dSYM"
+  cp -R "$ROOT_DIR/build/$product.dSYM" "$DIST_DIR/"
+done
 
 # Sparkle's helpers are signed one by one, inside out, as its documentation
 # prescribes. --deep would stamp one set of entitlements on all of them.
@@ -219,6 +194,8 @@ codesign --verify --deep --strict "$EXTRACT_DIR/$APP_NAME.app" || fail "extracte
 if [[ "$SKIP_NOTARIZATION" != "1" ]]; then
   spctl --assess --type execute "$EXTRACT_DIR/$APP_NAME.app" || fail "extracted app fails Gatekeeper assessment"
 fi
+
+python3 "$ROOT_DIR/scripts/check-source.py"
 
 print -- ""
 print -- "Release zip: $FINAL_ZIP"

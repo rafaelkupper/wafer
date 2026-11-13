@@ -1,4 +1,4 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 import PackageDescription
 
 let package = Package(
@@ -23,7 +23,8 @@ let package = Package(
             ],
             resources: [
                 .process("Resources"),
-            ]
+            ],
+            swiftSettings: [.treatAllWarnings(as: .error)]
         ),
         .executableTarget(
             name: "WaferApp",
@@ -35,6 +36,7 @@ let package = Package(
                 .copy("Resources/Themes"),
                 .copy("Resources/Scripts"),
             ],
+            swiftSettings: [.treatAllWarnings(as: .error)],
             linkerSettings: [
                 // build-app.sh embeds Sparkle.framework in Contents/Frameworks.
                 .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"]),
@@ -44,6 +46,7 @@ let package = Package(
             name: "WaferQuickLook",
             dependencies: ["WaferCore"],
             swiftSettings: [
+                .treatAllWarnings(as: .error),
                 .unsafeFlags(["-application-extension"]),
             ],
             linkerSettings: [
