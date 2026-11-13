@@ -144,7 +144,7 @@ final class MarkdownReaderDocument: NSDocument {
         scrollStateStore: ScrollStateStore = ScrollStateStore(),
         renderScheduler: RenderScheduler? = nil,
         markdownLinkOpener: @escaping MarkdownLinkOpener = MarkdownReaderDocument.defaultOpenMarkdownLink,
-        linkTargetHandler: @escaping LinkTargetHandler = MarkdownReaderDocument.defaultHandle,
+        linkTargetHandler: @escaping LinkTargetHandler = { LinkTargetOpener().handle($0) },
         readerControllerFactory: @escaping ReaderControllerFactory = { WebKitReaderViewController() },
         statisticPreferenceStore: DocumentStatisticPreferenceStore = .shared,
         appearancePreferenceStore: AppearancePreferenceStore = .shared,
@@ -705,19 +705,6 @@ final class MarkdownReaderDocument: NSDocument {
         }
 
         return fragment
-    }
-
-    private static func defaultHandle(_ linkTarget: LinkTarget) {
-        switch linkTarget {
-        case .external(let externalURL):
-            NSWorkspace.shared.open(externalURL)
-        case .markdownFile(let markdownURL):
-            MarkdownDocumentOpener.open(urls: [markdownURL])
-        case .otherFile(let fileURL):
-            NSWorkspace.shared.open(fileURL)
-        case .unresolved:
-            break
-        }
     }
 
     private static func defaultOpenMarkdownLink(_ url: URL, _ anchorID: String?) {
