@@ -1,9 +1,11 @@
 import Foundation
 
 enum EmojiShortcodes {
-    static let all: [String: String] = {
+    static let all = load(from: ReaderTheme.resourceURL(named: "gemoji-shortcodes.json"))
+
+    static func load(from resourceURL: URL?) -> [String: String] {
         guard
-            let resourceURL = ReaderTheme.resourceURL(named: "gemoji-shortcodes.json"),
+            let resourceURL,
             let data = try? Data(contentsOf: resourceURL),
             let shortcodes = try? JSONDecoder().decode([String: String].self, from: data)
         else {
@@ -12,7 +14,7 @@ enum EmojiShortcodes {
         }
 
         return shortcodes
-    }()
+    }
 }
 
 enum MarkdownInlineCompatibility {

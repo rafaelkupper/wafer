@@ -83,7 +83,7 @@ public final class WebKitHTMLRenderer {
             )
             cspMetaTag = "  <meta http-equiv=\"Content-Security-Policy\" content=\"\(csp.escapedHTMLAttribute)\">"
             katexStyleSheet = visitor.hasMathDisplays
-                ? "\n\(Self.katexStyleSheet())"
+                ? "\n\(Self.katexStyleSheet ?? "")"
                 : ""
             rendererScripts = hasScriptedRenderers
                 ? Self.rendererScripts(
@@ -110,9 +110,9 @@ public final class WebKitHTMLRenderer {
           </style>
         </head>
         <body>
-          <div id="write">
+          <main id="write">
           \(body)
-          </div>
+          </main>
           \(rendererScripts)
         </body>
         </html>
@@ -132,91 +132,6 @@ public final class WebKitHTMLRenderer {
             hasMathDisplays: visitor.hasMathDisplays
         )
     }
-
-    private static func scriptNonce() -> String {
-        UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
-    }
-
-    private static func contentSecurityPolicy(allowsPageScripts: Bool, scriptNonce: String) -> String {
-        let scriptSource = allowsPageScripts ? "'nonce-\(scriptNonce)'" : "'none'"
-        return [
-            "default-src 'none'",
-            "img-src wafer-local: wafer-remote:",
-            "style-src 'unsafe-inline' wafer-local:",
-            "font-src wafer-local:",
-            "connect-src 'none'",
-            "object-src 'none'",
-            "base-uri 'none'",
-            "form-action 'none'",
-            "script-src \(scriptSource)",
-        ].joined(separator: "; ") + ";"
-    }
-
-    private static func rendererScripts(
-        nonce: String,
-        palette: ReaderThemePalette,
-        includesMermaid: Bool,
-        includesMath: Bool
-    ) -> String {
-        let externalScripts = [
-            includesMermaid ? scriptTag(resourceName: "mermaid.min.js", nonce: nonce) : nil,
-            includesMath ? scriptTag(resourceName: "katex/katex.min.js", nonce: nonce) : nil,
-        ]
-            .compactMap { $0 }
-            .joined(separator: "\n")
-
-        return """
-        \(externalScripts)
-        <script nonce="\(nonce.escapedHTMLAttribute)" data-wafer-renderer="\(rendererConfiguration(for: palette).escapedHTMLAttribute)">
-        \(asyncRendererScript)
-        \(includesMermaid ? mermaidScript : "")
-        \(includesMath ? mathScript : "")
-        </script>
-        """
-    }
-
-    private static func scriptTag(resourceName: String, nonce: String) -> String {
-        guard let scriptURL = ReaderTheme.resourceURL(named: resourceName) else {
-            return ""
-        }
-
-        let source = WebKitHTMLRenderVisitor.webViewAssetURLString(for: scriptURL)
-        return "<script src=\"\(source.escapedHTMLAttribute)\" nonce=\"\(nonce.escapedHTMLAttribute)\"></script>"
-    }
-
-    private static func katexStyleSheet() -> String {
-        guard
-            let styleSheetURL = ReaderTheme.resourceURL(named: "katex/katex.min.css"),
-            let styleSheet = try? String(contentsOf: styleSheetURL, encoding: .utf8)
-        else {
-            return ""
-        }
-
-        return styleSheet.replacingKaTeXFontURLs(relativeTo: styleSheetURL)
-    }
-
-    private static let asyncRendererScript = bundledScript(named: "async-renderer.js")
-    private static let mermaidScript = bundledScript(named: "mermaid-bootstrap.js")
-    private static let mathScript = bundledScript(named: "katex-bootstrap.js")
-
-    private static func bundledScript(named name: String) -> String {
-        guard let url = ReaderTheme.resourceURL(named: name), let script = try? String(contentsOf: url, encoding: .utf8) else {
-            preconditionFailure("Missing renderer resource: \(name)")
-        }
-        return script
-    }
-
-    private static func rendererConfiguration(for palette: ReaderThemePalette) -> String {
-        let variables = Dictionary(palette.mermaid.themeVariables + [("fontFamily", palette.mermaid.fontFamily)], uniquingKeysWith: { _, last in last })
-        let configuration: [String: Any] = [
-            "theme": palette.mermaid.theme, "variables": variables,
-            "chromeAttributeName": ExportSanitizer.chromeAttributeName,
-            "chromeAttributeValue": ExportSanitizer.chromeAttributeValue,
-        ]
-        let data = try! JSONSerialization.data(withJSONObject: configuration, options: [.sortedKeys])
-        return String(decoding: data, as: UTF8.self)
-    }
-
 }
 
 private struct WebKitHTMLRenderVisitor: MarkupVisitor {
@@ -615,10 +530,10 @@ private struct WebKitHTMLRenderVisitor: MarkupVisitor {
     mutating func visitCodeBlock(_ codeBlock: CodeBlock) -> String {
         let normalizedLanguage = codeBlock.language?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let code = codeBlock.code.trimmingCharacters(in: .newlines)
-        if target == .reader, isMermaidLanguage(normalizedLanguage) {
+        if target == .reader, isMermaidLanguage(normalizedLanguage), WebKitHTMLRenderer.canRenderMermaid {
             return renderMermaidDiagram(source: code)
         }
-        if target == .reader, isMathLanguage(normalizedLanguage) {
+        if target == .reader, isMathLanguage(normalizedLanguage), WebKitHTMLRenderer.canRenderMath {
             return renderMathDisplay(source: code)
         }
 
@@ -656,7 +571,7 @@ private struct WebKitHTMLRenderVisitor: MarkupVisitor {
             if target == .preview {
                 return remoteImagePlaceholder(altText: altText)
             }
-            let sourceURL = Self.webViewRemoteImageURLString(for: url)
+            let sourceURL = WebKitAssetURLs.remote(for: url)
             return "<img src=\"\(sourceURL.escapedHTMLAttribute)\" alt=\"\(altText.escapedHTMLAttribute)\" loading=\"lazy\" />"
         }
 
@@ -671,7 +586,7 @@ private struct WebKitHTMLRenderVisitor: MarkupVisitor {
             return "<img src=\"\(sourceURL.escapedHTMLAttribute)\" alt=\"\(altText.escapedHTMLAttribute)\" />"
         }
 
-        let sourceURL = Self.webViewAssetURLString(for: url)
+        let sourceURL = WebKitAssetURLs.local(for: url)
         return "<img src=\"\(sourceURL.escapedHTMLAttribute)\" alt=\"\(altText.escapedHTMLAttribute)\" />"
     }
 
@@ -1147,7 +1062,7 @@ private struct WebKitHTMLRenderVisitor: MarkupVisitor {
             guard target == .reader else {
                 return nil
             }
-            return Self.webViewRemoteImageURLString(for: url)
+            return WebKitAssetURLs.remote(for: url)
         }
 
         if target == .preview {
@@ -1158,7 +1073,7 @@ private struct WebKitHTMLRenderVisitor: MarkupVisitor {
             )
         }
 
-        return Self.webViewAssetURLString(for: url)
+        return WebKitAssetURLs.local(for: url)
     }
 
     private func remoteImagePlaceholder(altText: String) -> String {
@@ -1168,107 +1083,5 @@ private struct WebKitHTMLRenderVisitor: MarkupVisitor {
 
     private func htmlLinkHref(for rawHref: String) -> String? {
         resolvedLinkHref(for: rawHref)
-    }
-
-    static func webViewAssetURLString(for fileURL: URL) -> String {
-        var components = URLComponents()
-        components.scheme = "wafer-local"
-        components.host = "asset"
-        components.queryItems = [
-            URLQueryItem(name: "path", value: fileURL.standardizedFileURL.path),
-        ]
-        return components.url?.absoluteString ?? fileURL.absoluteString
-    }
-
-    static func webViewRemoteImageURLString(for remoteURL: URL) -> String {
-        var components = URLComponents()
-        components.scheme = "wafer-remote"
-        components.host = "image"
-        components.queryItems = [
-            URLQueryItem(name: "url", value: remoteURL.absoluteString),
-        ]
-        return components.url?.absoluteString ?? remoteURL.absoluteString
-    }
-}
-
-private extension String {
-    func replacingKaTeXFontURLs(relativeTo styleSheetURL: URL) -> String {
-        let pattern = #"url\((['"]?)(fonts/[^)'"]+)\1\)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
-            return self
-        }
-
-        var result = self
-        let matches = regex.matches(in: self, range: NSRange(startIndex..<endIndex, in: self))
-        for match in matches.reversed() where match.numberOfRanges >= 3 {
-            guard
-                let fullRange = Range(match.range(at: 0), in: result),
-                let fontRange = Range(match.range(at: 2), in: result)
-            else {
-                continue
-            }
-
-            let fontPath = String(result[fontRange])
-            let fontURL = ReaderTheme.resourceURL(named: "katex/\(fontPath)")
-                ?? ReaderTheme.resourceURL(named: fontPath)
-                ?? styleSheetURL
-                    .deletingLastPathComponent()
-                    .appendingPathComponent(fontPath)
-            let assetURL = WebKitHTMLRenderVisitor.webViewAssetURLString(for: fontURL)
-            result.replaceSubrange(fullRange, with: "url('\(assetURL.escapedCSSString)')")
-        }
-        return result
-    }
-
-    var escapedCSSString: String {
-        replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "'", with: "\\'")
-            .replacingOccurrences(of: "\n", with: "\\a ")
-            .replacingOccurrences(of: "\r", with: "\\d ")
-    }
-}
-
-private final class PreviewAttachmentStore {
-    private(set) var attachments: [String: URL] = [:]
-
-    func cidSource(for fileURL: URL, allowedRootDirectory: URL?) -> String? {
-        guard
-            fileURL.isFileURL,
-            let allowedRootDirectory,
-            allowedRootDirectory.isFileURL
-        else {
-            return nil
-        }
-
-        let resolvedFileURL = URL(fileURLWithPath: fileURL.path)
-            .standardizedFileURL
-            .resolvingSymlinksInPath()
-        let resolvedRootURL = URL(fileURLWithPath: allowedRootDirectory.path)
-            .standardizedFileURL
-            .resolvingSymlinksInPath()
-        var isDirectory: ObjCBool = false
-
-        guard
-            Self.isAllowed(fileURL: resolvedFileURL, in: resolvedRootURL),
-            FileManager.default.fileExists(atPath: resolvedFileURL.path, isDirectory: &isDirectory),
-            !isDirectory.boolValue
-        else {
-            return nil
-        }
-
-        if let existing = attachments.first(where: { $0.value == resolvedFileURL }) {
-            return "cid:\(existing.key)"
-        }
-
-        let key = "preview-asset-\(attachments.count + 1)"
-        attachments[key] = resolvedFileURL
-        return "cid:\(key)"
-    }
-
-    private static func isAllowed(fileURL: URL, in rootDirectory: URL) -> Bool {
-        let filePath = fileURL.path
-        let rootPath = rootDirectory.path
-        let rootPrefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
-        return filePath == rootPath || filePath.hasPrefix(rootPrefix)
     }
 }

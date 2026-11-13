@@ -52,8 +52,8 @@ final class RenderCompatibilityCorpusTests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        XCTAssertTrue(reader.html.contains(#"<div id="write">"#), file: file, line: line)
-        XCTAssertTrue(preview.html.contains(#"<div id="write">"#), file: file, line: line)
+        XCTAssertTrue(reader.html.contains(#"<main id="write">"#), file: file, line: line)
+        XCTAssertTrue(preview.html.contains(#"<main id="write">"#), file: file, line: line)
 
         switch fixture {
         case "github-readme":

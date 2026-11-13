@@ -17,6 +17,33 @@ final class AssetResolverTests: XCTestCase {
         XCTAssertNil(url.fragment)
     }
 
+    func testPercentEncodedLocalPathsDecodeOnceWithURLSemantics() {
+        let base = URL(fileURLWithPath: "/tmp/docs/readme.md")
+        XCTAssertEqual(resolver.resolve(destination: "My%20Note.md#caf%C3%A9", relativeTo: base)?.path,
+                       "/tmp/docs/My Note.md")
+        XCTAssertEqual(resolver.resolve(destination: "My%20Note.md#caf%C3%A9", relativeTo: base)?.decodedFragment, "café")
+        XCTAssertEqual(resolver.imageURL(for: "images/My%20Photo%23one.png", relativeTo: base)?.path,
+                       "/tmp/docs/images/My Photo#one.png")
+        XCTAssertEqual(resolver.resolve(destination: "My%2520Note.md", relativeTo: base)?.path,
+                       "/tmp/docs/My%20Note.md")
+        XCTAssertEqual(resolver.resolve(destination: "/tmp/My%20Note.md", relativeTo: nil)?.path, "/tmp/My Note.md")
+        XCTAssertEqual(resolver.resolve(destination: "My+Note.md", relativeTo: base)?.path, "/tmp/docs/My+Note.md")
+        XCTAssertEqual(resolver.imageURL(for: "%2e%2e/private.png", relativeTo: base)?.path, "/tmp/private.png")
+    }
+
+    func testEncodedTraversalCannotEscapePreviewAttachmentRoot() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let documents = root.appendingPathComponent("docs")
+        try FileManager.default.createDirectory(at: documents, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data([1, 2, 3]).write(to: root.appendingPathComponent("private.png"))
+        let document = MarkdownParser().parse(source: "![outside](%2e%2e/private.png)",
+                                              baseURL: documents.appendingPathComponent("readme.md"))
+        let output = WebKitHTMLRenderer(target: .preview).render(document: document)
+        XCTAssertTrue(output.previewAttachments.isEmpty)
+        XCTAssertFalse(output.html.contains("cid:"))
+    }
+
     func testRecognizesExternalHTTPLinks() {
         let result = resolver.linkTarget(for: "https://example.com", relativeTo: nil)
 

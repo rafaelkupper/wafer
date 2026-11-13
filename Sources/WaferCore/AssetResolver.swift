@@ -28,27 +28,16 @@ public final class AssetResolver {
             return components?.url
         }
 
-        if trimmed.hasPrefix("/") {
-            return URL(fileURLWithPath: trimmed).standardizedFileURL
-        }
-
-        guard let baseURL else {
-            return URL(fileURLWithPath: trimmed).standardizedFileURL
-        }
-
-        guard baseURL.isFileURL else {
+        if let baseURL, !baseURL.isFileURL, !trimmed.hasPrefix("/") {
             return URL(string: trimmed, relativeTo: baseURL)?.absoluteURL
         }
 
-        let directoryURL = baseURL.hasDirectoryPath ? baseURL : baseURL.deletingLastPathComponent()
-        let pieces = trimmed.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
-        let pathPart = String(pieces.first ?? "")
-        let fragment = pieces.count > 1 ? String(pieces[1]) : nil
-
-        var resolvedURL = URL(fileURLWithPath: pathPart, relativeTo: directoryURL).standardizedFileURL
-        if let fragment {
+        guard let destination = URLComponents(string: trimmed) else { return nil }
+        let directoryURL = baseURL.map { $0.hasDirectoryPath ? $0 : $0.deletingLastPathComponent() }
+        var resolvedURL = URL(fileURLWithPath: destination.path, relativeTo: directoryURL).standardizedFileURL
+        if let fragment = destination.fragment {
             var components = URLComponents(url: resolvedURL, resolvingAgainstBaseURL: true)
-            components?.fragment = fragment.removingPercentEncoding ?? fragment
+            components?.fragment = fragment
             resolvedURL = components?.url ?? resolvedURL
         }
 

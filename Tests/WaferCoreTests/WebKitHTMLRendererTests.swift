@@ -42,7 +42,7 @@ final class WebKitHTMLRendererTests: XCTestCase {
         XCTAssertEqual(output.baseURL, baseURL.deletingLastPathComponent())
         XCTAssertGreaterThan(output.statistics.words, 0)
         XCTAssertGreaterThan(output.statistics.lines, 0)
-        XCTAssertTrue(output.html.contains("<div id=\"write\">"))
+        XCTAssertTrue(output.html.contains("<main id=\"write\">"))
         XCTAssertTrue(output.html.contains("--bg-color: #383E44;"))
         XCTAssertTrue(output.html.contains("--text-color: #BCC3CA;"))
         XCTAssertTrue(output.html.contains("--link-color: #D7DDE3;"))
