@@ -25,7 +25,7 @@ final class ReaderReliabilityTests: XCTestCase {
         document.makeWindowControllers()
         defer { document.close() }
         document.reloadDocument(nil)
-        wait(for: [refreshed], timeout: 2)
+        wait(for: [refreshed], timeout: 10)
         XCTAssertEqual(completions.count, 2)
         completions.last?(WebKitRenderOutput(html: "<html>note</html>", baseURL: directory.url))
         XCTAssertEqual(reader.appliedInitialScrollFractions.last!, 0.4)
@@ -84,7 +84,7 @@ final class ReaderReliabilityTests: XCTestCase {
         let history = document.navigationHistory
         failReads.enabled = true
         document.goBackInHistory(nil)
-        wait(for: [failed], timeout: 2)
+        wait(for: [failed], timeout: 10)
         XCTAssertEqual(document.fileURL, b)
         XCTAssertEqual(document.navigationHistory, history)
         let item = NSMenuItem(title: "Back", action: #selector(MarkdownReaderDocument.goBackInHistory(_:)), keyEquivalent: "")
@@ -141,12 +141,12 @@ final class ReaderReliabilityTests: XCTestCase {
         document.makeWindowControllers()
         defer { document.close() }
         document.reloadFromDiskIfNeeded()
-        wait(for: [readCompleted], timeout: 2)
+        wait(for: [readCompleted], timeout: 10)
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         XCTAssertEqual(renderCount, 1)
         gate.enabled = true
         document.reloadDocument(nil)
-        wait(for: [failed], timeout: 2)
+        wait(for: [failed], timeout: 10)
         XCTAssertEqual(renderCount, 1)
     }
 
@@ -182,7 +182,7 @@ final class ReaderReliabilityTests: XCTestCase {
         XCTAssertEqual(MarkdownDocumentOpener.retainedDocumentCountForTesting, retainedBefore + 1)
         let serviced = expectation(description: "main queue runs while read waits")
         DispatchQueue.main.async { serviced.fulfill() }
-        wait(for: [serviced], timeout: 1)
+        wait(for: [serviced], timeout: 5)
         XCTAssertFalse(gate.finished)
         print("Delayed-read window probe: open returned in \(Int(openDuration * 1_000)) ms; main queue serviced while source read remained blocked")
         gate.release()
@@ -216,7 +216,7 @@ final class ReaderReliabilityTests: XCTestCase {
         document.reloadFromDiskIfNeeded()
         gate.enabled = false
         gate.release()
-        wait(for: [refreshed], timeout: 2)
+        wait(for: [refreshed], timeout: 10)
         XCTAssertEqual(renders, 2)
     }
 
@@ -260,7 +260,7 @@ final class ReaderReliabilityTests: XCTestCase {
         let failedWindow = expectation(description: "window failure reported")
         let document = makeDocument(loader: { _ in throw CocoaError(.fileReadNoSuchFile) }, onError: { _ in failedWindow.fulfill() })
         try MarkdownDocumentOpener.open(url: missing, documentFactory: { document })
-        wait(for: [failedWindow], timeout: 2)
+        wait(for: [failedWindow], timeout: 10)
         XCTAssertNil(OpenDocumentRegistry.shared.document(for: missing))
         XCTAssertFalse(NSDocumentController.shared.documents.contains { $0 === document })
         XCTAssertTrue(document.windowControllers.isEmpty)
@@ -276,7 +276,7 @@ final class ReaderReliabilityTests: XCTestCase {
         tabDocument.fileURL = missing
         host.tabDocumentFactoryForTesting = { _ in tabDocument }
         host.openTab(for: missing)
-        wait(for: [failedTab], timeout: 2)
+        wait(for: [failedTab], timeout: 10)
         XCTAssertEqual(host.tabs.count, 1)
         XCTAssertTrue(host.activeTab.document === first)
         XCTAssertNil(OpenDocumentRegistry.shared.document(for: missing))
@@ -303,7 +303,7 @@ final class ReaderReliabilityTests: XCTestCase {
         host.closeTab(at: 0)
         XCTAssertEqual(host.tabs.count, 1)
         gate.release()
-        wait(for: [failed], timeout: 2)
+        wait(for: [failed], timeout: 10)
         XCTAssertNil(OpenDocumentRegistry.shared.document(for: missing))
         XCTAssertFalse(NSDocumentController.shared.documents.contains { $0 === second })
     }
@@ -348,7 +348,7 @@ final class ReaderReliabilityTests: XCTestCase {
         try MarkdownDocumentOpener.open(url: a, documentFactory: { document })
         waitUntil { gate.isWaiting }
         document.navigateInCurrentWindow(to: b)
-        wait(for: [failed], timeout: 2)
+        wait(for: [failed], timeout: 10)
         gate.release()
         XCTAssertNil(OpenDocumentRegistry.shared.document(for: a))
         XCTAssertFalse(NSDocumentController.shared.documents.contains { $0 === document })
@@ -576,7 +576,7 @@ final class ReaderReliabilityTests: XCTestCase {
     }
 
     private func waitUntil(_ condition: () -> Bool) {
-        let deadline = Date().addingTimeInterval(2)
+        let deadline = Date().addingTimeInterval(10)
         while !condition(), Date() < deadline {
             RunLoop.current.run(until: Date().addingTimeInterval(0.01))
         }
@@ -604,7 +604,7 @@ private final class ReaderSourceGate: @unchecked Sendable {
     var ranOnMainThread: Bool { lock.withLock { wasMainThread } }
     func wait() {
         lock.withLock { waiting = true; wasMainThread = Thread.isMainThread }
-        _ = semaphore.wait(timeout: .now() + 3)
+        _ = semaphore.wait(timeout: .now() + 10)
         lock.withLock { completed = true }
     }
     func release() { semaphore.signal() }

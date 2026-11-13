@@ -178,11 +178,12 @@ final class MarkdownDocumentOpenerTests: XCTestCase {
         )
         secondDocument.navigateInCurrentWindow(to: firstURL)
 
-        let navigationExpectation = expectation(description: "same-window navigation")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            navigationExpectation.fulfill()
+        // The navigation reads the file in the background; wait for it
+        // rather than for a fixed time, which a cold first run can exceed.
+        let deadline = Date(timeIntervalSinceNow: 10)
+        while openMarkdownDocuments().filter({ $0.fileURL == firstURL }).count < 2, Date() < deadline {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
         }
-        wait(for: [navigationExpectation], timeout: 2)
 
         XCTAssertEqual(openMarkdownDocuments().filter { $0.fileURL == firstURL }.count, 2)
 

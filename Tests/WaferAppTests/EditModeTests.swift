@@ -857,6 +857,15 @@ final class ReaderLivePreviewTests: XCTestCase {
         wait(for: [done], timeout: seconds + 2)
     }
 
+    /// Waits until `condition` is true in the page, for asynchronous page
+    /// work (diagram rendering, observers) whose duration varies with load.
+    private func waitForScript(_ condition: String, in reader: WebKitReaderViewController, timeout: TimeInterval = 10) {
+        let deadline = Date(timeIntervalSinceNow: timeout)
+        while evaluate("Boolean(\(condition))", in: reader) as? Bool != true, Date() < deadline {
+            pause(0.05)
+        }
+    }
+
     func testPatchKeepsUnchangedBlocksReplacesEditedOnesAndUpdatesLines() {
         let reader = WebKitReaderViewController()
         let window = hostInWindow(reader)
@@ -893,7 +902,7 @@ final class ReaderLivePreviewTests: XCTestCase {
         _ = evaluate("document.querySelector('.md-mermaid-diagram').waferTestMarker = 'kept'; true", in: reader)
 
         XCTAssertTrue(patch(render("Intro edited\n\n" + diagram + "\n```mermaid\ngraph LR; C-->D\n```\n"), in: reader))
-        pause(0.6)
+        waitForScript("document.querySelectorAll('.md-mermaid-diagram .md-mermaid-output svg').length === 2", in: reader)
 
         XCTAssertEqual(evaluate("document.querySelectorAll('.md-mermaid-diagram')[0].waferTestMarker || ''", in: reader) as? String, "kept")
         XCTAssertEqual(evaluate("document.querySelectorAll('.md-mermaid-diagram .md-mermaid-output svg').length", in: reader) as? Int, 2)
@@ -907,7 +916,7 @@ final class ReaderLivePreviewTests: XCTestCase {
         load(render("Intro\n"), into: reader)
 
         XCTAssertTrue(patch(render("Intro\n\n```swift\nlet x = 1\n```\n"), in: reader))
-        pause(0.1)
+        waitForScript("document.querySelectorAll('#write pre.md-fences .md-copy-button').length > 0", in: reader)
 
         XCTAssertEqual(evaluate("document.querySelectorAll('#write pre.md-fences .md-copy-button').length", in: reader) as? Int, 1)
     }

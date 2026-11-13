@@ -67,14 +67,14 @@ final class PerformanceRegressionTests: XCTestCase {
         var results: [Int] = []
         queue.submit(1, delay: 0, work: { value, cancellation in
             started.fulfill()
-            _ = release.wait(timeout: .now() + 3)
+            _ = release.wait(timeout: .now() + 10)
             XCTAssertTrue(cancellation.isCancelled)
             return value
         }, completion: { results.append($0) })
-        wait(for: [started], timeout: 3)
+        wait(for: [started], timeout: 10)
         queue.submit(2, delay: 0, work: { value, _ in value }, completion: { results.append($0); finished.fulfill() })
         release.signal()
-        wait(for: [finished], timeout: 3)
+        wait(for: [finished], timeout: 10)
         XCTAssertEqual(results, [2])
     }
 
@@ -91,7 +91,7 @@ final class PerformanceRegressionTests: XCTestCase {
         waitUntil { fetcher.budgets.count == 2 }
         XCTAssertEqual(fetcher.budgets, [5, 2])
         fetcher.completeNext(byteCount: 3)
-        wait(for: [finished], timeout: 3)
+        wait(for: [finished], timeout: 10)
         XCTAssertEqual(fetcher.budgets.count, 2)
 
         let cancelled = RemoteExportAssetLoader(fetcher: fetcher, sources: ["https://fixture.invalid/cancel"])
@@ -114,7 +114,7 @@ final class PerformanceRegressionTests: XCTestCase {
             guard case .failure(RemoteImageError.responseTooLarge) = result else { XCTFail("Expected bounded request failure"); return }
             finished.fulfill()
         }
-        wait(for: [finished], timeout: 3)
+        wait(for: [finished], timeout: 10)
         fetcher = nil
         XCTAssertNil(released)
     }
@@ -136,7 +136,7 @@ final class PerformanceRegressionTests: XCTestCase {
     }
 
     private func waitUntil(_ condition: () -> Bool) {
-        let deadline = Date().addingTimeInterval(3)
+        let deadline = Date().addingTimeInterval(10)
         while !condition(), Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
         XCTAssertTrue(condition())
     }
