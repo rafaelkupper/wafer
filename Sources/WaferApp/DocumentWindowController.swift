@@ -260,6 +260,11 @@ class DocumentWindowController: NSWindowController, ThemeApplying, NSUserInterfa
     }
 
     #if DEBUG
+    var editorVisibleFrameForTesting: NSRect? {
+        get { chromeViewController.editorVisibleFrameOverride }
+        set { chromeViewController.editorVisibleFrameOverride = newValue }
+    }
+
     var editorPaneControllerForTesting: NSViewController? {
         chromeViewController.editorPaneController
     }
@@ -663,6 +668,9 @@ private final class DocumentChromeViewController: NSViewController, ThemeApplyin
     private var hostedLeadingWithSidebarConstraint: NSLayoutConstraint?
     private var hostedTransitionLeadingConstraint: NSLayoutConstraint?
     private var transitionWindowSizeLock: WindowSizeLock?
+    #if DEBUG
+    fileprivate var editorVisibleFrameOverride: NSRect?
+    #endif
     fileprivate var reducedMotionOverride: Bool?
     fileprivate static let editorPaneAnimationDuration: TimeInterval = 0.35
     private(set) var editorPaneController: NSViewController?
@@ -938,10 +946,14 @@ private final class DocumentChromeViewController: NSViewController, ThemeApplyin
         view.layoutSubtreeIfNeeded()
         let split = contentContainerView
         let start = window.frame
+        var visibleFrame = (window.screen ?? NSScreen.main)?.visibleFrame
+        #if DEBUG
+        visibleFrame = editorVisibleFrameOverride ?? visibleFrame
+        #endif
         let plan = EditorPaneExpansion.plan(
             windowFrame: start,
             contentWidth: split.bounds.width,
-            visibleFrame: (window.screen ?? NSScreen.main)?.visibleFrame,
+            visibleFrame: visibleFrame,
             canResize: !window.styleMask.contains(.fullScreen)
         )
         editorPaneGrowth = plan.growth

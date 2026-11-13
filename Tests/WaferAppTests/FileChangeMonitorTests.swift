@@ -134,6 +134,23 @@ final class FileChangeMonitorTests: XCTestCase {
         wait(for: [change], timeout: 0.3)
     }
 
+    func testMissingFileBacksOffAndResetsWhenItReappearsWithoutWaiting() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let file = directory.url.appendingPathComponent("missing.md")
+        let monitor = FileChangeMonitor(fileURL: file, rearmPollInterval: 0.5, onChange: {})
+        monitor.start()
+        defer { monitor.stop() }
+        XCTAssertEqual(monitor.rearmDelayForTesting, 1)
+        for delay in [2.0, 4, 5, 5] {
+            monitor.pollForReappearanceForTesting()
+            XCTAssertEqual(monitor.rearmDelayForTesting, delay)
+        }
+        try Data("returned".utf8).write(to: file)
+        monitor.pollForReappearanceForTesting()
+        XCTAssertEqual(monitor.rearmDelayForTesting, 0.5)
+    }
+
     private func append(_ text: String, to fileURL: URL) throws {
         let handle = try FileHandle(forWritingTo: fileURL)
         defer { try? handle.close() }

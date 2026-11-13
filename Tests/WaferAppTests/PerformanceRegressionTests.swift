@@ -108,7 +108,7 @@ final class PerformanceRegressionTests: XCTestCase {
         configuration.protocolClasses = [ReviewImageURLProtocol.self]
         weak var released: RemoteImageURLSessionFetcher?
         let finished = expectation(description: "URLSession request")
-        var fetcher: RemoteImageURLSessionFetcher? = RemoteImageURLSessionFetcher(configuration: configuration)
+        var fetcher: RemoteImageURLSessionFetcher? = RemoteImageURLSessionFetcher(configuration: configuration, urlGuard: RemoteAssetURLGuard(resolve: { _ in ["8.8.8.8"] }))
         released = fetcher
         _ = fetcher?.fetch(URLRequest(url: URL(string: "https://fixture.invalid/image")!), maximumByteCount: 2) { result in
             guard case .failure(RemoteImageError.responseTooLarge) = result else { XCTFail("Expected bounded request failure"); return }

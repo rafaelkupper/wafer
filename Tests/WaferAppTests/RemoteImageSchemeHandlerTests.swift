@@ -167,7 +167,7 @@ final class RemoteImageSchemeHandlerTests: XCTestCase {
     func testLiveFetcherRejectsNonImageMIMEWithoutNetwork() async {
         let configuration = RemoteImageURLSessionFetcher.ephemeralConfiguration()
         configuration.protocolClasses = [NonImageURLProtocol.self]
-        let fetcher = RemoteImageURLSessionFetcher(configuration: configuration)
+        let fetcher = RemoteImageURLSessionFetcher(configuration: configuration, urlGuard: RemoteAssetURLGuard(resolve: { _ in ["8.8.8.8"] }))
         let failed = expectation(description: "non-image response fails")
 
         _ = fetcher.fetch(URLRequest(url: URL(string: "https://non-image.test/page")!)) { result in
@@ -183,7 +183,7 @@ final class RemoteImageSchemeHandlerTests: XCTestCase {
     func testLiveFetcherRejectsHTTPRedirectWithoutNetwork() async {
         let configuration = RemoteImageURLSessionFetcher.ephemeralConfiguration()
         configuration.protocolClasses = [HTTPRedirectURLProtocol.self]
-        let fetcher = RemoteImageURLSessionFetcher(configuration: configuration)
+        let fetcher = RemoteImageURLSessionFetcher(configuration: configuration, urlGuard: RemoteAssetURLGuard(resolve: { _ in ["8.8.8.8"] }))
         let failed = expectation(description: "http redirect fails")
 
         _ = fetcher.fetch(URLRequest(url: URL(string: "https://redirect.test/start.png")!)) { result in

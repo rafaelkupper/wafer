@@ -1322,12 +1322,12 @@ extension EditModeEndToEndTests {
         defer { document.close() }
         let host = try XCTUnwrap(document.windowControllers.first as? DocumentHostWindowController)
         let window = try XCTUnwrap(host.window)
-        let visible = try XCTUnwrap((window.screen ?? NSScreen.main)?.visibleFrame)
-        try XCTSkipIf(visible.width < 1_500, "needs room to double a 720-point window")
+        let visible = NSRect(x: 0, y: 0, width: 1920, height: 1080)
+        host.editorVisibleFrameForTesting = visible
         host.setReducedMotionForTesting(false)
         let frame = NSRect(x: visible.maxX - 740, y: visible.minY + 20, width: 720, height: 640)
-        window.setFrame(frame, display: false)
         host.showWindow(nil)
+        window.setFrame(frame, display: false)
         let reader = host.activeTab.readerController
         waitUntil("initial render") { reader.isContentReadyForExport }
         _ = evaluate("window.scrollTo(0, 6000); true", in: reader)

@@ -24,8 +24,7 @@ final class LocalAssetLoaderTests: XCTestCase {
 
         let response = try LocalAssetLoader.load(
             from: requestURL,
-            allowedRootDirectories: [tempDirectory.url],
-            dataProvider: { try Data(contentsOf: $0) }
+            allowedRootDirectories: [tempDirectory.url]
         )
 
         XCTAssertEqual(response.data, Data("hello".utf8))
@@ -114,6 +113,63 @@ final class LocalAssetLoaderTests: XCTestCase {
             for: assetURL(forPath: link.appendingPathComponent("secret.txt").path),
             allowedRootDirectories: [root]
         ))
+    }
+
+    func testReadRejectsParentSwappedToEscapingSymlinkAfterContainmentCheck() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let root = directory.url.appendingPathComponent("root")
+        let parent = root.appendingPathComponent("images")
+        let outside = directory.url.appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        try Data("allowed".utf8).write(to: parent.appendingPathComponent("image.png"))
+        try Data("secret".utf8).write(to: outside.appendingPathComponent("image.png"))
+        XCTAssertThrowsError(try LocalAssetLoader.read(parent.appendingPathComponent("image.png"),
+            allowedRootDirectories: [root], maximumByteCount: 100, beforeOpening: {
+                try FileManager.default.moveItem(at: parent, to: root.appendingPathComponent("original"))
+                try FileManager.default.createSymbolicLink(at: parent, withDestinationURL: outside)
+            }))
+    }
+
+    func testReadUsesVolumeCaseSensitivityAndComponentBoundaries() {
+        let root = URL(fileURLWithPath: "/folder/Images")
+        let file = URL(fileURLWithPath: "/folder/images/a.png")
+        XCTAssertTrue(LocalAssetLoader.contains(file, in: root, caseSensitive: false))
+        XCTAssertFalse(LocalAssetLoader.contains(file, in: root, caseSensitive: true))
+        XCTAssertFalse(LocalAssetLoader.contains(URL(fileURLWithPath: "/folder/Images-other/a.png"), in: root, caseSensitive: false))
+    }
+
+    func testReadAcceptsSymlinkInsideRootAndRejectsEscapingFinalSymlink() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let root = directory.url.appendingPathComponent("root")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let inside = root.appendingPathComponent("image.png")
+        try Data("image".utf8).write(to: inside)
+        let link = root.appendingPathComponent("link.png")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: inside)
+        XCTAssertEqual(try LocalAssetLoader.read(link, allowedRootDirectories: [root], maximumByteCount: 10), Data("image".utf8))
+        let outside = try directory.createTextFile(named: "secret.png", contents: "secret")
+        let escape = root.appendingPathComponent("escape.png")
+        try FileManager.default.createSymbolicLink(at: escape, withDestinationURL: outside)
+        XCTAssertThrowsError(try LocalAssetLoader.read(escape, allowedRootDirectories: [root], maximumByteCount: 10))
+    }
+
+    func testReadUsesActualVolumeCaseSensitivity() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let root = directory.url.appendingPathComponent("MixedCase")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("image.png")
+        try Data("image".utf8).write(to: file)
+        let alternateRoot = directory.url.appendingPathComponent("mixedcase")
+        let caseSensitive = try XCTUnwrap(root.resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey]).volumeSupportsCaseSensitiveNames)
+        if caseSensitive {
+            XCTAssertThrowsError(try LocalAssetLoader.read(file, allowedRootDirectories: [alternateRoot], maximumByteCount: 10))
+        } else {
+            XCTAssertEqual(try LocalAssetLoader.read(file, allowedRootDirectories: [alternateRoot], maximumByteCount: 10), Data("image".utf8))
+        }
     }
 
     private func assetURL(forPath path: String) -> URL {

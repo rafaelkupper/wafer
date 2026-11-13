@@ -96,7 +96,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         webView.navigationDelegate = self
         webView.wantsLayer = true
         webView.layer?.masksToBounds = true
-        webView.setValue(false, forKey: "drawsBackground")
+        webView.underPageBackgroundColor = .clear
         webView.allowsMagnification = false
         webView.allowsBackForwardNavigationGestures = false
         configureScrollBehavior()
@@ -406,7 +406,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
 
     /// True when the current page can be patched in place and scroll-synced.
     var supportsLivePreview: Bool {
-        liveBodyHTML != nil && isContentReadyForExport
+        !ReaderLivePreviewScript.installer.isEmpty && liveBodyHTML != nil && isContentReadyForExport
     }
 
     /// Patches the current page in place with a new render of the same
@@ -582,12 +582,16 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
     #endif
 
     static func scrollToHeadingScript(for id: String) -> String {
-        let escapedID = id
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
+        // JSON encodes control characters and quotes; escaping '<' also keeps
+        // the value safe if this script is ever embedded in an HTML element.
+        let json = try! JSONSerialization.data(withJSONObject: id, options: [.fragmentsAllowed])
+        let encodedID = String(decoding: json, as: UTF8.self)
+            .replacingOccurrences(of: "<", with: "\\u003c")
+            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
+            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
         return """
         (function() {
-          const target = document.getElementById("\(escapedID)");
+          const target = document.getElementById(\(encodedID));
           if (!target) {
             return false;
           }
@@ -754,10 +758,10 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         (function() {
           const root = document.scrollingElement || document.documentElement;
           const maxOffset = Math.max(root.scrollHeight - window.innerHeight, 0);
-          window.scrollTo(0, maxOffset * \(clamped));
+          window.scrollTo(0, maxOffset * fraction);
         })();
         """
-        webView.evaluateJavaScript(script)
+        webView.callAsyncJavaScript(script, arguments: ["fraction": clamped], in: nil, in: .page) { _ in }
         lastKnownScrollFraction = clamped
     }
 
