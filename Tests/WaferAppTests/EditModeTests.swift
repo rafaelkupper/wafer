@@ -497,7 +497,12 @@ final class MarkdownSourceEditorTests: XCTestCase {
         let editDuration = Date().timeIntervalSince(editStart)
 
         print("edit-mode highlight: \((text as NSString).length) UTF-16 units, load \(Int(loadDuration * 1000)) ms, keystroke \(Int(editDuration * 1000)) ms")
-        XCTAssertLessThan(editDuration, 0.25, "a keystroke must only recolor nearby lines")
+        XCTAssertEqual((editor.text as NSString).substring(with: NSRange(location: 20, length: 1)), "x")
+        let colors = MarkdownEditorColors(palette: ReaderTheme.current)
+        XCTAssertEqual(color(at: 3, in: editor), colors.heading, "the edited section keeps its coloring")
+        if PerformanceTesting.isEnabled {
+            XCTAssertLessThan(editDuration, 0.25, "a keystroke must only recolor nearby lines")
+        }
     }
 }
 
@@ -988,7 +993,9 @@ extension EditModeEndToEndTests {
                 """)
             XCTAssertEqual(widths, [readerWidth], "the reader keeps its width in every frame")
             XCTAssertEqual(window.frame.width, opening ? 720 + readerWidth : 720)
-            XCTAssertLessThan(stats.slowestStep, 0.05)
+            if PerformanceTesting.isEnabled {
+                XCTAssertLessThan(stats.slowestStep, 0.05)
+            }
             if opening {
                 waitUntil("editor aligned") { (document.editorControllerForTesting?.currentScrollPosition.line ?? 0) > 20 }
                 XCTAssertEqual(evaluate("window.scrollY", in: reader) as? Double ?? -1, 6000, accuracy: 1)
