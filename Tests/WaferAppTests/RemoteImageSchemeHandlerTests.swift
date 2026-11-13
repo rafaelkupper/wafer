@@ -5,6 +5,23 @@ import XCTest
 
 @MainActor
 final class RemoteImageSchemeHandlerTests: XCTestCase {
+    func testUserAgentUsesBundleVersionAndMissingVersionFallback() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        func bundle(named name: String, info: [String: String]) throws -> Bundle {
+            let url = directory.url.appendingPathComponent(name + ".bundle")
+            let contents = url.appendingPathComponent("Contents")
+            try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+            let data = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            try data.write(to: contents.appendingPathComponent("Info.plist"))
+            return try XCTUnwrap(Bundle(url: url))
+        }
+        let versioned = try bundle(named: "Versioned", info: ["CFBundleShortVersionString": "1.2.3"])
+        let missing = try bundle(named: "Missing", info: [:])
+        XCTAssertEqual(RemoteImageSchemeHandler.userAgent(bundle: versioned), "Wafer/1.2.3 RemoteImageLoader")
+        XCTAssertEqual(RemoteImageSchemeHandler.userAgent(bundle: missing), "Wafer/unknown RemoteImageLoader")
+    }
+
     func testRejectsNonHTTPSRemoteURLWithoutFetching() {
         let fetcher = FakeRemoteImageFetcher()
         let handler = makeHandler(fetcher: fetcher)
@@ -109,7 +126,7 @@ final class RemoteImageSchemeHandlerTests: XCTestCase {
         )
 
         XCTAssertEqual(fetcher.requests.first?.url, URL(string: "https://example.com/image.png"))
-        XCTAssertEqual(fetcher.requests.first?.value(forHTTPHeaderField: "User-Agent"), "Wafer/0.5 RemoteImageLoader")
+        XCTAssertEqual(fetcher.requests.first?.value(forHTTPHeaderField: "User-Agent"), RemoteImageSchemeHandler.userAgent())
         XCTAssertEqual(task.responses.first?.mimeType, "image/png")
         XCTAssertEqual(task.receivedData, [imageData])
         XCTAssertEqual(task.didFinishCount, 1)

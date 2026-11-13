@@ -3,72 +3,6 @@ import QuartzCore
 import WaferCore
 
 @MainActor
-enum WindowChromeSuppression {
-    static func suppress(in window: NSWindow) {
-        guard let frameView = window.contentView?.superview else {
-            return
-        }
-
-        frameView.wantsLayer = true
-        frameView.layer?.backgroundColor = ReaderTheme.backgroundColor.cgColor
-
-        for subview in frameView.subviews {
-            let className = NSStringFromClass(type(of: subview))
-            applyFlatBackgroundIfNeeded(
-                to: subview,
-                named: className,
-                superviewName: NSStringFromClass(type(of: frameView))
-            )
-            if shouldHideView(named: className, topLevel: true) {
-                subview.isHidden = true
-            }
-        }
-
-        for descendant in recursiveSubviews(in: frameView) {
-            let className = NSStringFromClass(type(of: descendant))
-            let superviewName = descendant.superview.map { NSStringFromClass(type(of: $0)) }
-            applyFlatBackgroundIfNeeded(to: descendant, named: className, superviewName: superviewName)
-            if shouldHideView(named: className, topLevel: false) {
-                descendant.isHidden = true
-            }
-        }
-    }
-
-    static func shouldHideView(named className: String, topLevel: Bool) -> Bool {
-        if topLevel && className == "NSVisualEffectView" {
-            return true
-        }
-
-        if className == "_NSTitlebarDecorationView" || className == "NSTitlebarBackgroundView" {
-            return true
-        }
-
-        return className.contains("ScrollPocket")
-    }
-
-    static func shouldStyleView(named className: String, superviewName: String?) -> Bool {
-        if className == "NSTitlebarContainerView" || className == "NSTitlebarView" {
-            return true
-        }
-
-        return className == "NSView" && superviewName == "NSTitlebarView"
-    }
-
-    private static func applyFlatBackgroundIfNeeded(to view: NSView, named className: String, superviewName: String?) {
-        guard shouldStyleView(named: className, superviewName: superviewName) else {
-            return
-        }
-
-        view.wantsLayer = true
-        view.layer?.backgroundColor = ReaderTheme.backgroundColor.cgColor
-    }
-
-    private static func recursiveSubviews(in rootView: NSView) -> [NSView] {
-        rootView.subviews + rootView.subviews.flatMap(recursiveSubviews(in:))
-    }
-}
-
-@MainActor
 private final class DocumentWindow: NSWindow {
     weak var findResponder: WebKitReaderViewController?
     weak var librarySearchResponder: DocumentWindowController?
@@ -535,18 +469,6 @@ class DocumentWindowController: NSWindowController, ThemeApplying, NSUserInterfa
     func toggleSidebar() {
         chromeViewController.toggleSidebar()
         statisticsAccessoryController.setSidebarActive(chromeViewController.isSidebarVisible)
-        if let window {
-            suppressSystemTitlebarBackground(in: window)
-            chromeViewController.installCenteredTitleIfNeeded(in: window)
-            DispatchQueue.main.async { [weak self, weak window] in
-                guard let self, let window else {
-                    return
-                }
-
-                self.chromeViewController.installCenteredTitleIfNeeded(in: window)
-                self.suppressSystemTitlebarBackground(in: window)
-            }
-        }
     }
 
     func applyCurrentTheme() {
@@ -1312,6 +1234,9 @@ private final class DocumentChromeViewController: NSViewController, ThemeApplyin
     }
 
     private func titlebarHostView(in window: NSWindow) -> NSView? {
+        guard WindowChromeSuppression.supportsPrivateDecoration(
+            on: ProcessInfo.processInfo.operatingSystemVersion.majorVersion
+        ) else { return nil }
         guard let frameView = window.contentView?.superview else {
             return nil
         }

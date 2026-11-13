@@ -33,6 +33,7 @@ let package = Package(
             ],
             resources: [
                 .copy("Resources/Themes"),
+                .copy("Resources/Scripts"),
             ],
             linkerSettings: [
                 // build-app.sh embeds Sparkle.framework in Contents/Frameworks.

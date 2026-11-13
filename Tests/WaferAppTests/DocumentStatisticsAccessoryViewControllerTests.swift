@@ -23,6 +23,32 @@ final class DocumentStatisticsAccessoryViewControllerTests: XCTestCase {
         XCTAssertGreaterThan(controller.preferredWidthForTesting, 100)
     }
 
+    func testStatisticsAppearAndDisappearInNarrowTitlebar() {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 260, height: 360),
+                              styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let controller = DocumentStatisticsAccessoryViewController()
+        window.addTitlebarAccessoryViewController(controller)
+        window.layoutIfNeeded()
+        let hiddenWidth = controller.preferredWidthForTesting
+        XCTAssertNil(controller.displayedTextForTesting)
+        XCTAssertTrue(controller.view.translatesAutoresizingMaskIntoConstraints)
+        XCTAssertGreaterThan(controller.view.frame.width, 0)
+
+        for _ in 0..<3 {
+            controller.apply(statistics: DocumentStatistics(words: 870, minutes: 5, lines: 306, characters: 6708))
+            window.layoutIfNeeded()
+            XCTAssertEqual(controller.displayedTextForTesting, "870 Words")
+            XCTAssertGreaterThan(controller.preferredWidthForTesting, hiddenWidth)
+            XCTAssertFalse(controller.view.hasAmbiguousLayout)
+            controller.apply(statistics: nil)
+            window.layoutIfNeeded()
+            XCTAssertNil(controller.displayedTextForTesting)
+            XCTAssertEqual(controller.preferredWidthForTesting, hiddenWidth)
+        }
+    }
+
     func testSelectingDifferentMetricUpdatesDisplayImmediately() {
         let defaults = UserDefaults(suiteName: UUID().uuidString)!
         let notificationCenter = NotificationCenter()
