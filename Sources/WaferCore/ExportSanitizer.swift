@@ -35,6 +35,8 @@ private struct ExportHTMLProcessor {
     let source: String
     let policy: ExportSanitizer.ExportPolicy
     var rewroteCSP = false
+    private static let forbiddenElements: Set<String> = ["script", "iframe", "object", "form", "textarea", "title", "xmp", "noembed", "noframes", "plaintext", "animate", "animatemotion", "animatetransform", "set"]
+    private static let forbiddenVoidElements: Set<String> = ["base", "embed", "link"]
 
     mutating func sanitizedHTML() throws -> String {
         var output = ""
@@ -58,14 +60,14 @@ private struct ExportHTMLProcessor {
                 continue
             }
 
-            guard let token = Self.parseTag(in: source, at: index) else {
+            guard let token = HTMLTokenizer.parseTag(in: source, at: index) else {
                 output += "&lt;"
                 index = source.index(after: index)
                 continue
             }
 
-            if !token.isClosing, token.name == "script" {
-                index = Self.indexAfterRawTextElement(named: token.name, in: source, after: token.endIndex)
+            if !token.isClosing, Self.forbiddenElements.contains(token.name) {
+                index = HTMLTokenizer.indexAfterRawTextElement(named: token.name, in: source, after: token.endIndex)
                 continue
             }
 
@@ -114,7 +116,16 @@ private struct ExportHTMLProcessor {
                 continue
             }
 
-            output += source[token.rawRange]
+            if Self.forbiddenElements.contains(token.name) || Self.forbiddenVoidElements.contains(token.name)
+                || (token.name == "meta" && !token.isContentSecurityPolicyMeta) {
+                index = token.endIndex
+                continue
+            }
+            if token.isClosing || token.name.isEmpty || token.attributes.allSatisfy(Self.isSafeAttribute) {
+                output += source[token.rawRange]
+            } else {
+                output += "<\(token.name)\(Self.renderedAttributeString(token.attributes))>"
+            }
             index = token.endIndex
         }
 
@@ -145,13 +156,13 @@ private struct ExportHTMLProcessor {
                 continue
             }
 
-            guard let token = parseTag(in: source, at: index) else {
+            guard let token = HTMLTokenizer.parseTag(in: source, at: index) else {
                 index = source.index(after: index)
                 continue
             }
 
-            if !token.isClosing, token.name == "script" {
-                index = indexAfterRawTextElement(named: token.name, in: source, after: token.endIndex)
+            if !token.isClosing, Self.forbiddenElements.contains(token.name) {
+                index = HTMLTokenizer.indexAfterRawTextElement(named: token.name, in: source, after: token.endIndex)
                 continue
             }
 
@@ -166,7 +177,7 @@ private struct ExportHTMLProcessor {
             if !token.isClosing,
                token.name == "source",
                let sourceSet = token.firstAttribute(named: "srcset")?.decodedValue {
-                for candidate in sourceSetCandidates(from: sourceSet) where isRemoteImageSource(candidate.source) {
+                for candidate in HTMLTokenizer.sourceSetCandidates(from: sourceSet) where isRemoteImageSource(candidate.source) {
                     guard seenSources.insert(candidate.source).inserted else {
                         continue
                     }
@@ -180,7 +191,7 @@ private struct ExportHTMLProcessor {
         return sources
     }
 
-    private func imageTag(for token: ExportHTMLTagToken) throws -> String? {
+    private func imageTag(for token: HTMLTagToken) throws -> String? {
         guard
             let sourceAttribute = token.firstAttribute(named: "src")
         else {
@@ -200,7 +211,7 @@ private struct ExportHTMLProcessor {
         return "<img\(Self.renderedAttributeString(attributes))>"
     }
 
-    private func sourceTag(for token: ExportHTMLTagToken) throws -> String? {
+    private func sourceTag(for token: HTMLTagToken) throws -> String? {
         guard
             let sourceSetAttribute = token.firstAttribute(named: "srcset"),
             let inlinedSourceSet = try inlinedSourceSet(from: sourceSetAttribute.decodedValue)
@@ -213,12 +224,12 @@ private struct ExportHTMLProcessor {
     }
 
     private func filteredImageAttributes(
-        _ attributes: [ExportHTMLAttribute],
+        _ attributes: [HTMLAttribute],
         sourceValue: String
-    ) -> [ExportHTMLAttribute] {
+    ) -> [HTMLAttribute] {
         attributes.compactMap { attribute in
             if attribute.name == "src" {
-                return ExportHTMLAttribute(name: "src", value: sourceValue)
+                return HTMLAttribute(name: "src", value: sourceValue)
             }
 
             return attribute.decodedValue.containsWaferScheme ? nil : attribute
@@ -226,13 +237,13 @@ private struct ExportHTMLProcessor {
     }
 
     private func filteredSourceAttributes(
-        _ attributes: [ExportHTMLAttribute],
+        _ attributes: [HTMLAttribute],
         sourceSetValue: String
-    ) -> [ExportHTMLAttribute] {
+    ) -> [HTMLAttribute] {
         attributes.compactMap { attribute in
             switch attribute.name {
             case "srcset":
-                ExportHTMLAttribute(name: "srcset", value: sourceSetValue)
+                HTMLAttribute(name: "srcset", value: sourceSetValue)
             case "media", "type":
                 attribute.decodedValue.containsWaferScheme ? nil : attribute
             default:
@@ -242,7 +253,7 @@ private struct ExportHTMLProcessor {
     }
 
     private func inlinedSourceSet(from sourceSet: String) throws -> String? {
-        let candidates = Self.sourceSetCandidates(from: sourceSet)
+        let candidates = HTMLTokenizer.sourceSetCandidates(from: sourceSet)
         guard !candidates.isEmpty else {
             return nil
         }
@@ -270,21 +281,21 @@ private struct ExportHTMLProcessor {
         return try policy.inlineImage(source)
     }
 
-    private func wikiAnchorTag(for token: ExportHTMLTagToken, wikiHref: String) -> String {
+    private func wikiAnchorTag(for token: HTMLTagToken, wikiHref: String) -> String {
         let rewritten = policy.rewriteWikiLinkHref(wikiHref)
-        let attributes = token.attributes.compactMap { attribute -> ExportHTMLAttribute? in
+        let attributes = token.attributes.compactMap { attribute -> HTMLAttribute? in
             if attribute.name == "href" {
                 guard let rewritten else {
                     return nil
                 }
-                return ExportHTMLAttribute(name: "href", value: rewritten)
+                return HTMLAttribute(name: "href", value: rewritten)
             }
             return attribute.decodedValue.containsWaferScheme ? nil : attribute
         }
         return "<a\(Self.renderedAttributeString(attributes))>"
     }
 
-    private func openingTagByDroppingWaferAttributes(for token: ExportHTMLTagToken) -> String {
+    private func openingTagByDroppingWaferAttributes(for token: HTMLTagToken) -> String {
         let attributes = token.attributes.filter { !$0.decodedValue.containsWaferScheme }
         return "<\(token.name)\(Self.renderedAttributeString(attributes))>"
     }
@@ -324,10 +335,24 @@ private struct ExportHTMLProcessor {
         return "<!doctype html>\n\(html)"
     }
 
-    private static func renderedAttributeString(_ attributes: [ExportHTMLAttribute]) -> String {
+    private static func renderedAttributeString(_ attributes: [HTMLAttribute]) -> String {
         attributes
+            .filter(isSafeAttribute)
             .map { " \($0.name)=\"\($0.value.escapedHTMLAttribute)\"" }
             .joined()
+    }
+
+    private static func isSafeAttribute(_ attribute: HTMLAttribute) -> Bool {
+        guard attribute.value.range(of: #"(?i)(javascript|vbscript)\s*:"#, options: .regularExpression) == nil,
+              !attribute.name.hasPrefix("on"), !["srcdoc", "action", "formaction", "xlink:href"].contains(attribute.name),
+              !attribute.value.containsWaferScheme else { return false }
+        if attribute.name == "href" {
+            return LinkURLPolicy.allows(attribute.value)
+        }
+        if ["src", "poster", "background"].contains(attribute.name) {
+            return attribute.value.lowercased().hasPrefix("data:image/") || LinkURLPolicy.allows(attribute.value)
+        }
+        return true
     }
 
     private static func isRemoteImageSource(_ source: String) -> Bool {
@@ -336,294 +361,6 @@ private struct ExportHTMLProcessor {
         }
 
         return scheme == "https" || scheme == "wafer-remote"
-    }
-
-    private static func sourceSetCandidates(from sourceSet: String) -> [ExportHTMLSourceSetCandidate] {
-        var candidates: [ExportHTMLSourceSetCandidate] = []
-        var index = sourceSet.startIndex
-
-        while true {
-            skipSourceSetSeparators(in: sourceSet, index: &index)
-            guard index < sourceSet.endIndex else {
-                return candidates
-            }
-
-            let sourceStart = index
-            while index < sourceSet.endIndex, !sourceSet[index].isWhitespace, sourceSet[index] != "," {
-                index = sourceSet.index(after: index)
-            }
-            let source = String(sourceSet[sourceStart..<index])
-            skipWhitespace(in: sourceSet, index: &index)
-
-            var descriptor: String?
-            if index < sourceSet.endIndex, sourceSet[index] != "," {
-                let descriptorStart = index
-                while index < sourceSet.endIndex, !sourceSet[index].isWhitespace, sourceSet[index] != "," {
-                    index = sourceSet.index(after: index)
-                }
-                let candidateDescriptor = String(sourceSet[descriptorStart..<index])
-                skipWhitespace(in: sourceSet, index: &index)
-                guard index == sourceSet.endIndex || sourceSet[index] == ",",
-                      isValidSourceSetDescriptor(candidateDescriptor) else {
-                    skipInvalidSourceSetCandidate(in: sourceSet, index: &index)
-                    continue
-                }
-                descriptor = candidateDescriptor
-            }
-
-            candidates.append(ExportHTMLSourceSetCandidate(source: source, descriptor: descriptor))
-            if index < sourceSet.endIndex, sourceSet[index] == "," {
-                index = sourceSet.index(after: index)
-            }
-        }
-    }
-
-    private static func skipSourceSetSeparators(in sourceSet: String, index: inout String.Index) {
-        while index < sourceSet.endIndex, sourceSet[index].isWhitespace || sourceSet[index] == "," {
-            index = sourceSet.index(after: index)
-        }
-    }
-
-    private static func skipInvalidSourceSetCandidate(in sourceSet: String, index: inout String.Index) {
-        while index < sourceSet.endIndex, sourceSet[index] != "," {
-            index = sourceSet.index(after: index)
-        }
-        if index < sourceSet.endIndex {
-            index = sourceSet.index(after: index)
-        }
-    }
-
-    private static func isValidSourceSetDescriptor(_ descriptor: String) -> Bool {
-        guard !descriptor.isEmpty, descriptor.allSatisfy({ !$0.isWhitespace }) else {
-            return false
-        }
-
-        if descriptor.hasSuffix("w") {
-            let number = descriptor.dropLast()
-            return !number.isEmpty && number.allSatisfy(\.isNumber)
-        }
-
-        if descriptor.hasSuffix("x") {
-            let number = descriptor.dropLast()
-            return isPositiveDecimal(number)
-        }
-
-        return false
-    }
-
-    private static func isPositiveDecimal(_ source: Substring) -> Bool {
-        var sawDigit = false
-        var sawDecimalSeparator = false
-
-        for character in source {
-            if character == "." {
-                guard !sawDecimalSeparator else {
-                    return false
-                }
-                sawDecimalSeparator = true
-                continue
-            }
-
-            guard character.isNumber else {
-                return false
-            }
-            sawDigit = true
-        }
-
-        return sawDigit
-    }
-
-    private static func parseTag(in source: String, at startIndex: String.Index) -> ExportHTMLTagToken? {
-        guard source[startIndex] == "<" else {
-            return nil
-        }
-
-        var index = source.index(after: startIndex)
-        skipWhitespace(in: source, index: &index)
-
-        var isClosing = false
-        if index < source.endIndex, source[index] == "/" {
-            isClosing = true
-            index = source.index(after: index)
-            skipWhitespace(in: source, index: &index)
-        } else if index < source.endIndex, source[index] == "!" || source[index] == "?" {
-            guard let tagEnd = tagEndIndex(in: source, after: index) else {
-                return nil
-            }
-            let endIndex = source.index(after: tagEnd)
-            return ExportHTMLTagToken(
-                name: "",
-                isClosing: false,
-                attributes: [],
-                rawRange: startIndex..<endIndex,
-                endIndex: endIndex
-            )
-        }
-
-        let nameStart = index
-        while index < source.endIndex, isNameCharacter(source[index]) {
-            index = source.index(after: index)
-        }
-        guard nameStart < index else {
-            return nil
-        }
-
-        let name = String(source[nameStart..<index]).lowercased()
-        guard let tagEnd = tagEndIndex(in: source, after: index) else {
-            return nil
-        }
-
-        let endIndex = source.index(after: tagEnd)
-        let rawAttributes = String(source[index..<tagEnd])
-
-        if isClosing {
-            guard rawAttributes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return nil
-            }
-            return ExportHTMLTagToken(
-                name: name,
-                isClosing: true,
-                attributes: [],
-                rawRange: startIndex..<endIndex,
-                endIndex: endIndex
-            )
-        }
-
-        guard let attributesSource = attributesSourceWithoutTrailingSlash(rawAttributes),
-              let attributes = parseAttributes(attributesSource) else {
-            return nil
-        }
-
-        return ExportHTMLTagToken(
-            name: name,
-            isClosing: false,
-            attributes: attributes,
-            rawRange: startIndex..<endIndex,
-            endIndex: endIndex
-        )
-    }
-
-    private static func tagEndIndex(in source: String, after startIndex: String.Index) -> String.Index? {
-        var index = startIndex
-        var quote: Character?
-
-        while index < source.endIndex {
-            let character = source[index]
-            if let activeQuote = quote {
-                if character == activeQuote {
-                    quote = nil
-                }
-            } else if character == "\"" || character == "'" {
-                quote = character
-            } else if character == "<" {
-                return nil
-            } else if character == ">" {
-                return index
-            }
-            index = source.index(after: index)
-        }
-
-        return nil
-    }
-
-    private static func attributesSourceWithoutTrailingSlash(_ source: String) -> String? {
-        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasSuffix("/") else {
-            return source
-        }
-
-        var endIndex = source.endIndex
-        while endIndex > source.startIndex {
-            let previous = source.index(before: endIndex)
-            if source[previous].isWhitespace {
-                endIndex = previous
-                continue
-            }
-            if source[previous] == "/" {
-                return String(source[..<previous])
-            }
-            break
-        }
-
-        return nil
-    }
-
-    private static func parseAttributes(_ source: String) -> [ExportHTMLAttribute]? {
-        var attributes: [ExportHTMLAttribute] = []
-        var index = source.startIndex
-
-        while true {
-            skipWhitespace(in: source, index: &index)
-            guard index < source.endIndex else {
-                return attributes
-            }
-            guard isAttributeNameCharacter(source[index]) else {
-                return nil
-            }
-
-            let nameStart = index
-            while index < source.endIndex, isAttributeNameCharacter(source[index]) {
-                index = source.index(after: index)
-            }
-            let name = String(source[nameStart..<index]).lowercased()
-
-            skipWhitespace(in: source, index: &index)
-            guard index < source.endIndex, source[index] == "=" else {
-                attributes.append(ExportHTMLAttribute(name: name, value: ""))
-                continue
-            }
-
-            index = source.index(after: index)
-            skipWhitespace(in: source, index: &index)
-            guard index < source.endIndex else {
-                return nil
-            }
-
-            let value: String
-            if source[index] == "\"" || source[index] == "'" {
-                let quote = source[index]
-                index = source.index(after: index)
-                let valueStart = index
-                while index < source.endIndex, source[index] != quote {
-                    index = source.index(after: index)
-                }
-                guard index < source.endIndex else {
-                    return nil
-                }
-                value = String(source[valueStart..<index])
-                index = source.index(after: index)
-            } else {
-                let valueStart = index
-                while index < source.endIndex, !source[index].isWhitespace {
-                    guard source[index] != "<", source[index] != ">" else {
-                        return nil
-                    }
-                    index = source.index(after: index)
-                }
-                value = String(source[valueStart..<index])
-            }
-
-            attributes.append(ExportHTMLAttribute(name: name, value: value))
-        }
-    }
-
-    private static func indexAfterRawTextElement(
-        named name: String,
-        in source: String,
-        after startIndex: String.Index
-    ) -> String.Index {
-        var searchRange = startIndex..<source.endIndex
-        while let closeStart = source.range(of: "</\(name)", options: [.caseInsensitive], range: searchRange)?.lowerBound {
-            if let closeToken = parseTag(in: source, at: closeStart),
-               closeToken.isClosing,
-               closeToken.name == name {
-                return closeToken.endIndex
-            }
-
-            searchRange = source.index(after: closeStart)..<source.endIndex
-        }
-
-        return source.endIndex
     }
 
     private static func indexAfterElement(
@@ -649,7 +386,7 @@ private struct ExportHTMLProcessor {
                 continue
             }
 
-            guard let token = parseTag(in: source, at: index) else {
+            guard let token = HTMLTokenizer.parseTag(in: source, at: index) else {
                 index = source.index(after: index)
                 continue
             }
@@ -671,65 +408,9 @@ private struct ExportHTMLProcessor {
         return source.endIndex
     }
 
-    private static func skipWhitespace(in source: String, index: inout String.Index) {
-        while index < source.endIndex, source[index].isWhitespace {
-            index = source.index(after: index)
-        }
-    }
-
-    private static func isNameCharacter(_ character: Character) -> Bool {
-        character.isLetter || character.isNumber || character == "-" || character == ":"
-    }
-
-    private static func isAttributeNameCharacter(_ character: Character) -> Bool {
-        character.isLetter || character.isNumber || character == "-" || character == "_" || character == ":"
-    }
-}
-
-private struct ExportHTMLTagToken {
-    let name: String
-    let isClosing: Bool
-    let attributes: [ExportHTMLAttribute]
-    let rawRange: Range<String.Index>
-    let endIndex: String.Index
-
-    var isContentSecurityPolicyMeta: Bool {
-        firstAttribute(named: "http-equiv")?.decodedValue.lowercased() == "content-security-policy"
-    }
-
-    func hasAttribute(named name: String) -> Bool {
-        attributes.contains { $0.name == name }
-    }
-
-    func firstAttribute(named name: String) -> ExportHTMLAttribute? {
-        attributes.first { $0.name == name }
-    }
-}
-
-private struct ExportHTMLAttribute {
-    let name: String
-    let value: String
-
-    var decodedValue: String {
-        value.decodedHTMLAttribute
-    }
-}
-
-private struct ExportHTMLSourceSetCandidate {
-    let source: String
-    let descriptor: String?
 }
 
 private extension String {
-    var decodedHTMLAttribute: String {
-        replacingOccurrences(of: "&quot;", with: "\"")
-            .replacingOccurrences(of: "&#39;", with: "'")
-            .replacingOccurrences(of: "&#x27;", with: "'")
-            .replacingOccurrences(of: "&lt;", with: "<")
-            .replacingOccurrences(of: "&gt;", with: ">")
-            .replacingOccurrences(of: "&amp;", with: "&")
-    }
-
     var containsWaferScheme: Bool {
         range(
             of: #"(?i)(^|[^a-z0-9+.-])wafer-[a-z0-9+.-]*:"#,

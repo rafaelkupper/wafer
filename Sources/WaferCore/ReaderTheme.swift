@@ -87,6 +87,8 @@ public enum ReaderTheme {
         styleSheet(for: current)
     }
 
+    public static func color(fromHex hex: String) -> NSColor { hex.readerColor }
+
     public static func styleSheet(for palette: ReaderThemePalette) -> String {
         "\(generatedRootBlock(for: palette))\n\n\(styleSheetBody)"
     }

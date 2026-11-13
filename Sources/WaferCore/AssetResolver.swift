@@ -23,8 +23,8 @@ public final class AssetResolver {
         }
 
         if trimmed.hasPrefix("#"), let baseURL {
-            var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
-            components?.fragment = String(trimmed.dropFirst())
+            var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: true)
+            components?.fragment = String(trimmed.dropFirst()).removingPercentEncoding ?? String(trimmed.dropFirst())
             return components?.url
         }
 
@@ -47,8 +47,8 @@ public final class AssetResolver {
 
         var resolvedURL = URL(fileURLWithPath: pathPart, relativeTo: directoryURL).standardizedFileURL
         if let fragment {
-            var components = URLComponents(url: resolvedURL, resolvingAgainstBaseURL: false)
-            components?.fragment = fragment
+            var components = URLComponents(url: resolvedURL, resolvingAgainstBaseURL: true)
+            components?.fragment = fragment.removingPercentEncoding ?? fragment
             resolvedURL = components?.url ?? resolvedURL
         }
 
@@ -80,7 +80,7 @@ public final class AssetResolver {
     }
 
     public func classify(_ url: URL) -> LinkTarget {
-        if let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+        if let scheme = url.scheme?.lowercased(), LinkURLPolicy.externalSchemes.contains(scheme) {
             return .external(url)
         }
 
@@ -92,6 +92,6 @@ public final class AssetResolver {
             return .otherFile(url.standardizedFileURLPreservingFragment())
         }
 
-        return .external(url)
+        return .unresolved(url.absoluteString)
     }
 }

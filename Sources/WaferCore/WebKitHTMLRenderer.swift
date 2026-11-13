@@ -13,6 +13,7 @@ public final class WebKitHTMLRenderer {
     private let target: RenderTarget
     private let wikiLinkIndex: WikiLinkIndex?
     private let annotatesSourceLines: Bool
+    private let allowsPreviewLocalImages: Bool
     private let codeSyntaxHighlighter = CodeSyntaxHighlighter()
 
     /// `annotatesSourceLines` adds `data-source-line` attributes to blocks for
@@ -23,8 +24,10 @@ public final class WebKitHTMLRenderer {
         palette: ReaderThemePalette = .dark,
         target: RenderTarget = .reader,
         wikiLinkIndex: WikiLinkIndex? = nil,
-        annotatesSourceLines: Bool = false
+        annotatesSourceLines: Bool = false,
+        allowsPreviewLocalImages: Bool = true
     ) {
+        self.allowsPreviewLocalImages = allowsPreviewLocalImages
         self.assetResolver = assetResolver
         self.palette = palette
         self.target = target
@@ -58,14 +61,16 @@ public final class WebKitHTMLRenderer {
             reservedHeadingAnchorIDs: Set(outlineItems.map(\.anchorID)),
             target: target,
             wikiLinkIndex: wikiLinkIndex,
-            sourceLineMap: annotatesSourceLines ? document.sourceLineMap : nil
+            sourceLineMap: annotatesSourceLines ? document.sourceLineMap : nil,
+            allowsPreviewLocalImages: allowsPreviewLocalImages
         )
         var frontMatterHTML = visitor.renderFrontMatter(document.frontMatter)
         if annotatesSourceLines, !frontMatterHTML.isEmpty {
             frontMatterHTML = WebKitHTMLRenderVisitor.addingSourceLine(1, toFirstElementIn: frontMatterHTML)
         }
         let renderedBody = visitor.visit(document.ast)
-        let body = frontMatterHTML + renderedBody + visitor.renderFootnotesSection()
+        let footnotes = visitor.renderFootnotesSection()
+        let body = frontMatterHTML + renderedBody + footnotes + visitor.finishRawHTML()
         let cspMetaTag: String
         let katexStyleSheet: String
         let rendererScripts: String
@@ -95,7 +100,7 @@ public final class WebKitHTMLRenderer {
         }
         let html = """
         <!doctype html>
-        <html lang="en">
+        <html>
         <head>
           <meta charset="utf-8">
           <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -162,10 +167,10 @@ public final class WebKitHTMLRenderer {
 
         return """
         \(externalScripts)
-        <script nonce="\(nonce.escapedHTMLAttribute)">
-        \(asyncRendererCoordinatorScript())
-        \(includesMermaid ? mermaidBootstrapScript(for: palette) : "")
-        \(includesMath ? katexBootstrapScript() : "")
+        <script nonce="\(nonce.escapedHTMLAttribute)" data-wafer-renderer="\(rendererConfiguration(for: palette).escapedHTMLAttribute)">
+        \(asyncRendererScript)
+        \(includesMermaid ? mermaidScript : "")
+        \(includesMath ? mathScript : "")
         </script>
         """
     }
@@ -179,686 +184,6 @@ public final class WebKitHTMLRenderer {
         return "<script src=\"\(source.escapedHTMLAttribute)\" nonce=\"\(nonce.escapedHTMLAttribute)\"></script>"
     }
 
-    private static func asyncRendererCoordinatorScript() -> String {
-        """
-    window.waferAsyncRenderer = (function() {
-      var pending = 0;
-      var didNotify = false;
-
-      function notifyContentReady() {
-        if (
-          window.webkit &&
-          window.webkit.messageHandlers &&
-          window.webkit.messageHandlers.waferContentReady
-        ) {
-          window.webkit.messageHandlers.waferContentReady.postMessage(document.querySelector('meta[name="wafer-navigation"]')?.content || "");
-        }
-      }
-
-      function settleThenNotify() {
-        if (pending > 0) {
-          return;
-        }
-        function notifyOnce() {
-          if (didNotify) {
-            return;
-          }
-          didNotify = true;
-          notifyContentReady();
-        }
-
-        setTimeout(notifyOnce, 0);
-        if (typeof requestAnimationFrame === 'function') {
-          requestAnimationFrame(function() {
-            requestAnimationFrame(notifyOnce);
-          });
-        }
-      }
-
-      return {
-        beginTask: function() {
-          pending += 1;
-          var didFinish = false;
-          return function() {
-            if (didFinish) {
-              return;
-            }
-            didFinish = true;
-            pending = Math.max(pending - 1, 0);
-            settleThenNotify();
-          };
-        }
-      };
-    })();
-    """
-    }
-
-    private static func mermaidBootstrapScript(for palette: ReaderThemePalette) -> String {
-        """
-    (function() {
-      var finishMermaidRender = window.waferAsyncRenderer.beginTask();
-
-      function settleThenFinish() {
-        var didNotify = false;
-        function finishOnce() {
-          if (didNotify) {
-            return;
-          }
-          didNotify = true;
-          finishMermaidRender();
-        }
-
-        setTimeout(finishOnce, 0);
-        if (typeof requestAnimationFrame === 'function') {
-          requestAnimationFrame(function() {
-            requestAnimationFrame(finishOnce);
-          });
-        }
-      }
-
-      function messageFor(error) {
-        if (!error) {
-          return 'Unknown Mermaid render error.';
-        }
-        if (typeof error === 'string') {
-          return error;
-        }
-        return error.str || error.message || String(error);
-      }
-
-      function showError(figure, message) {
-        figure.classList.add('has-error');
-        figure.classList.remove('is-rendered');
-
-        var inspectButton = figure.querySelector('.md-mermaid-open');
-        if (inspectButton) {
-          inspectButton.hidden = true;
-        }
-
-        var output = figure.querySelector('.md-mermaid-output');
-        if (output) {
-          output.replaceChildren();
-        }
-
-        var error = figure.querySelector('.md-mermaid-error');
-        if (error) {
-          error.hidden = false;
-          error.textContent = 'Unable to render Mermaid diagram: ' + message;
-        }
-      }
-
-      function replaceAllText(text, oldValue, newValue) {
-        return text.split(oldValue).join(newValue);
-      }
-
-      function cloneSVGForInspector(sourceSVG, figure) {
-        var clone = sourceSVG.cloneNode(true);
-        var diagramID = figure.getAttribute('data-wafer-mermaid-id') || 'diagram';
-        var prefix = 'inspect-' + diagramID + '-';
-        var idMap = [];
-        var idElements = clone.hasAttribute('id') ? [clone] : [];
-
-        idElements = idElements.concat(Array.prototype.slice.call(clone.querySelectorAll('[id]')));
-        idElements.forEach(function(element) {
-          var oldID = element.getAttribute('id');
-          var newID = prefix + oldID;
-          idMap.push([oldID, newID]);
-          element.setAttribute('id', newID);
-        });
-
-        var elements = [clone].concat(Array.prototype.slice.call(clone.querySelectorAll('*')));
-        elements.forEach(function(element) {
-          Array.prototype.slice.call(element.attributes || []).forEach(function(attribute) {
-            var value = attribute.value;
-            idMap.forEach(function(pair) {
-              value = replaceAllText(value, 'url(#' + pair[0] + ')', 'url(#' + pair[1] + ')');
-              value = replaceAllText(value, '#' + pair[0], '#' + pair[1]);
-            });
-            if (value !== attribute.value) {
-              element.setAttribute(attribute.name, value);
-            }
-          });
-        });
-
-        Array.prototype.slice.call(clone.querySelectorAll('style')).forEach(function(styleElement) {
-          var text = styleElement.textContent || '';
-          idMap.forEach(function(pair) {
-            text = replaceAllText(text, '#' + pair[0], '#' + pair[1]);
-          });
-          styleElement.textContent = text;
-        });
-
-        return clone;
-      }
-
-      function svgNaturalSize(svg) {
-        var viewBox = svg.viewBox && svg.viewBox.baseVal;
-        if (viewBox && viewBox.width > 0 && viewBox.height > 0) {
-          return { width: viewBox.width, height: viewBox.height };
-        }
-
-        var rect = svg.getBoundingClientRect();
-        return {
-          width: Math.max(rect.width, 1),
-          height: Math.max(rect.height, 1)
-        };
-      }
-
-      function clamp(value, minimum, maximum) {
-        return Math.min(Math.max(value, minimum), maximum);
-      }
-
-      function ensureDiagramInspector() {
-        if (window.waferDiagramInspector) {
-          return window.waferDiagramInspector;
-        }
-
-        var overlay = document.createElement('div');
-        overlay.className = 'md-diagram-inspector';
-        overlay.hidden = true;
-        overlay.setAttribute('\(ExportSanitizer.chromeAttributeName)', '\(ExportSanitizer.chromeAttributeValue)');
-        overlay.setAttribute('role', 'dialog');
-        overlay.setAttribute('aria-modal', 'true');
-        overlay.setAttribute('aria-label', 'Diagram inspector');
-        overlay.innerHTML = [
-          '<div class="md-diagram-inspector-surface">',
-          '  <div class="md-diagram-inspector-toolbar">',
-          '    <button type="button" data-action="zoom-out" aria-label="Zoom out">-</button>',
-          '    <button type="button" data-action="zoom-in" aria-label="Zoom in">+</button>',
-          '    <button type="button" data-action="fit">Fit</button>',
-          '    <button type="button" data-action="reset">Reset</button>',
-          '    <button type="button" data-action="copy">Copy SVG</button>',
-          '    <span class="md-diagram-inspector-status" aria-live="polite"></span>',
-          '    <button type="button" data-action="close" aria-label="Close diagram inspector">Close</button>',
-          '  </div>',
-          '  <div class="md-diagram-inspector-viewport" tabindex="0">',
-          '    <div class="md-diagram-inspector-canvas"></div>',
-          '  </div>',
-          '</div>'
-        ].join('');
-
-        document.body.appendChild(overlay);
-
-        var inspector = {
-          overlay: overlay,
-          viewport: overlay.querySelector('.md-diagram-inspector-viewport'),
-          canvas: overlay.querySelector('.md-diagram-inspector-canvas'),
-          status: overlay.querySelector('.md-diagram-inspector-status'),
-          trigger: null,
-          sourceSVGMarkup: '',
-          lastScroll: null,
-          naturalWidth: 1,
-          naturalHeight: 1,
-          scale: 1,
-          translateX: 0,
-          translateY: 0,
-          isDragging: false,
-          lastPointerX: 0,
-          lastPointerY: 0
-        };
-
-        function setStatus(message) {
-          inspector.status.textContent = message || '';
-        }
-
-        function applyTransform() {
-          inspector.canvas.style.transform = 'translate(' + inspector.translateX + 'px, ' + inspector.translateY + 'px) scale(' + inspector.scale + ')';
-        }
-
-        function centerAtCurrentScale() {
-          inspector.translateX = (inspector.viewport.clientWidth - inspector.naturalWidth * inspector.scale) / 2;
-          inspector.translateY = (inspector.viewport.clientHeight - inspector.naturalHeight * inspector.scale) / 2;
-          applyTransform();
-        }
-
-        function fitToView() {
-          var availableWidth = Math.max(inspector.viewport.clientWidth - 48, 1);
-          var availableHeight = Math.max(inspector.viewport.clientHeight - 48, 1);
-          var fitScale = Math.min(
-            availableWidth / inspector.naturalWidth,
-            availableHeight / inspector.naturalHeight
-          );
-          inspector.scale = clamp(Math.min(fitScale, 1), 0.1, 6);
-          centerAtCurrentScale();
-        }
-
-        function resetView() {
-          inspector.scale = 1;
-          centerAtCurrentScale();
-        }
-
-        function zoomAt(nextScale, viewportX, viewportY) {
-          nextScale = clamp(nextScale, 0.1, 6);
-          var contentX = (viewportX - inspector.translateX) / inspector.scale;
-          var contentY = (viewportY - inspector.translateY) / inspector.scale;
-
-          inspector.scale = nextScale;
-          inspector.translateX = viewportX - contentX * nextScale;
-          inspector.translateY = viewportY - contentY * nextScale;
-          applyTransform();
-        }
-
-        function zoomBy(multiplier) {
-          zoomAt(
-            inspector.scale * multiplier,
-            inspector.viewport.clientWidth / 2,
-            inspector.viewport.clientHeight / 2
-          );
-        }
-
-        function viewportPointFor(event) {
-          var rect = inspector.viewport.getBoundingClientRect();
-          return {
-            x: event.clientX - rect.left,
-            y: event.clientY - rect.top
-          };
-        }
-
-        function wheelDelta(value, mode, viewportSize) {
-          if (mode === 1) {
-            return value * 16;
-          }
-          if (mode === 2) {
-            return value * viewportSize;
-          }
-          return value;
-        }
-
-        function shouldZoomForWheel(event, deltaX, deltaY) {
-          if (event.ctrlKey || event.metaKey || event.altKey) {
-            return true;
-          }
-          if (event.deltaMode !== 0) {
-            return true;
-          }
-          return Math.abs(deltaY) > 40 && Math.abs(deltaX) < Math.abs(deltaY) * 0.3;
-        }
-
-        function handleWheel(event) {
-          event.preventDefault();
-          event.stopPropagation();
-
-          if (!inspector.viewport.contains(event.target)) {
-            return;
-          }
-
-          var deltaX = wheelDelta(event.deltaX, event.deltaMode, inspector.viewport.clientWidth);
-          var deltaY = wheelDelta(event.deltaY, event.deltaMode, inspector.viewport.clientHeight);
-
-          if (shouldZoomForWheel(event, deltaX, deltaY)) {
-            var point = viewportPointFor(event);
-            zoomAt(inspector.scale * Math.exp(-deltaY * 0.002), point.x, point.y);
-            return;
-          }
-
-          inspector.translateX -= deltaX;
-          inspector.translateY -= deltaY;
-          applyTransform();
-        }
-
-        function handleGestureStart(event) {
-          event.preventDefault();
-          event.stopPropagation();
-          inspector.gestureStartScale = inspector.scale;
-        }
-
-        function handleGestureChange(event) {
-          event.preventDefault();
-          event.stopPropagation();
-          var point = viewportPointFor(event);
-          zoomAt(inspector.gestureStartScale * event.scale, point.x, point.y);
-        }
-
-        function fallbackCopyText(text) {
-          var textarea = document.createElement('textarea');
-          textarea.value = text;
-          textarea.setAttribute('readonly', '');
-          textarea.style.position = 'fixed';
-          textarea.style.left = '-9999px';
-          document.body.appendChild(textarea);
-          textarea.select();
-          try {
-            return document.execCommand('copy');
-          } finally {
-            textarea.remove();
-          }
-        }
-
-        function copySVG() {
-          var text = inspector.sourceSVGMarkup;
-          if (!text) {
-            setStatus('Nothing to copy');
-            return;
-          }
-
-          if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-            navigator.clipboard.writeText(text).then(function() {
-              setStatus('Copied SVG');
-            }).catch(function() {
-              setStatus(fallbackCopyText(text) ? 'Copied SVG' : 'Copy unavailable');
-            });
-            return;
-          }
-
-          setStatus(fallbackCopyText(text) ? 'Copied SVG' : 'Copy unavailable');
-        }
-
-        function closeInspector() {
-          if (overlay.hidden) {
-            return;
-          }
-
-          var trigger = inspector.trigger;
-          var lastScroll = inspector.lastScroll;
-          overlay.hidden = true;
-          overlay.classList.remove('is-open');
-          document.body.classList.remove('md-diagram-inspector-open');
-          inspector.canvas.replaceChildren();
-          inspector.trigger = null;
-          inspector.sourceSVGMarkup = '';
-          setStatus('');
-
-          if (lastScroll) {
-            window.scrollTo(lastScroll.x, lastScroll.y);
-          }
-          if (trigger && typeof trigger.focus === 'function') {
-            trigger.focus({ preventScroll: true });
-          }
-        }
-
-        overlay.addEventListener('click', function(event) {
-          if (event.target === overlay) {
-            closeInspector();
-          }
-        });
-
-        overlay.querySelector('[data-action="zoom-out"]').addEventListener('click', function() {
-          zoomBy(0.82);
-        });
-        overlay.querySelector('[data-action="zoom-in"]').addEventListener('click', function() {
-          zoomBy(1.22);
-        });
-        overlay.querySelector('[data-action="fit"]').addEventListener('click', fitToView);
-        overlay.querySelector('[data-action="reset"]').addEventListener('click', resetView);
-        overlay.querySelector('[data-action="copy"]').addEventListener('click', copySVG);
-        overlay.querySelector('[data-action="close"]').addEventListener('click', closeInspector);
-        overlay.addEventListener('wheel', handleWheel, { passive: false });
-        inspector.viewport.addEventListener('gesturestart', handleGestureStart, { passive: false });
-        inspector.viewport.addEventListener('gesturechange', handleGestureChange, { passive: false });
-
-        inspector.viewport.addEventListener('mousedown', function(event) {
-          if (event.button !== 0) {
-            return;
-          }
-          inspector.isDragging = true;
-          inspector.lastPointerX = event.clientX;
-          inspector.lastPointerY = event.clientY;
-          inspector.viewport.classList.add('is-dragging');
-          event.preventDefault();
-        });
-
-        document.addEventListener('mousemove', function(event) {
-          if (!inspector.isDragging) {
-            return;
-          }
-          inspector.translateX += event.clientX - inspector.lastPointerX;
-          inspector.translateY += event.clientY - inspector.lastPointerY;
-          inspector.lastPointerX = event.clientX;
-          inspector.lastPointerY = event.clientY;
-          applyTransform();
-        });
-
-        document.addEventListener('mouseup', function() {
-          inspector.isDragging = false;
-          inspector.viewport.classList.remove('is-dragging');
-        });
-
-        document.addEventListener('wheel', function(event) {
-          if (overlay.hidden) {
-            return;
-          }
-          event.preventDefault();
-        }, { capture: true, passive: false });
-
-        document.addEventListener('keydown', function(event) {
-          if (overlay.hidden || event.key !== 'Escape') {
-            return;
-          }
-          event.preventDefault();
-          closeInspector();
-        });
-
-        inspector.open = function(figure, trigger) {
-          var sourceSVG = figure.querySelector('.md-mermaid-output svg');
-          if (!sourceSVG) {
-            return;
-          }
-
-          var size = svgNaturalSize(sourceSVG);
-          var clonedSVG = cloneSVGForInspector(sourceSVG, figure);
-          clonedSVG.style.width = size.width + 'px';
-          clonedSVG.style.height = size.height + 'px';
-          clonedSVG.style.maxWidth = 'none';
-          clonedSVG.style.maxHeight = 'none';
-
-          inspector.canvas.replaceChildren(clonedSVG);
-          inspector.trigger = trigger;
-          inspector.sourceSVGMarkup = sourceSVG.outerHTML;
-          inspector.lastScroll = { x: window.scrollX, y: window.scrollY };
-          inspector.naturalWidth = size.width;
-          inspector.naturalHeight = size.height;
-          inspector.scale = 1;
-          inspector.translateX = 0;
-          inspector.translateY = 0;
-          setStatus('');
-
-          overlay.hidden = false;
-          overlay.classList.add('is-open');
-          document.body.classList.add('md-diagram-inspector-open');
-
-          requestAnimationFrame(function() {
-            if (overlay.hidden) {
-              return;
-            }
-            fitToView();
-            inspector.viewport.focus({ preventScroll: true });
-          });
-        };
-
-        inspector.close = closeInspector;
-        window.waferDiagramInspector = inspector;
-        return inspector;
-      }
-
-      function prepareInspectButton(figure) {
-        var inspectButton = figure.querySelector('.md-mermaid-open');
-        if (!inspectButton) {
-          return;
-        }
-
-        inspectButton.addEventListener('click', function(event) {
-          event.preventDefault();
-          event.stopPropagation();
-          ensureDiagramInspector().open(figure, inspectButton);
-        });
-      }
-
-      var figures = Array.prototype.slice.call(document.querySelectorAll('.md-mermaid-diagram'));
-      if (figures.length === 0) {
-        settleThenFinish();
-        return;
-      }
-
-      figures.forEach(prepareInspectButton);
-
-      if (!window.mermaid) {
-        figures.forEach(function(figure) {
-          showError(figure, 'The bundled Mermaid renderer is unavailable.');
-        });
-        settleThenFinish();
-        return;
-      }
-
-      var requestedTheme = null;
-      var pendingFigures = [];
-      var rendering = null;
-      async function renderFigure(figure, index) {
-        try {
-          var source = figure.querySelector('.md-mermaid-source code');
-          var output = figure.querySelector('.md-mermaid-output');
-          if (!source || !output) { throw new Error('The diagram container is missing required markup.'); }
-          var diagramID = figure.getAttribute('data-wafer-mermaid-id') || ('wafer-mermaid-' + (index + 1));
-          var result = await window.mermaid.render(diagramID + '-svg', source.textContent || '');
-          output.innerHTML = result.svg;
-          if (typeof result.bindFunctions === 'function') { result.bindFunctions(output); }
-          var error = figure.querySelector('.md-mermaid-error');
-          if (error) { error.hidden = true; error.textContent = ''; }
-          figure.classList.add('is-rendered');
-          figure.classList.remove('has-error');
-          var inspectButton = figure.querySelector('.md-mermaid-open');
-          if (inspectButton) { inspectButton.hidden = false; }
-        } catch (error) { showError(figure, messageFor(error)); }
-      }
-      async function renderFigures() {
-        while (requestedTheme || pendingFigures.length) {
-          if (requestedTheme) {
-            var configuration = requestedTheme;
-            requestedTheme = null;
-            pendingFigures = [];
-            // Re-query so figures added or removed by the edit-mode preview are included.
-            figures = Array.prototype.slice.call(document.querySelectorAll('.md-mermaid-diagram'));
-            try {
-              window.mermaid.initialize({
-                startOnLoad: false, suppressErrorRendering: true, securityLevel: 'strict',
-                theme: configuration.theme, themeVariables: configuration.variables
-              });
-              for (var index = 0; index < figures.length; index++) {
-                await renderFigure(figures[index], index);
-              }
-            } catch (error) {
-              figures.forEach(function(figure) { showError(figure, messageFor(error)); });
-            }
-            continue;
-          }
-          var batch = pendingFigures;
-          pendingFigures = [];
-          for (var position = 0; position < batch.length; position++) {
-            if (batch[position].isConnected) {
-              await renderFigure(batch[position], position);
-            }
-          }
-        }
-      }
-      window.waferApplyMermaidTheme = function(theme, variables) {
-        requestedTheme = { theme: theme, variables: variables };
-        if (!rendering) {
-          rendering = renderFigures().finally(function() { rendering = null; });
-        }
-        return rendering;
-      };
-      // Edit-mode preview: render figures inserted by an in-place body patch.
-      window.waferRenderMermaidFigures = function(newFigures) {
-        newFigures.forEach(prepareInspectButton);
-        pendingFigures = pendingFigures.concat(newFigures);
-        if (!rendering) {
-          rendering = renderFigures().finally(function() { rendering = null; });
-        }
-        return rendering;
-      };
-      window.waferApplyMermaidTheme('\(palette.mermaid.theme.escapedJavaScriptString)', {
-        \(mermaidThemeVariablesJavaScript(for: palette))
-      }).finally(settleThenFinish);
-    })();
-    """
-    }
-
-    private static func katexBootstrapScript() -> String {
-        """
-    (function() {
-      var finishMathRender = window.waferAsyncRenderer.beginTask();
-
-      function messageFor(error) {
-        if (!error) {
-          return 'Unknown KaTeX render error.';
-        }
-        if (typeof error === 'string') {
-          return error;
-        }
-        return error.message || String(error);
-      }
-
-      function showError(block, message) {
-        block.classList.add('has-error');
-        block.classList.remove('is-rendered');
-
-        var output = block.querySelector('.md-math-output');
-        if (output) {
-          output.replaceChildren();
-        }
-
-        var error = block.querySelector('.md-math-error');
-        if (error) {
-          error.hidden = false;
-          error.textContent = 'Unable to render math: ' + message;
-        }
-      }
-
-      var blocks = Array.prototype.slice.call(document.querySelectorAll('.md-math-display'));
-      if (blocks.length === 0) {
-        finishMathRender();
-        return;
-      }
-
-      if (!window.katex || typeof window.katex.render !== 'function') {
-        blocks.forEach(function(block) {
-          showError(block, 'The bundled KaTeX renderer is unavailable.');
-        });
-        finishMathRender();
-        return;
-      }
-
-      var errorColor = window.getComputedStyle(document.documentElement)
-        .getPropertyValue('--mermaid-error-text-color')
-        .trim() || '#cc0000';
-
-      function renderBlock(block) {
-        var source = block.querySelector('.md-math-source code');
-        var output = block.querySelector('.md-math-output');
-        if (!source || !output) {
-          showError(block, 'The math container is missing required markup.');
-          return;
-        }
-
-        try {
-          window.katex.render(source.textContent || '', output, {
-            displayMode: true,
-            throwOnError: false,
-            errorColor: errorColor
-          });
-
-          var error = block.querySelector('.md-math-error');
-          if (error) {
-            error.hidden = true;
-            error.textContent = '';
-          }
-          block.classList.add('is-rendered');
-          block.classList.remove('has-error');
-        } catch (error) {
-          showError(block, messageFor(error));
-        }
-      }
-
-      blocks.forEach(renderBlock);
-      // Edit-mode preview: render math blocks inserted by an in-place body patch.
-      window.waferRenderMathBlocks = function(newBlocks) {
-        newBlocks.forEach(renderBlock);
-      };
-
-      finishMathRender();
-    })();
-    """
-    }
-
     private static func katexStyleSheet() -> String {
         guard
             let styleSheetURL = ReaderTheme.resourceURL(named: "katex/katex.min.css"),
@@ -870,11 +195,28 @@ public final class WebKitHTMLRenderer {
         return styleSheet.replacingKaTeXFontURLs(relativeTo: styleSheetURL)
     }
 
-    private static func mermaidThemeVariablesJavaScript(for palette: ReaderThemePalette) -> String {
-        (palette.mermaid.themeVariables + [("fontFamily", palette.mermaid.fontFamily)])
-            .map { "            \($0.key): '\($0.value.escapedJavaScriptString)'" }
-            .joined(separator: ",\n")
+    private static let asyncRendererScript = bundledScript(named: "async-renderer.js")
+    private static let mermaidScript = bundledScript(named: "mermaid-bootstrap.js")
+    private static let mathScript = bundledScript(named: "katex-bootstrap.js")
+
+    private static func bundledScript(named name: String) -> String {
+        guard let url = ReaderTheme.resourceURL(named: name), let script = try? String(contentsOf: url, encoding: .utf8) else {
+            preconditionFailure("Missing renderer resource: \(name)")
+        }
+        return script
     }
+
+    private static func rendererConfiguration(for palette: ReaderThemePalette) -> String {
+        let variables = Dictionary(palette.mermaid.themeVariables + [("fontFamily", palette.mermaid.fontFamily)], uniquingKeysWith: { _, last in last })
+        let configuration: [String: Any] = [
+            "theme": palette.mermaid.theme, "variables": variables,
+            "chromeAttributeName": ExportSanitizer.chromeAttributeName,
+            "chromeAttributeValue": ExportSanitizer.chromeAttributeValue,
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: configuration, options: [.sortedKeys])
+        return String(decoding: data, as: UTF8.self)
+    }
+
 }
 
 private struct WebKitHTMLRenderVisitor: MarkupVisitor {
@@ -888,6 +230,8 @@ private struct WebKitHTMLRenderVisitor: MarkupVisitor {
     private(set) var hasWikiLinks = false
     private let footnoteDefinitionsByLabel: [String: FootnoteDefinition]
     private let previewAttachmentStore = PreviewAttachmentStore()
+    private let allowsPreviewLocalImages: Bool
+    private var htmlState = HTMLSanitizer.State()
     private var headingSlugger: HeadingAnchorSlugger
     private var inTableHead = false
     private var currentTableColumn = 0
@@ -921,8 +265,10 @@ private struct WebKitHTMLRenderVisitor: MarkupVisitor {
         reservedHeadingAnchorIDs: Set<String>,
         target: RenderTarget,
         wikiLinkIndex: WikiLinkIndex? = nil,
-        sourceLineMap: [Int]? = nil
+        sourceLineMap: [Int]? = nil,
+        allowsPreviewLocalImages: Bool = true
     ) {
+        self.allowsPreviewLocalImages = allowsPreviewLocalImages
         self.sourceLineMap = sourceLineMap
         self.baseURL = baseURL
         self.assetResolver = assetResolver
@@ -956,6 +302,13 @@ private struct WebKitHTMLRenderVisitor: MarkupVisitor {
             allowsSourceElements: target == .reader
         ))
     }
+
+    private mutating func sanitizeRawHTML(_ source: String) -> String {
+        let sanitizer = htmlSanitizer
+        return sanitizer.sanitize(source, state: &htmlState)
+    }
+
+    mutating func finishRawHTML() -> String { htmlState.finish() }
 
     mutating func visit(_ markup: Markup) -> String {
         markup.accept(&self)
@@ -1308,6 +661,7 @@ private struct WebKitHTMLRenderVisitor: MarkupVisitor {
         }
 
         if target == .preview {
+            guard allowsPreviewLocalImages else { return "<span class=\"md-image-placeholder\">[Local image omitted]</span>" }
             guard let sourceURL = previewAttachmentStore.cidSource(
                 for: url,
                 allowedRootDirectory: readAccessDirectoryURL
@@ -1453,7 +807,7 @@ private struct WebKitHTMLRenderVisitor: MarkupVisitor {
 
     mutating func visitHTMLBlock(_ html: HTMLBlock) -> String {
         let source = html.format()
-        let sanitized = htmlSanitizer.sanitize(source)
+        let sanitized = sanitizeRawHTML(source)
         let trimmedSanitized = sanitized.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedSanitized.isEmpty else {
             return ""
@@ -1467,7 +821,7 @@ private struct WebKitHTMLRenderVisitor: MarkupVisitor {
 
     mutating func visitInlineHTML(_ inlineHTML: InlineHTML) -> String {
         let source = inlineHTML.format()
-        let sanitized = htmlSanitizer.sanitize(source)
+        let sanitized = sanitizeRawHTML(source)
         if !sanitized.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return sanitized
         }
@@ -1733,7 +1087,7 @@ private struct WebKitHTMLRenderVisitor: MarkupVisitor {
             }
             .joined(separator: "/")
 
-        if let fragment = standardizedFileURL.fragment {
+        if let fragment = standardizedFileURL.decodedFragment {
             let encodedFragment = fragment.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed) ?? fragment
             return encodedPath + "#" + encodedFragment
         }
@@ -1741,10 +1095,11 @@ private struct WebKitHTMLRenderVisitor: MarkupVisitor {
         return encodedPath
     }
 
-    private func resolvedLinkHref(for destination: String) -> String {
-        resolvedHTMLURLString(
-            for: assetResolver.resolve(destination: destination, relativeTo: baseURL)
-        ) ?? destination
+    private func resolvedLinkHref(for destination: String) -> String? {
+        guard LinkURLPolicy.allows(destination),
+              let url = assetResolver.resolve(destination: destination, relativeTo: baseURL),
+              LinkURLPolicy.allows(url) else { return nil }
+        return resolvedHTMLURLString(for: url)
     }
 
     private func footnoteBodyHTML(content: String, backref: String) -> String {
@@ -1775,11 +1130,12 @@ private struct WebKitHTMLRenderVisitor: MarkupVisitor {
             return "#\(fragment)"
         }
 
-        return resolvedLinkHref(for: "#\(fragment)")
+        return resolvedLinkHref(for: "#\(fragment)") ?? "#\(fragment)"
     }
 
-    private func anchorHTML(href: String, bodyHTML: String) -> String {
-        "<a href=\"\(href.escapedHTMLAttribute)\">\(bodyHTML)</a>"
+    private func anchorHTML(href: String?, bodyHTML: String) -> String {
+        guard let href else { return bodyHTML }
+        return "<a href=\"\(href.escapedHTMLAttribute)\">\(bodyHTML)</a>"
     }
 
     private func htmlImageSource(for rawSource: String) -> String? {
@@ -1795,6 +1151,7 @@ private struct WebKitHTMLRenderVisitor: MarkupVisitor {
         }
 
         if target == .preview {
+            guard allowsPreviewLocalImages else { return nil }
             return previewAttachmentStore.cidSource(
                 for: url,
                 allowedRootDirectory: readAccessDirectoryURL
@@ -1810,20 +1167,7 @@ private struct WebKitHTMLRenderVisitor: MarkupVisitor {
     }
 
     private func htmlLinkHref(for rawHref: String) -> String? {
-        guard let url = assetResolver.resolve(destination: rawHref, relativeTo: baseURL) else {
-            return nil
-        }
-
-        if url.isFileURL {
-            return resolvedHTMLURLString(for: url)
-        }
-
-        switch url.scheme?.lowercased() {
-        case "http", "https", "mailto":
-            return url.absoluteString
-        default:
-            return nil
-        }
+        resolvedLinkHref(for: rawHref)
     }
 
     static func webViewAssetURLString(for fileURL: URL) -> String {

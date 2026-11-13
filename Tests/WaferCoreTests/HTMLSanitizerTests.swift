@@ -2,14 +2,14 @@ import XCTest
 @testable import WaferCore
 
 final class HTMLSanitizerTests: XCTestCase {
-    func testPreservesDetailsSummaryAndUnbalancedAllowedTags() {
+    func testBalancesDetailsSummaryAndUnclosedAllowedTags() {
         XCTAssertEqual(
             sanitize("<details><summary>x</summary>body</details>"),
             "<details><summary>x</summary>body</details>"
         )
         XCTAssertEqual(
             sanitize("<details><summary>x</summary>"),
-            "<details><summary>x</summary>"
+            "<details><summary>x</summary></details>"
         )
     }
 
@@ -25,7 +25,7 @@ final class HTMLSanitizerTests: XCTestCase {
         )
         XCTAssertEqual(
             sanitize("<abbr title=\"a &quot;tip&quot;\" data-x=\"1\">API</abbr>"),
-            "<abbr title=\"a &amp;quot;tip&amp;quot;\">API</abbr>"
+            "<abbr title=\"a &quot;tip&quot;\">API</abbr>"
         )
     }
 
@@ -34,7 +34,7 @@ final class HTMLSanitizerTests: XCTestCase {
 
         XCTAssertEqual(
             output,
-            #"<img src="wafer-remote://image?url=https://h/a.png?x=1&amp;y=2" alt="a &amp;quot;q&amp;quot;" width="320" />"#
+            #"<img src="wafer-remote://image?url=https://h/a.png?x=1&amp;y=2" alt="a &quot;q&quot;" width="320" />"#
         )
         XCTAssertFalse(output.contains("onerror"))
         XCTAssertFalse(output.contains("height="))
@@ -49,7 +49,7 @@ final class HTMLSanitizerTests: XCTestCase {
     func testSanitizesLinksAndSuppressesEmptyUnsafeAnchors() {
         XCTAssertEqual(
             sanitize(#"<a href="https://h" title="a&quot; onclick=&quot;x">x</a>"#),
-            #"<a href="https://h" title="a&amp;quot; onclick=&amp;quot;x">x</a>"#
+            #"<a href="https://h" title="a&quot; onclick=&quot;x">x</a>"#
         )
         XCTAssertEqual(sanitize(#"<a href="mailto:hello@example.com">mail</a>"#), #"<a href="mailto:hello@example.com">mail</a>"#)
         XCTAssertEqual(sanitize(#"<a href="javascript:alert(1)" onclick="x">x</a>"#), "x")

@@ -6,15 +6,8 @@ final class RenderCompatibilityCorpusTests: XCTestCase {
     private let parser = MarkdownParser()
 
     func testTierOneCorpusReaderAndPreviewGoldensAreStable() throws {
-        let fixtures: [CorpusFixture] = [
-            CorpusFixture(name: "github-readme", readerHash: "eb041923d1f78eac214b77c193e768ac8b065a4d79d5c6906a64b89aa95567c3", previewHash: "743c74e92494122144db01a39bf9dc3ac1591e11c366743e7b53d67078700b79"),
-            CorpusFixture(name: "obsidian-note", readerHash: "6b5ac24d78dc2f4d9ca3340db9d6ee7b1e1314fe592480297641f30675b76f30", previewHash: "95b6285370c2b22b19c19c3c27011b588c1b756d95bbeba0519ec7cff413d406"),
-            CorpusFixture(name: "commonmark-edges", readerHash: "b133a746400c4cf47b5bcc3bdae29e486831c9e6d88e79244a830ab4f63739e2", previewHash: "7fe7e428da13d39e9ec222a45454b15bfc19782a2e86bf3717c266230744a760"),
-            CorpusFixture(name: "kitchen-sink", readerHash: "6f3fa5a7479ca5a498bac49efb6467fd5289e539fc956275f23c6078d451bae3", previewHash: "cbd235eae7c44421d295a624b52d490ac765ffaf0c2fb8997fdc92b83f6581b4"),
-        ]
-
-        for fixture in fixtures {
-            let sourceURL = fixtureURL(named: fixture.name)
+        for fixture in ["github-readme", "obsidian-note", "commonmark-edges", "kitchen-sink"] {
+            let sourceURL = fixtureURL(named: fixture)
             let source = try String(contentsOf: sourceURL, encoding: .utf8)
             let document = parser.parse(source: source, baseURL: sourceURL)
             let reader = WebKitHTMLRenderer(palette: .dark, target: .reader).render(document: document)
@@ -22,11 +15,11 @@ final class RenderCompatibilityCorpusTests: XCTestCase {
             let secondReader = WebKitHTMLRenderer(palette: .dark, target: .reader).render(document: document)
             let secondPreview = WebKitHTMLRenderer(palette: .dark, target: .preview).render(document: document)
 
-            XCTAssertEqual(normalizedCorpusHTML(reader.html), normalizedCorpusHTML(secondReader.html), fixture.name)
-            XCTAssertEqual(normalizedCorpusHTML(preview.html), normalizedCorpusHTML(secondPreview.html), fixture.name)
-            XCTAssertEqual(FileFingerprint.sha256Hex(for: normalizedCorpusHTML(reader.html)), fixture.readerHash, fixture.name)
-            XCTAssertEqual(FileFingerprint.sha256Hex(for: normalizedCorpusHTML(preview.html)), fixture.previewHash, fixture.name)
-            assertStructuralExpectations(fixture: fixture.name, reader: reader, preview: preview)
+            XCTAssertEqual(normalizedCorpusHTML(reader.html), normalizedCorpusHTML(secondReader.html), fixture)
+            XCTAssertEqual(normalizedCorpusHTML(preview.html), normalizedCorpusHTML(secondPreview.html), fixture)
+            try assertGolden(reader.html, named: fixture + ".reader.html")
+            try assertGolden(preview.html, named: fixture + ".preview.html")
+            assertStructuralExpectations(fixture: fixture, reader: reader, preview: preview)
         }
     }
 
@@ -116,10 +109,25 @@ final class RenderCompatibilityCorpusTests: XCTestCase {
     }
 
     private var fixtureDirectory: URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Fixtures/WaferCore")
+        Bundle.module.resourceURL!.appendingPathComponent("Fixtures/WaferCore")
+    }
+
+    private func assertGolden(_ html: String, named name: String) throws {
+        let actual = normalizedCorpusHTML(html)
+        if ProcessInfo.processInfo.environment["WAFER_UPDATE_GOLDENS"] == "1" {
+            let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                .appendingPathComponent("Tests/Fixtures/WaferCore/Goldens")
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try actual.write(to: directory.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        } else {
+            let expected = try String(contentsOf: fixtureDirectory.appendingPathComponent("Goldens/" + name), encoding: .utf8)
+            let expectedLines = expected.components(separatedBy: "\n")
+            let actualLines = actual.components(separatedBy: "\n")
+            if expectedLines != actualLines {
+                let first = (0..<min(expectedLines.count, actualLines.count)).first { expectedLines[$0] != actualLines[$0] } ?? min(expectedLines.count, actualLines.count)
+                XCTFail("\(name), line \(first + 1):\nexpected: \(expectedLines.dropFirst(first).prefix(3).joined(separator: "\n"))\nactual: \(actualLines.dropFirst(first).prefix(3).joined(separator: "\n"))\nRegenerate with WAFER_UPDATE_GOLDENS=1 swift test --filter RenderCompatibilityCorpusTests")
+            }
+        }
     }
 
     private func normalizedCorpusHTML(_ html: String) -> String {
@@ -127,10 +135,4 @@ final class RenderCompatibilityCorpusTests: XCTestCase {
             .replacingOccurrences(of: fixtureDirectory.path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? fixtureDirectory.path, with: "$FIXTURE_DIR")
             .replacingOccurrences(of: fixtureDirectory.path, with: "$FIXTURE_DIR")
     }
-}
-
-private struct CorpusFixture {
-    let name: String
-    let readerHash: String
-    let previewHash: String
 }

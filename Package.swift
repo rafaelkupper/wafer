@@ -52,6 +52,14 @@ let package = Package(
         ),
         .testTarget(
             name: "WaferCoreTests",
+            dependencies: ["WaferCore"],
+            path: "Tests",
+            exclude: ["WaferAppTests", "WaferQuickLookTests", "JavaScript", "ReleaseTools"],
+            sources: ["WaferCoreTests"],
+            resources: [.copy("Fixtures")]
+        ),
+        .testTarget(
+            name: "WaferQuickLookTests",
             dependencies: ["WaferCore"]
         ),
         .testTarget(
