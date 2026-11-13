@@ -110,9 +110,9 @@ public final class WebKitHTMLRenderer {
           </style>
         </head>
         <body>
-          <div id="write">
+          <main id="write">
           \(body)
-          </div>
+          </main>
           \(rendererScripts)
         </body>
         </html>
