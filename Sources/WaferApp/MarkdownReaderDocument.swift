@@ -11,6 +11,7 @@ final class MarkdownReaderDocument: NSDocument {
         _ completion: @escaping (WebKitRenderOutput) -> Void
     ) -> DispatchWorkItem
     typealias WikiLinkIndexProvider = @MainActor () -> WikiLinkIndex?
+    typealias LibrarySnapshotProvider = @MainActor () -> LibrarySnapshot
     typealias MarkdownLinkOpener = @MainActor (_ url: URL, _ anchorID: String?) -> Void
     typealias LinkTargetHandler = @MainActor (LinkTarget) -> Void
     typealias ReaderControllerFactory = () -> WebKitReaderViewController
@@ -18,10 +19,60 @@ final class MarkdownReaderDocument: NSDocument {
     typealias FileMonitorFactory =
         @MainActor (_ fileURL: URL, _ onChange: @escaping () -> Void) -> FileChangeMonitoring
 
+    /// The source read in progress, if any. A read that is superseded or
+    /// abandoned bumps `loadGeneration`, and its completion is discarded.
+    private enum LoadState: Equatable {
+        case idle
+        /// Reading the file the document was opened with.
+        case opening(URL)
+        /// Reading another file to show in place of the current one.
+        case navigating(URL)
+        /// Re-reading the current file (file monitor or Cmd-R).
+        case reloading(URL)
+
+        var url: URL? {
+            switch self {
+            case .idle:
+                nil
+            case .opening(let url), .navigating(let url), .reloading(let url):
+                url
+            }
+        }
+
+        /// Back and Forward wait until an open or navigation read finishes.
+        var isNavigating: Bool {
+            switch self {
+            case .opening, .navigating:
+                true
+            case .idle, .reloading:
+                false
+            }
+        }
+    }
+
+    /// A heading to scroll to once the page that contains it is ready.
+    private enum PendingAnchor: Equatable {
+        case none
+        /// Waits for the render of a newly loaded file.
+        case beforeRender(String)
+        /// Scrolls when the reader next finishes loading ready content.
+        case afterPageLoad(String)
+
+        var id: String? {
+            switch self {
+            case .none:
+                nil
+            case .beforeRender(let id), .afterPageLoad(let id):
+                id
+            }
+        }
+    }
+
     private let assetResolver: AssetResolver
     private let scrollStateStore: ScrollStateStore
-    private let renderWorker: MarkdownRenderWorker
-    private let renderScheduler: RenderScheduler
+    private let renderWorker = MarkdownRenderWorker()
+    /// Replaces the render worker in tests.
+    private let injectedRenderScheduler: RenderScheduler?
     private let markdownLinkOpener: MarkdownLinkOpener
     private let linkTargetHandler: LinkTargetHandler
     private let readerControllerFactory: ReaderControllerFactory
@@ -33,28 +84,28 @@ final class MarkdownReaderDocument: NSDocument {
     private let scrollPersistenceDebounceInterval: TimeInterval
     private let wikiLinkIndexProvider: WikiLinkIndexProvider
     private let sourceLoadErrorHandler: @MainActor (Error) -> Void
-    private let editConflictResolver: EditConflictResolver
-    private let autosaveDelay: TimeInterval
-    private let liveRenderInterval: TimeInterval
+    private let editMode: MarkdownEditCoordinator
 
-    private var sourceText = ""
-    private var fileFingerprint = ""
+    /// The file as shown: its text (the editor's text while editing), its
+    /// format, and the fingerprint of the bytes last loaded or saved. Nil
+    /// until the first read succeeds.
+    private var source: LoadedMarkdownSource?
     private weak var readerController: WebKitReaderViewController?
     private weak var documentWindowController: DocumentWindowController?
     private var fileMonitor: FileChangeMonitoring?
     private var renderWorkItem: DispatchWorkItem?
     private var renderToken = UUID()
-    private var sourceLoadToken = UUID()
-    private var loadingSourceURL: URL?
-    private var initialSourceFailureHandler: (@MainActor () -> Void)?
-    private var isNavigating = false
+    private var loadState = LoadState.idle
+    private var loadGeneration = 0
+    /// A reload requested while a read was running; true when it was
+    /// explicit (Cmd-R). It runs against whatever file that read leaves.
     private var deferredReload: Bool?
+    private var initialSourceFailureHandler: (@MainActor () -> Void)?
     private var currentStatistics: DocumentStatistics?
     private var currentSidebarEntries: [DocumentSidebarEntry] = []
     private var currentOutlineItems: [DocumentOutlineItem] = []
     private var currentActiveHeadingID: String?
-    private var pendingNavigationAnchorID: String?
-    private var consumePendingAnchorOnNextNavigationFinish = false
+    private var pendingAnchor = PendingAnchor.none
     private var pendingScrollFraction: Double?
     private var scrollPersistenceWorkItem: DispatchWorkItem?
     private var scrollPersistenceGeneration = 0
@@ -62,29 +113,16 @@ final class MarkdownReaderDocument: NSDocument {
     private var lastRenderedWikiLinkIndex: WikiLinkIndex?
     private var lastOutputHadWikiLinks = false
     private var renderedPalette: ReaderThemePalette?
-    private var currentFormat = MarkdownTextFormat.default
-    // Edit mode
-    private(set) var isEditing = false
-    private var editSession: MarkdownEditSession?
-    private var editorController: MarkdownSourceEditorViewController?
-    private var autosaveWorkItem: DispatchWorkItem?
-    private var liveRenderWorkItem: DispatchWorkItem?
-    /// The editor has not been aligned with the reader's position yet (edit
-    /// mode just started, or another file was loaded). Until it is, neither
-    /// pane follows the other, so the reader stays where the user left it.
-    private var awaitsEditorAlignment = false
-    private var isAligningEditor = false
-    private var resignActiveObserver: NSObjectProtocol?
     var initialCascadeSourceWindow: NSWindow?
-    var hasLoadedSource: Bool { !fileFingerprint.isEmpty }
+    var hasLoadedSource: Bool { source != nil }
 
     /// Copies the displayed document's Markdown source as plain text (the
     /// editor's current text in edit mode). Returns false while loading.
     @discardableResult
     func copySourceToPasteboard(_ pasteboard: NSPasteboard = .general) -> Bool {
-        guard hasLoadedSource else { return false }
+        guard let source else { return false }
         pasteboard.clearContents()
-        return pasteboard.setString(editorController?.text ?? sourceText, forType: .string)
+        return pasteboard.setString(editMode.editor?.text ?? source.sourceText, forType: .string)
     }
 
     /// Copies the displayed file itself, like Finder's Copy, so pasting into
@@ -96,28 +134,9 @@ final class MarkdownReaderDocument: NSDocument {
         return pasteboard.writeObjects([fileURL as NSURL])
     }
 
-    override init() {
-        self.assetResolver = AssetResolver()
-        self.scrollStateStore = ScrollStateStore()
-        let worker = MarkdownRenderWorker()
-        self.renderWorker = worker
-        self.renderScheduler = worker.schedule
-        self.markdownLinkOpener = MarkdownReaderDocument.defaultOpenMarkdownLink
-        self.linkTargetHandler = MarkdownReaderDocument.defaultHandle
-        self.readerControllerFactory = { WebKitReaderViewController() }
-        self.statisticPreferenceStore = .shared
-        self.appearancePreferenceStore = .shared
-        self.readerBehaviorPreferenceStore = .shared
-        self.sourceLoader = MarkdownReaderDocument.loadSource
-        self.fileMonitorFactory = { url, onChange in FileChangeMonitor(fileURL: url, onChange: onChange) }
-        self.scrollPersistenceDebounceInterval = 1.0
-        self.wikiLinkIndexProvider = MarkdownReaderDocument.defaultWikiLinkIndexProvider
-        self.sourceLoadErrorHandler = { NSApp.presentError($0) }
-        self.editConflictResolver = MarkdownEditSession.presentConflict
-        self.autosaveDelay = 1.0
-        self.liveRenderInterval = 0.1
-        super.init()
-        observeLibraryChanges()
+    override convenience init() {
+        // Every dependency takes its production default.
+        self.init(assetResolver: AssetResolver())
     }
 
     init(
@@ -125,7 +144,7 @@ final class MarkdownReaderDocument: NSDocument {
         scrollStateStore: ScrollStateStore = ScrollStateStore(),
         renderScheduler: RenderScheduler? = nil,
         markdownLinkOpener: @escaping MarkdownLinkOpener = MarkdownReaderDocument.defaultOpenMarkdownLink,
-        linkTargetHandler: @escaping LinkTargetHandler = MarkdownReaderDocument.defaultHandle,
+        linkTargetHandler: @escaping LinkTargetHandler = { LinkTargetOpener().handle($0) },
         readerControllerFactory: @escaping ReaderControllerFactory = { WebKitReaderViewController() },
         statisticPreferenceStore: DocumentStatisticPreferenceStore = .shared,
         appearancePreferenceStore: AppearancePreferenceStore = .shared,
@@ -135,17 +154,17 @@ final class MarkdownReaderDocument: NSDocument {
             FileChangeMonitor(fileURL: url, onChange: onChange)
         },
         scrollPersistenceDebounceInterval: TimeInterval = 1.0,
-        wikiLinkIndexProvider: @escaping WikiLinkIndexProvider = MarkdownReaderDocument.defaultWikiLinkIndexProvider,
+        wikiLinkIndexProvider: WikiLinkIndexProvider? = nil,
+        librarySnapshotProvider: @escaping LibrarySnapshotProvider = { LibraryController.shared.snapshot },
         sourceLoadErrorHandler: @escaping @MainActor (Error) -> Void = { NSApp.presentError($0) },
         editConflictResolver: @escaping EditConflictResolver = MarkdownEditSession.presentConflict,
+        editFileWriter: @escaping MarkdownEditSession.FileWriter = MarkdownEditSession.replaceContents,
         autosaveDelay: TimeInterval = 1.0,
         liveRenderInterval: TimeInterval = 0.1
     ) {
         self.assetResolver = assetResolver
         self.scrollStateStore = scrollStateStore
-        let worker = MarkdownRenderWorker()
-        self.renderWorker = worker
-        self.renderScheduler = renderScheduler ?? worker.schedule
+        self.injectedRenderScheduler = renderScheduler
         self.markdownLinkOpener = markdownLinkOpener
         self.linkTargetHandler = linkTargetHandler
         self.readerControllerFactory = readerControllerFactory
@@ -155,12 +174,18 @@ final class MarkdownReaderDocument: NSDocument {
         self.sourceLoader = sourceLoader
         self.fileMonitorFactory = fileMonitorFactory
         self.scrollPersistenceDebounceInterval = scrollPersistenceDebounceInterval
-        self.wikiLinkIndexProvider = wikiLinkIndexProvider
+        self.wikiLinkIndexProvider = wikiLinkIndexProvider ?? {
+            MarkdownReaderDocument.wikiLinkIndex(in: librarySnapshotProvider())
+        }
         self.sourceLoadErrorHandler = sourceLoadErrorHandler
-        self.editConflictResolver = editConflictResolver
-        self.autosaveDelay = autosaveDelay
-        self.liveRenderInterval = liveRenderInterval
+        self.editMode = MarkdownEditCoordinator(configuration: .init(
+            resolveConflict: editConflictResolver,
+            autosaveDelay: autosaveDelay,
+            liveRenderInterval: liveRenderInterval,
+            fileWriter: editFileWriter
+        ))
         super.init()
+        editMode.delegate = self
         observeLibraryChanges()
     }
 
@@ -189,15 +214,7 @@ final class MarkdownReaderDocument: NSDocument {
         self.documentWindowController = windowController
         initialCascadeSourceWindow = nil
         pushWindowLevelStateToHost()
-
-        if let fileURL {
-            readerController.displayLoading(for: fileURL.lastPathComponent)
-            startFileMonitor(for: fileURL)
-        } else {
-            readerController.displayLoading(for: "Markdown")
-        }
-
-        scheduleRenderIfPossible()
+        startShowingFile(in: readerController)
     }
 
     /// Creates this document's reading surface inside an existing host window
@@ -208,16 +225,18 @@ final class MarkdownReaderDocument: NSDocument {
         self.readerController = readerController
         self.documentWindowController = host
         let tab = DocumentTab(document: self, readerController: readerController)
-
-        if let fileURL {
-            readerController.displayLoading(for: fileURL.lastPathComponent)
-            startFileMonitor(for: fileURL)
-        } else {
-            readerController.displayLoading(for: "Markdown")
-        }
-
-        scheduleRenderIfPossible()
+        startShowingFile(in: readerController)
         return tab
+    }
+
+    /// Shows the loading placeholder, watches the file, and renders the
+    /// source if it is already loaded.
+    private func startShowingFile(in readerController: WebKitReaderViewController) {
+        readerController.displayLoading(for: fileURL?.lastPathComponent ?? "Markdown")
+        if let fileURL {
+            startFileMonitor(for: fileURL)
+        }
+        scheduleRenderIfPossible()
     }
 
     /// True when this document is the visible tab of its host (or has no
@@ -251,15 +270,13 @@ final class MarkdownReaderDocument: NSDocument {
     }
 
     override func read(from data: Data, ofType typeName: String) throws {
-        guard let decoded = MarkdownTextFormat.decode(data) else {
-            throw CocoaError(.fileReadInapplicableStringEncoding)
+        guard data.count <= Self.maximumSourceByteCount else {
+            throw Self.tooLargeError(for: fileURL)
         }
-        let fingerprint = FileFingerprint.sha256Hex(for: data)
+        let loaded = try Self.decodeSource(data)
 
         MainActor.assumeIsolated {
-            sourceText = decoded.text
-            currentFormat = decoded.format
-            fileFingerprint = fingerprint
+            source = loaded
             scheduleRenderIfPossible()
         }
     }
@@ -274,16 +291,10 @@ final class MarkdownReaderDocument: NSDocument {
         if isEditing {
             _ = flushEdits(interactive: false)
         }
-        stopEditingTimers()
-        if let resignActiveObserver {
-            NotificationCenter.default.removeObserver(resignActiveObserver)
-            self.resignActiveObserver = nil
-        }
+        editMode.stop()
         renderToken = UUID()
-        sourceLoadToken = UUID()
-        loadingSourceURL = nil
+        abandonSourceRead()
         initialSourceFailureHandler = nil
-        isNavigating = false
         deferredReload = nil
         NotificationCenter.default.removeObserver(self, name: .libraryDidChange, object: nil)
         stopFileMonitor()
@@ -310,12 +321,13 @@ final class MarkdownReaderDocument: NSDocument {
         case #selector(saveEdits(_:)):
             return isEditing
         case #selector(revertEdits(_:)):
-            guard isEditing, let editSession, let editorController else { return false }
-            return editorController.text != editSession.baselineText
+            return editMode.canRevert
         default:
             return super.validateUserInterfaceItem(item)
         }
     }
+
+    // MARK: - History
 
     @objc func goBackInHistory(_ sender: Any?) {
         guard canGoBack, let currentFileURL = fileURL else { return }
@@ -341,8 +353,8 @@ final class MarkdownReaderDocument: NSDocument {
         navigate(to: target.fileURL, anchorID: target.anchorID, historyAfterNavigation: history)
     }
 
-    private var canGoBack: Bool { !isNavigating && navigationHistory.canGoBack }
-    private var canGoForward: Bool { !isNavigating && navigationHistory.canGoForward }
+    private var canGoBack: Bool { !loadState.isNavigating && navigationHistory.canGoBack }
+    private var canGoForward: Bool { !loadState.isNavigating && navigationHistory.canGoForward }
 
     private func updateWindowNavigationControls() {
         guard isActiveInHost else {
@@ -355,6 +367,8 @@ final class MarkdownReaderDocument: NSDocument {
         )
     }
 
+    // MARK: - Rendering
+
     private func scheduleRenderIfPossible() {
         scheduleRenderIfPossible(initialScrollFractionOverride: nil)
     }
@@ -364,19 +378,17 @@ final class MarkdownReaderDocument: NSDocument {
         showsLoadingPlaceholder: Bool = true,
         live: Bool = false
     ) {
-        guard !fileFingerprint.isEmpty, let readerController else {
+        guard let source, let readerController else {
             return
         }
 
-        renderWorker.annotatesSourceLines = isEditing
-        let sourceText = sourceText
         let fileURL = fileURL
         let restoreFraction: Double?
         if live {
             restoreFraction = nil
-        } else if pendingNavigationAnchorID == nil {
+        } else if pendingAnchor.id == nil {
             restoreFraction = initialScrollFractionOverride ?? fileURL.flatMap {
-                scrollStateStore.load(for: $0, fingerprint: fileFingerprint)?.fraction
+                scrollStateStore.load(for: $0, fingerprint: source.fingerprint)?.fraction
             }
         } else {
             restoreFraction = nil
@@ -398,36 +410,14 @@ final class MarkdownReaderDocument: NSDocument {
         let wikiLinkIndex = wikiLinkIndexProvider()
         lastRenderedWikiLinkIndex = wikiLinkIndex
         renderedPalette = palette
-        renderWorkItem = renderScheduler(sourceText, fileURL, palette, wikiLinkIndex) { [weak self] output in
+        renderWorkItem = scheduleRender(source.sourceText, fileURL, palette, wikiLinkIndex) { [weak self] output in
             guard let self, self.renderToken == token else {
                 return
             }
 
             self.lastOutputHadWikiLinks = output.hasWikiLinks
             if live {
-                // Typing must stay cheap: only push chrome state that changed.
-                let statisticsChanged = self.currentStatistics != output.statistics
-                let sidebarChanged = self.currentSidebarEntries != output.sidebarEntries
-                    || self.currentOutlineItems != output.outlineItems
-                self.currentStatistics = output.statistics
-                self.currentSidebarEntries = output.sidebarEntries
-                self.currentOutlineItems = output.outlineItems
-                if self.isActiveInHost {
-                    if statisticsChanged {
-                        self.documentWindowController?.apply(documentStatistics: output.statistics)
-                    }
-                    if sidebarChanged {
-                        self.documentWindowController?.apply(sidebarEntries: output.sidebarEntries, outlineItems: output.outlineItems)
-                    }
-                }
-                let editorPosition = self.isEditing && !self.awaitsEditorAlignment
-                    ? self.editorController?.currentScrollPosition
-                    : nil
-                self.readerController?.applyLiveUpdate(renderOutput: output, editorPosition: editorPosition) { [weak self] patched in
-                    // After a full load the navigation callback aligns instead.
-                    guard let self, patched, self.awaitsEditorAlignment else { return }
-                    self.alignEditorToPreview()
-                }
+                self.applyLiveRender(output)
                 return
             }
             self.currentStatistics = output.statistics
@@ -437,29 +427,63 @@ final class MarkdownReaderDocument: NSDocument {
                 self.documentWindowController?.apply(documentStatistics: output.statistics)
                 self.documentWindowController?.apply(sidebarEntries: output.sidebarEntries, outlineItems: output.outlineItems)
             }
-            self.consumePendingAnchorOnNextNavigationFinish = self.pendingNavigationAnchorID != nil
+            if let anchorID = self.pendingAnchor.id {
+                self.pendingAnchor = .afterPageLoad(anchorID)
+            }
             self.readerController?.apply(renderOutput: output, initialScrollFraction: restoreFraction)
         }
     }
 
-    func reloadFromDiskIfNeeded() {
-        guard readerBehaviorPreferenceStore.automaticallyReloadsDocuments else {
-            return
+    /// Edit-mode renders carry source-line annotations; each request says so
+    /// itself, so the worker keeps no flag between requests.
+    private func scheduleRender(
+        _ source: String,
+        _ baseURL: URL?,
+        _ palette: ReaderThemePalette,
+        _ wikiLinkIndex: WikiLinkIndex?,
+        completion: @escaping (WebKitRenderOutput) -> Void
+    ) -> DispatchWorkItem {
+        if let injectedRenderScheduler {
+            return injectedRenderScheduler(source, baseURL, palette, wikiLinkIndex, completion)
         }
 
-        performReloadFromDisk()
+        return renderWorker.schedule(
+            source: source,
+            baseURL: baseURL,
+            palette: palette,
+            wikiLinkIndex: wikiLinkIndex,
+            annotatesSourceLines: isEditing,
+            completion: completion
+        )
     }
 
-    @objc func reloadDocument(_ sender: Any?) {
-        if isEditing, !flushEdits(interactive: true) {
-            return
+    /// Typing must stay cheap: only chrome state that changed is pushed,
+    /// and the page is patched in place.
+    private func applyLiveRender(_ output: WebKitRenderOutput) {
+        let statisticsChanged = currentStatistics != output.statistics
+        let sidebarChanged = currentSidebarEntries != output.sidebarEntries
+            || currentOutlineItems != output.outlineItems
+        currentStatistics = output.statistics
+        currentSidebarEntries = output.sidebarEntries
+        currentOutlineItems = output.outlineItems
+        if isActiveInHost {
+            if statisticsChanged {
+                documentWindowController?.apply(documentStatistics: output.statistics)
+            }
+            if sidebarChanged {
+                documentWindowController?.apply(sidebarEntries: output.sidebarEntries, outlineItems: output.outlineItems)
+            }
         }
-        performReloadFromDisk(forceRender: true)
+        readerController?.applyLiveUpdate(renderOutput: output, editorPosition: editMode.editorPositionForPreview) { [weak self] patched in
+            // After a full load the navigation callback aligns instead.
+            guard let self, patched else { return }
+            self.editMode.previewDidPatch()
+        }
     }
 
-    static func defaultWikiLinkIndexProvider() -> WikiLinkIndex? {
-        let snapshot = LibraryController.shared.snapshot
-        return snapshot.files.isEmpty ? nil : snapshot.wikiLinkIndex
+    /// The library's wiki-link index, or nil while no library is open.
+    static func wikiLinkIndex(in snapshot: LibrarySnapshot) -> WikiLinkIndex? {
+        snapshot.files.isEmpty ? nil : snapshot.wikiLinkIndex
     }
 
     private func observeLibraryChanges() {
@@ -500,8 +524,25 @@ final class MarkdownReaderDocument: NSDocument {
         )
     }
 
+    // MARK: - Loading
+
+    func reloadFromDiskIfNeeded() {
+        guard readerBehaviorPreferenceStore.automaticallyReloadsDocuments else {
+            return
+        }
+
+        performReloadFromDisk()
+    }
+
+    @objc func reloadDocument(_ sender: Any?) {
+        if isEditing, !flushEdits(interactive: true) {
+            return
+        }
+        performReloadFromDisk(forceRender: true)
+    }
+
     private func performReloadFromDisk(forceRender: Bool = false) {
-        guard loadingSourceURL == nil else {
+        guard loadState == .idle else {
             deferredReload = (deferredReload ?? false) || forceRender
             return
         }
@@ -509,11 +550,11 @@ final class MarkdownReaderDocument: NSDocument {
             return
         }
 
-        loadSource(at: fileURL) { [weak self] result in
+        readSource(.reloading(fileURL)) { [weak self] result in
             guard let self else { return }
             switch result {
-            case .success(let source):
-                self.applyReloadedSourceIfNeeded(source, forceRender: forceRender)
+            case .success(let loaded):
+                self.applyReloadedSourceIfNeeded(loaded, forceRender: forceRender)
             case .failure(let error):
                 if forceRender { self.sourceLoadErrorHandler(error) }
             }
@@ -521,41 +562,44 @@ final class MarkdownReaderDocument: NSDocument {
         }
     }
 
-    /// All app-driven source reads, decoding, and hashing run off the main thread.
-    /// A superseding request or close discards both successful and failed results.
-    private func loadSource(
-        at url: URL,
+    /// All app-driven source reads, decoding, and hashing run off the main
+    /// thread. `state` names the read; a superseding read or close discards
+    /// both successful and failed results.
+    private func readSource(
+        _ state: LoadState,
         completion: @escaping @MainActor (Result<LoadedMarkdownSource, Error>) -> Void
     ) {
-        let token = UUID()
-        sourceLoadToken = token
-        loadingSourceURL = url
+        guard let url = state.url else { return }
+        loadGeneration += 1
+        let generation = loadGeneration
+        loadState = state
         let loader = sourceLoader
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let result = Result { try loader(url) }
             DispatchQueue.main.async { [weak self] in
-                guard let self, self.sourceLoadToken == token else { return }
-                self.loadingSourceURL = nil
+                guard let self, self.loadGeneration == generation else { return }
+                self.loadState = .idle
                 completion(result)
             }
         }
     }
 
+    /// Discards the read in progress, if any.
+    private func abandonSourceRead() {
+        loadGeneration += 1
+        loadState = .idle
+    }
+
     func loadInitialSource(onFailure: @escaping @MainActor () -> Void) {
-        guard fileFingerprint.isEmpty, let fileURL else { return }
+        guard source == nil, let fileURL else { return }
         initialSourceFailureHandler = onFailure
-        isNavigating = true
-        updateWindowNavigationControls()
-        loadSource(at: fileURL) { [weak self] result in
+        readSource(.opening(fileURL)) { [weak self] result in
             guard let self else { return }
-            self.isNavigating = false
             self.updateWindowNavigationControls()
             switch result {
-            case .success(let source):
+            case .success(let loaded):
                 self.initialSourceFailureHandler = nil
-                self.sourceText = source.sourceText
-                self.currentFormat = source.format
-                self.fileFingerprint = source.fingerprint
+                self.source = loaded
                 self.scheduleRenderIfPossible()
                 NSDocumentController.shared.noteNewRecentDocumentURL(fileURL)
                 self.runDeferredReload()
@@ -566,6 +610,7 @@ final class MarkdownReaderDocument: NSDocument {
                 self.sourceLoadErrorHandler(error)
             }
         }
+        updateWindowNavigationControls()
     }
 
     private func runDeferredReload() {
@@ -573,6 +618,25 @@ final class MarkdownReaderDocument: NSDocument {
         deferredReload = nil
         performReloadFromDisk(forceRender: forceRender)
     }
+
+    private func applyReloadedSourceIfNeeded(_ loadedSource: LoadedMarkdownSource, forceRender: Bool) {
+        guard forceRender || loadedSource.fingerprint != source?.fingerprint else {
+            return
+        }
+
+        if isEditing {
+            if !editMode.adoptDiskVersion(loadedSource) {
+                // Same bytes (explicit reload): refresh the page, keeping its place.
+                rerenderPreservingScroll()
+            }
+            return
+        }
+
+        source = loadedSource
+        rerenderPreservingScroll()
+    }
+
+    // MARK: - Links
 
     private func openResolvedLink(_ url: URL) {
         if let wikiDestination = WikiLinkURL.destination(from: url) {
@@ -588,9 +652,11 @@ final class MarkdownReaderDocument: NSDocument {
         let target = assetResolver.classify(url)
         switch target {
         case .markdownFile(let markdownURL):
+            // The anchor comes from the clicked URL: classify rebuilds the
+            // fragment, which can add a layer of percent-encoding.
             markdownLinkOpener(
                 MarkdownDocumentOpener.normalizedFileURL(for: markdownURL),
-                markdownURL.fragment
+                MarkdownDocumentOpener.anchorID(in: url)
             )
         default:
             linkTargetHandler(target)
@@ -617,7 +683,7 @@ final class MarkdownReaderDocument: NSDocument {
            case .markdownFile(let markdownURL) = assetResolver.classify(url) {
             host.openTab(
                 for: MarkdownDocumentOpener.normalizedFileURL(for: markdownURL),
-                anchorID: markdownURL.fragment
+                anchorID: MarkdownDocumentOpener.anchorID(in: url)
             )
             return
         }
@@ -625,16 +691,39 @@ final class MarkdownReaderDocument: NSDocument {
         openResolvedLink(url)
     }
 
+    private func sameDocumentAnchorID(for url: URL) -> String? {
+        guard
+            let currentFileURL = fileURL,
+            url.isFileURL,
+            let anchorID = MarkdownDocumentOpener.anchorID(in: url),
+            MarkdownDocumentOpener.normalizedFileURL(for: currentFileURL) == MarkdownDocumentOpener.normalizedFileURL(for: url)
+        else {
+            return nil
+        }
+
+        return anchorID
+    }
+
+    private static func defaultOpenMarkdownLink(_ url: URL, _ anchorID: String?) {
+        do {
+            try MarkdownDocumentOpener.open(url: url, anchorID: anchorID)
+        } catch {
+            NSApp.presentError(error)
+        }
+    }
+
+    // MARK: - Scroll persistence
+
     private func persistScrollFractionImmediately(_ fraction: Double) {
-        guard let fileURL, !fileFingerprint.isEmpty else {
+        guard let fileURL, let source else {
             return
         }
 
-        scrollStateStore.save(fraction: fraction, for: fileURL, fingerprint: fileFingerprint)
+        scrollStateStore.save(fraction: fraction, for: fileURL, fingerprint: source.fingerprint)
     }
 
     private func scheduleScrollFractionPersistence(_ fraction: Double) {
-        guard fileURL != nil, !fileFingerprint.isEmpty else {
+        guard fileURL != nil, hasLoadedSource else {
             return
         }
 
@@ -673,6 +762,8 @@ final class MarkdownReaderDocument: NSDocument {
         persistScrollFractionImmediately(fraction)
     }
 
+    // MARK: - Reader and file monitor
+
     private func makeReaderController() -> WebKitReaderViewController {
         let readerController = readerControllerFactory()
         readerController.onOpenLink = { [weak self] url in
@@ -691,12 +782,12 @@ final class MarkdownReaderDocument: NSDocument {
             }
         }
         readerController.onLiveScroll = { [weak self] line in
-            self?.previewDidScroll(toSourceLine: line)
+            self?.editMode.previewDidScroll(toSourceLine: line)
         }
         readerController.onNavigationFinished = { [weak self, weak readerController] in
-            self?.consumePendingNavigationAnchorIfNeeded(using: readerController)
+            self?.consumePendingAnchorIfNeeded(using: readerController)
             self?.applyThemeIfNeeded()
-            self?.alignEditingPanesAfterPageLoad()
+            self?.editMode.previewDidLoadPage()
         }
         return readerController
     }
@@ -716,20 +807,37 @@ final class MarkdownReaderDocument: NSDocument {
         fileMonitor = nil
     }
 
+    // MARK: - Navigation
+
     func navigateToAnchor(id: String) {
         guard !id.isEmpty else {
             return
         }
 
-        pendingNavigationAnchorID = id
-        consumePendingAnchorOnNextNavigationFinish = false
-
         if let readerController, readerController.isContentReadyForExport {
+            pendingAnchor = .none
             scrollReaderToHeading(id: id)
-            pendingNavigationAnchorID = nil
         } else {
-            consumePendingAnchorOnNextNavigationFinish = true
+            pendingAnchor = .afterPageLoad(id)
         }
+    }
+
+    /// Scrolls the reader to a heading (outline, anchor links). In edit mode
+    /// the page reports the scroll like any other and the editor follows.
+    func scrollReaderToHeading(id: String) {
+        readerController?.scrollToHeading(id: id)
+    }
+
+    private func consumePendingAnchorIfNeeded(using readerController: WebKitReaderViewController?) {
+        guard
+            case .afterPageLoad(let anchorID) = pendingAnchor,
+            let readerController, readerController.isContentReadyForExport
+        else {
+            return
+        }
+
+        pendingAnchor = .none
+        scrollReaderToHeading(id: anchorID)
     }
 
     func navigateInCurrentWindow(to url: URL, anchorID: String? = nil) {
@@ -744,17 +852,16 @@ final class MarkdownReaderDocument: NSDocument {
 
         guard fileURL != normalizedURL else {
             // Selecting the opening document again must keep its initial read.
-            if fileFingerprint.isEmpty {
-                if loadingSourceURL != normalizedURL, let initialSourceFailureHandler {
+            if source == nil {
+                if loadState.url != normalizedURL, let initialSourceFailureHandler {
                     loadInitialSource(onFailure: initialSourceFailureHandler)
                 }
                 if let anchorID { navigateToAnchor(id: anchorID) }
                 return
             }
-            if isNavigating {
-                sourceLoadToken = UUID()
-                loadingSourceURL = nil
-                isNavigating = false
+            if loadState.isNavigating {
+                // Coming back to the shown file drops the pending navigation.
+                abandonSourceRead()
             }
             if let historyAfterNavigation { navigationHistory = historyAfterNavigation }
             updateWindowNavigationControls()
@@ -771,14 +878,21 @@ final class MarkdownReaderDocument: NSDocument {
         }
 
         persistCurrentScrollFraction()
-        isNavigating = true
-        updateWindowNavigationControls()
-        loadSource(at: normalizedURL) { [weak self] result in
+        readSource(.navigating(normalizedURL)) { [weak self] result in
             guard let self else { return }
-            self.isNavigating = false
             switch result {
-            case .success(let source):
-                self.replaceCurrentFile(with: source, fileURL: normalizedURL,
+            case .success(let loaded):
+                // The editor stayed editable during the read: save what was
+                // typed meanwhile before it shows the new file, and stay on
+                // this file if that save fails or is cancelled.
+                guard self.flushEdits(interactive: true) else {
+                    self.updateWindowNavigationControls()
+                    break
+                }
+                // A conflict prompt runs the run loop; a reload of this file
+                // that began meanwhile must not land on the next one.
+                self.abandonSourceRead()
+                self.replaceCurrentFile(with: loaded, fileURL: normalizedURL,
                     anchorID: anchorID, historyAfterNavigation: historyAfterNavigation)
             case .failure(let error):
                 self.updateWindowNavigationControls()
@@ -791,6 +905,7 @@ final class MarkdownReaderDocument: NSDocument {
             }
             self.runDeferredReload()
         }
+        updateWindowNavigationControls()
     }
 
     private func replaceCurrentFile(
@@ -810,12 +925,13 @@ final class MarkdownReaderDocument: NSDocument {
 
         stopFileMonitor()
         self.fileURL = fileURL
-        sourceText = loadedSource.sourceText
-        currentFormat = loadedSource.format
-        fileFingerprint = loadedSource.fingerprint
+        source = loadedSource
         currentActiveHeadingID = nil
-        pendingNavigationAnchorID = anchorID?.isEmpty == false ? anchorID : nil
-        consumePendingAnchorOnNextNavigationFinish = false
+        if let anchorID, !anchorID.isEmpty {
+            pendingAnchor = .beforeRender(anchorID)
+        } else {
+            pendingAnchor = .none
+        }
         OpenDocumentRegistry.shared.reindex(self)
         NSDocumentController.shared.noteNewRecentDocumentURL(fileURL)
 
@@ -830,34 +946,17 @@ final class MarkdownReaderDocument: NSDocument {
         scheduleRenderIfPossible()
     }
 
-    private func applyReloadedSourceIfNeeded(_ loadedSource: LoadedMarkdownSource, forceRender: Bool) {
-        guard forceRender || loadedSource.fingerprint != fileFingerprint else {
-            return
-        }
-
-        if isEditing {
-            applyReloadedSourceWhileEditing(loadedSource)
-            return
-        }
-
-        sourceText = loadedSource.sourceText
-        currentFormat = loadedSource.format
-        fileFingerprint = loadedSource.fingerprint
-        let fraction = readerController?.currentScrollFraction ?? 0
-        let restoreFraction = fraction >= 0.98 ? 1.0 : fraction
-        scheduleRenderIfPossible(
-            initialScrollFractionOverride: restoreFraction,
-            showsLoadingPlaceholder: false
-        )
-    }
-
     // MARK: - Edit mode
 
-    var editorControllerForTesting: MarkdownSourceEditorViewController? { editorController }
+    var isEditing: Bool {
+        editMode.isEditing
+    }
+
+    var editorControllerForTesting: MarkdownSourceEditorViewController? { editMode.editor }
 
     /// The editor to show beside this document's reader while editing.
     var editorPaneController: NSViewController? {
-        isEditing ? editorController : nil
+        isEditing ? editMode.editor : nil
     }
 
     @objc func toggleEditing(_ sender: Any?) {
@@ -875,8 +974,7 @@ final class MarkdownReaderDocument: NSDocument {
     /// Restores the text from when the editor last loaded the file, as one
     /// undoable edit that autosave then writes.
     @objc func revertEdits(_ sender: Any?) {
-        guard isEditing, let editSession, let editorController else { return }
-        editorController.replaceAllUndoably(with: editSession.baselineText)
+        editMode.revertToBaseline()
     }
 
     /// Opens the source editor to the left of the reader, which becomes a
@@ -890,15 +988,7 @@ final class MarkdownReaderDocument: NSDocument {
             return
         }
 
-        let editor = MarkdownSourceEditorViewController()
-        editor.onTextChange = { [weak self] in
-            self?.editorTextDidChange()
-        }
-        editor.onScroll = { [weak self] position in
-            self?.editorDidScroll(to: position)
-        }
-        editorController = editor
-        isEditing = true
+        let editor = editMode.start()
         loadCurrentFileIntoEditor()
         guard isEditing else { return }
 
@@ -907,9 +997,9 @@ final class MarkdownReaderDocument: NSDocument {
         // exact line follows once the page reports it.
         documentWindowController?.setEditorPane(editor, for: self, animated: true)
         editor.scroll(toFraction: readerController.currentScrollFraction)
-        observeResignActive()
+        editMode.observeDeactivation()
         pushEditingStateToHost()
-        performLiveRender()
+        editMode.renderLive()
         editor.focus()
     }
 
@@ -920,8 +1010,8 @@ final class MarkdownReaderDocument: NSDocument {
         guard isEditing else { return true }
         guard flushEdits(interactive: true) else { return false }
 
-        if let editorController {
-            sourceText = editorController.text
+        if let text = editMode.editor?.text {
+            source?.sourceText = text
         }
         tearDownEditing()
         // The final text without annotations, patched into the same page.
@@ -933,25 +1023,7 @@ final class MarkdownReaderDocument: NSDocument {
     /// the text was saved or unchanged, or the user discarded the edits.
     @discardableResult
     func flushEdits(interactive: Bool) -> Bool {
-        guard isEditing, let editSession, let editorController else { return true }
-        editorController.commitComposition()
-        autosaveWorkItem?.cancel()
-        autosaveWorkItem = nil
-
-        let outcome = editSession.save(editorController.text, interactive: interactive)
-        fileFingerprint = editSession.savedFingerprint
-        currentFormat = editSession.format
-        switch outcome {
-        case .unchanged, .saved:
-            return true
-        case .reverted(let text):
-            editorController.replaceTextPreservingPosition(text)
-            sourceText = text
-            performLiveRender()
-            return true
-        case .keptInMemory:
-            return false
-        }
+        editMode.flush(interactive: interactive)
     }
 
     /// Saves every open document's editor text, prompting on conflicts.
@@ -967,14 +1039,10 @@ final class MarkdownReaderDocument: NSDocument {
         FileManager.default.isWritableFile(atPath: url.resolvingSymlinksInPath().path)
     }
 
-    /// Scrolls the reader to a heading (outline, anchor links). In edit mode
-    /// the page reports the scroll like any other and the editor follows.
-    func scrollReaderToHeading(id: String) {
-        readerController?.scrollToHeading(id: id)
-    }
-
+    /// Opens the current file in the editor, after entering edit mode or
+    /// navigating while editing. A read-only file ends edit mode instead.
     private func loadCurrentFileIntoEditor() {
-        guard let fileURL, let editorController else { return }
+        guard isEditing, let fileURL, var source else { return }
         guard Self.isWritable(fileURL) else {
             // Navigated to a read-only file: the previous file was already saved.
             tearDownEditing()
@@ -982,159 +1050,19 @@ final class MarkdownReaderDocument: NSDocument {
             return
         }
 
-        let text = MarkdownTextFormat.normalizingLineEndings(sourceText)
-        sourceText = text
-        editSession = MarkdownEditSession(
-            fileURL: fileURL,
-            text: text,
-            fingerprint: fileFingerprint,
-            format: currentFormat,
-            resolveConflict: editConflictResolver
-        )
-        editorController.load(text: text)
-        awaitsEditorAlignment = true
+        source.sourceText = MarkdownTextFormat.normalizingLineEndings(source.sourceText)
+        self.source = source
+        editMode.load(source, fileURL: fileURL)
     }
 
     private func tearDownEditing() {
-        stopEditingTimers()
-        isEditing = false
-        // The editor stays on screen, inert, while its pane closes.
-        editorController?.endSession()
+        editMode.end()
         readerController?.endLivePreview()
         documentWindowController?.setEditorPane(nil, for: self, animated: true)
         if isActiveInHost {
             readerController?.focusContent()
         }
-        editorController = nil
-        editSession = nil
-        awaitsEditorAlignment = false
-        if let resignActiveObserver {
-            NotificationCenter.default.removeObserver(resignActiveObserver)
-            self.resignActiveObserver = nil
-        }
         pushEditingStateToHost()
-    }
-
-    private func editorTextDidChange() {
-        scheduleAutosave()
-        scheduleLiveRender()
-    }
-
-    private func scheduleAutosave() {
-        autosaveWorkItem?.cancel()
-        let workItem = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.autosaveWorkItem = nil
-            self.flushEdits(interactive: true)
-        }
-        autosaveWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + autosaveDelay, execute: workItem)
-    }
-
-    /// Throttled rather than debounced so the preview keeps up during
-    /// continuous typing: at most one render per `liveRenderInterval`.
-    private func scheduleLiveRender() {
-        guard liveRenderWorkItem == nil else { return }
-        let workItem = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.liveRenderWorkItem = nil
-            self.performLiveRender()
-        }
-        liveRenderWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + liveRenderInterval, execute: workItem)
-    }
-
-    private func performLiveRender() {
-        guard isEditing, let editorController else { return }
-        sourceText = editorController.text
-        scheduleRenderIfPossible(initialScrollFractionOverride: nil, showsLoadingPlaceholder: false, live: true)
-    }
-
-    private func stopEditingTimers() {
-        autosaveWorkItem?.cancel()
-        autosaveWorkItem = nil
-        liveRenderWorkItem?.cancel()
-        liveRenderWorkItem = nil
-    }
-
-    private func applyReloadedSourceWhileEditing(_ loadedSource: LoadedMarkdownSource) {
-        guard let editSession, let editorController else { return }
-        guard loadedSource.fingerprint != editSession.savedFingerprint else {
-            // Same bytes (explicit reload): refresh the page, keeping its place.
-            rerenderPreservingScroll()
-            return
-        }
-
-        guard !editSession.hasUnsavedChanges(editorController.text) else {
-            // Both sides changed: the save path detects the conflict and asks.
-            flushEdits(interactive: true)
-            return
-        }
-
-        let text = MarkdownTextFormat.normalizingLineEndings(loadedSource.sourceText)
-        editSession.rebase(text: text, fingerprint: loadedSource.fingerprint, format: loadedSource.format)
-        fileFingerprint = loadedSource.fingerprint
-        currentFormat = loadedSource.format
-        sourceText = text
-        editorController.replaceTextPreservingPosition(text)
-        performLiveRender()
-    }
-
-    /// After a full page load while editing: align the editor with the
-    /// preview once (entering edit mode, navigating), otherwise keep the
-    /// preview following the editor.
-    private func alignEditingPanesAfterPageLoad() {
-        guard isEditing, let editorController, let readerController else { return }
-        if awaitsEditorAlignment {
-            alignEditorToPreview()
-        } else {
-            readerController.syncScroll(to: editorController.currentScrollPosition)
-        }
-    }
-
-    /// Puts the editor at the source line the reader is showing. The page
-    /// takes its own position as the synced one, so the reader does not move.
-    /// The panes start following each other only once the answer is in:
-    /// until then the editor sits at an approximate position that must not
-    /// be pushed to the reader.
-    private func alignEditorToPreview() {
-        guard isEditing, !isAligningEditor, let editorController, let readerController else { return }
-        isAligningEditor = true
-        readerController.sourceLineAtTop(for: editorController.currentScrollPosition) { [weak self, weak editorController] line in
-            guard let self else { return }
-            self.isAligningEditor = false
-            guard self.isEditing, let editorController, editorController === self.editorController else { return }
-            self.awaitsEditorAlignment = false
-            if let line {
-                editorController.scroll(toSourceLine: line)
-            }
-        }
-    }
-
-    private func editorDidScroll(to position: EditorScrollPosition) {
-        guard isEditing, !awaitsEditorAlignment else { return }
-        readerController?.syncScroll(to: position)
-    }
-
-    private func previewDidScroll(toSourceLine line: Double) {
-        guard isEditing, !awaitsEditorAlignment, let editorController else { return }
-        editorController.scroll(toSourceLine: line)
-        // Scrolling can finish laying out text and change the editor's range.
-        readerController?.updateScrollSyncMetrics(editorController.currentScrollPosition)
-    }
-
-    private func observeResignActive() {
-        guard resignActiveObserver == nil else { return }
-        resignActiveObserver = NotificationCenter.default.addObserver(
-            forName: NSApplication.didResignActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                // Never prompt while the app is in the background.
-                _ = self?.flushEdits(interactive: false)
-            }
-        }
     }
 
     private func pushEditingStateToHost() {
@@ -1142,29 +1070,24 @@ final class MarkdownReaderDocument: NSDocument {
         documentWindowController?.setEditingActive(isEditing)
     }
 
-    private static func defaultHandle(_ linkTarget: LinkTarget) {
-        switch linkTarget {
-        case .external(let externalURL):
-            NSWorkspace.shared.open(externalURL)
-        case .markdownFile(let markdownURL):
-            MarkdownDocumentOpener.open(urls: [markdownURL])
-        case .otherFile(let fileURL):
-            NSWorkspace.shared.open(fileURL)
-        case .unresolved:
-            break
-        }
-    }
+    /// The largest Markdown file Wafer opens, 32 MB as Finder counts it: far
+    /// above real notes and generated references, and small enough that
+    /// parsing, rendering, and the editor stay usable. Larger files are
+    /// refused as a whole, never read, shown, or edited in part.
+    nonisolated static let maximumSourceByteCount = 32_000_000
 
-    private static func defaultOpenMarkdownLink(_ url: URL, _ anchorID: String?) {
+    /// The production source loader: reads, decodes, and fingerprints a file.
+    nonisolated static func loadSource(from fileURL: URL) throws -> LoadedMarkdownSource {
+        let data: Data
         do {
-            try MarkdownDocumentOpener.open(url: url, anchorID: anchorID)
-        } catch {
-            NSApp.presentError(error)
+            data = try BoundedFileReader.read(from: fileURL, maximumByteCount: maximumSourceByteCount)
+        } catch BoundedFileReader.ReadError.tooLarge {
+            throw tooLargeError(for: fileURL)
         }
+        return try decodeSource(data)
     }
 
-    nonisolated private static func loadSource(from fileURL: URL) throws -> LoadedMarkdownSource {
-        let data = try Data(contentsOf: fileURL)
+    nonisolated private static func decodeSource(_ data: Data) throws -> LoadedMarkdownSource {
         guard let decoded = MarkdownTextFormat.decode(data) else {
             throw CocoaError(.fileReadInapplicableStringEncoding)
         }
@@ -1176,97 +1099,43 @@ final class MarkdownReaderDocument: NSDocument {
         )
     }
 
-    private func sameDocumentAnchorID(for url: URL) -> String? {
-        guard
-            let currentFileURL = fileURL,
-            url.isFileURL,
-            let fragment = url.fragment,
-            !fragment.isEmpty,
-            MarkdownDocumentOpener.normalizedFileURL(for: currentFileURL) == MarkdownDocumentOpener.normalizedFileURL(for: url)
-        else {
-            return nil
+    /// "The item X couldn't be opened because it is too large", with the limit.
+    nonisolated static func tooLargeError(for fileURL: URL?) -> CocoaError {
+        let limit = ByteCountFormatter.string(fromByteCount: Int64(maximumSourceByteCount), countStyle: .file)
+        var userInfo: [String: Any] = [
+            NSLocalizedRecoverySuggestionErrorKey: "Wafer opens Markdown files up to \(limit).",
+        ]
+        if let fileURL {
+            userInfo[NSURLErrorKey] = fileURL
+            userInfo[NSFilePathErrorKey] = fileURL.path
         }
-
-        return fragment
-    }
-
-    private func consumePendingNavigationAnchorIfNeeded(using readerController: WebKitReaderViewController?) {
-        guard
-            consumePendingAnchorOnNextNavigationFinish,
-            let anchorID = pendingNavigationAnchorID,
-            let readerController, readerController.isContentReadyForExport
-        else {
-            return
-        }
-
-        consumePendingAnchorOnNextNavigationFinish = false
-        pendingNavigationAnchorID = nil
-        scrollReaderToHeading(id: anchorID)
+        return CocoaError(.fileReadTooLarge, userInfo: userInfo)
     }
 }
 
-/// Parsed Markdown is confined to this serial queue and retained only for the last source.
-private final class MarkdownRenderWorker: @unchecked Sendable {
-    private let queue = DispatchQueue(label: "dev.wafer.document-render", qos: .userInitiated)
-    /// Set on the main thread before scheduling; captured per request.
-    var annotatesSourceLines = false
-    private let lock = NSLock()
-    private var cancellation: WorkCancellation?
-    private var parsed: MarkdownDocument?
-    private var metadata: DocumentRenderMetadata?
-
-    func cancel() {
-        lock.withLock { cancellation?.cancel() }
-        queue.async { [weak self] in
-            self?.parsed = nil
-            self?.metadata = nil
-        }
+extension MarkdownReaderDocument: MarkdownEditCoordinatorDelegate {
+    var livePreviewReader: WebKitReaderViewController? {
+        readerController
     }
 
-    func schedule(
-        source: String, baseURL: URL?, palette: ReaderThemePalette, wikiLinkIndex: WikiLinkIndex?,
-        completion: @escaping (WebKitRenderOutput) -> Void
-    ) -> DispatchWorkItem {
-        let token = WorkCancellation()
-        lock.withLock { cancellation?.cancel(); cancellation = token }
-        let completionBox = RenderCompletionBox(completion: completion)
-        let annotatesSourceLines = annotatesSourceLines
-        let workItem = DispatchWorkItem { @Sendable [self] in
-            guard !token.isCancelled else { return }
-            let renderer = WebKitHTMLRenderer(
-                palette: palette,
-                wikiLinkIndex: wikiLinkIndex,
-                annotatesSourceLines: annotatesSourceLines
-            )
-            if parsed?.source != source || parsed?.baseURL != baseURL {
-                parsed = MarkdownParser().parse(source: source, baseURL: baseURL)
-                metadata = nil
-            }
-            guard !token.isCancelled, let parsed else { return }
-            if metadata == nil { metadata = renderer.metadata(for: parsed) }
-            guard !token.isCancelled, let metadata else { return }
-            let output = renderer.render(document: parsed, metadata: metadata)
-            guard !token.isCancelled else { return }
-            DispatchQueue.main.async {
-                guard !token.isCancelled else { return }
-                completionBox.completion(output)
-            }
-        }
-        queue.async(execute: workItem)
-        return workItem
+    func editCoordinator(_ coordinator: MarkdownEditCoordinator, renderLive text: String) {
+        source?.sourceText = text
+        scheduleRenderIfPossible(initialScrollFractionOverride: nil, showsLoadingPlaceholder: false, live: true)
+    }
+
+    func editCoordinator(
+        _ coordinator: MarkdownEditCoordinator,
+        didUpdateDiskFingerprint fingerprint: String,
+        format: MarkdownTextFormat
+    ) {
+        source?.fingerprint = fingerprint
+        source?.format = format
     }
 }
 
-private final class RenderCompletionBox: @unchecked Sendable {
-    let completion: (WebKitRenderOutput) -> Void
-
-    init(completion: @escaping (WebKitRenderOutput) -> Void) {
-        self.completion = completion
-    }
-}
-
+/// A file's decoded text, its on-disk format, and the fingerprint of its bytes.
 struct LoadedMarkdownSource: Sendable {
-    let sourceText: String
-    let fingerprint: String
+    var sourceText: String
+    var fingerprint: String
     var format: MarkdownTextFormat = .default
 }

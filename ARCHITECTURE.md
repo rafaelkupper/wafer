@@ -36,11 +36,18 @@ The Quick Look extension is hand-assembled at `Contents/PlugIns/WaferQuickLook.a
 
 `DocumentStatisticsAccessoryViewController` uses a frame-sized accessory root with constraint-based contents. Updates change its preferred size and root size without forcing layout inside the titlebar's constraint pass. The stack's trailing constraint can yield during AppKit's temporary narrow sizing, while controls retain their intrinsic sizes.
 
-`MarkdownDocumentOpener` and `DocumentHostWindowController.openTab` register and display a loading document before calling `MarkdownReaderDocument.loadInitialSource`. Initial opens, navigation, and reload use the same background source loader for bytes, decoding, and fingerprinting. A generation token discards completion after another request or close. Failed initial opens remove the placeholder document or tab before presenting the error, including navigation that supersedes an opening placeholder. Unread placeholders do not enter history. Already registered pending documents are reused, and successful reads enter Open Recent.
+`MarkdownDocumentOpener` and `DocumentHostWindowController.openTab` register and display a loading document before calling `MarkdownReaderDocument.loadInitialSource`. Initial opens, navigation, and reload use the same background source loader for bytes, decoding, and fingerprinting. The document's `LoadState` (idle, opening, navigating, reloading) names the read in progress, and a load generation discards its completion after another request or close. The document holds the loaded file as one `LoadedMarkdownSource` value: text, `MarkdownTextFormat`, and the fingerprint of the bytes last loaded or saved. Failed initial opens remove the placeholder document or tab before presenting the error, including navigation that supersedes an opening placeholder. Unread placeholders do not enter history. Already registered pending documents are reused, and successful reads enter Open Recent.
+
+The loader reads at most 32 MB (32,000,000 bytes) through `BoundedFileReader`. A larger file fails as a whole with a too-large error that names the limit, so nothing is rendered or edited in part; `read(from:ofType:)` applies the same limit.
+
+Clicked links go through the document. Wiki links and links to Markdown files open in Wafer, and anchor IDs are taken from the clicked URL's fragment, percent-decoded (`MarkdownDocumentOpener.anchorID(in:)`), so `#café` reaches the heading `café`. Other targets go to `LinkTargetOpener`:
+
+- External links open only for `http`, `https`, and `mailto`; other schemes are ignored.
+- A link to a file that can run code asks first, offering Show in Finder (the default), Open, or Cancel. After symlinks are resolved, that is a file with the execute bit, or an item whose type or extension conforms to executable, application, code bundle, script (including `.command`), Terminal settings, Automator workflow, installer package, or an internet-location or shortcut file. Document packages such as `.rtfd` open without asking.
 
 ## Edit Mode
 
-Edit mode is a per-document toggle (`MarkdownReaderDocument.toggleEditing`). The reader stays the window's hosted content; the document's `MarkdownSourceEditorViewController` is shown as an editor pane to its left (`DocumentWindowController.setEditorPane`). The tab host applies the pane of the selected tab, so tab switches show or hide it. With edit mode off, rendered output, export, Quick Look, and render goldens are unchanged; the only reader-script additions are the incremental Mermaid and KaTeX hooks and a copy-button observer, which stay idle. Export snapshots strip `data-source-line`, so exporting while editing produces the same HTML as reading.
+Edit mode is a per-document toggle (`MarkdownReaderDocument.toggleEditing`). `MarkdownEditCoordinator` holds its state: the editor, the save session, the autosave and live-render timers, and the scroll-sync alignment. The document keeps the file, the reader, and the window. The reader stays the window's hosted content; the document's `MarkdownSourceEditorViewController` is shown as an editor pane to its left (`DocumentWindowController.setEditorPane`). The tab host applies the pane of the selected tab, so tab switches show or hide it. With edit mode off, rendered output, export, Quick Look, and render goldens are unchanged; the only reader-script additions are the incremental Mermaid and KaTeX hooks and a copy-button observer, which stay idle. Export snapshots strip `data-source-line`, so exporting while editing produces the same HTML as reading.
 
 ### Editor pane and window
 
@@ -53,7 +60,7 @@ Edit mode is a per-document toggle (`MarkdownReaderDocument.toggleEditing`). The
 
 Neither entering nor leaving reloads the page. Entering runs one render with source-line annotations and leaving one without, and both are applied as live patches (see below): every block keeps its DOM and only gains or loses its `data-source-line` attribute. The reader therefore keeps its scroll position, images, and rendered diagrams.
 
-Measured on 2026-11-09 with `EditModeEndToEndTests.testPaneAnimationWithRealDocumentStaysCheapPerFrame` (`RenderingShowcase.md`, a 720-point window, 240 Hz display; three debug and three release runs):
+Measured on 2026-11-09 with `EditModeEndToEndTests.testPaneAnimationWithRealDocumentStaysCheapPerFrame` (`RenderingShowcase.md`, a 720-point window, 240 Hz display; three debug and three release runs). Its 50 ms slowest-step threshold runs only with `WAFER_PERF_TESTS=1`; the default suite keeps the width checks.
 
 | | Result |
 | --- | --- |
@@ -67,21 +74,34 @@ A step is one `NSWindow.setFrame`. Resizing an empty window the same way takes 0
 
 ### Saving
 
-Saving does not use NSDocument autosave. `autosavesInPlace` stays false and `writableTypes` stays empty. NSDocument autosave tracks one file and its modification date per document, which conflicts with in-place navigation, and tab close bypasses `canClose`. Instead, `MarkdownEditSession` owns the saved text (LF-normalized), the fingerprint of the bytes last loaded or saved, the file's `MarkdownTextFormat` (encoding, byte-order mark, dominant line ending), and the baseline text used by Revert Edits.
+Saving does not use NSDocument autosave. `autosavesInPlace` stays false and `writableTypes` stays empty. NSDocument autosave tracks one file and its modification date per document, which conflicts with in-place navigation, and tab close bypasses `canClose`. Instead, `MarkdownEditSession` owns the saved text (LF-normalized), the fingerprint of the bytes last loaded or saved, the file's `MarkdownTextFormat` (encoding, byte-order mark, dominant line ending), the baseline text used by Revert Edits, and the editor revision whose text is saved.
+
+The editor keeps its text LF-only: pasted, dropped, or inserted CR and CRLF become LF as one undo step, with the insertion point after the text. It counts revisions; every change to its text increases the count, so checking for unsaved text compares two integers instead of two texts.
 
 When the save runs:
 
-- Autosave is a 1 s debounce after the last edit.
-- Navigation, leaving edit mode, `Cmd-R`, tab close, window close (`DocumentWindow.performClose` and `prepareToCloseWindow`), and quit (`applicationShouldTerminate`) all save interactively and can be cancelled.
-- App deactivation saves without prompting.
+- Autosave is a 1 s debounce after the last edit. It saves in the background (below); if that finds a conflict, an interactive save on the main thread asks.
+- App deactivation saves in the background without prompting.
+- `Cmd-S`, leaving edit mode, `Cmd-R`, tab close, window close (`DocumentWindow.performClose` and `prepareToCloseWindow`), and quit (`applicationShouldTerminate`) save interactively, wait for the result, and can be cancelled.
+- Navigation saves before it reads the next file, and again before the editor switches to it, because the editor stays editable while the file is read. If that second save fails or is cancelled, the navigation is abandoned and the current file, text, and history stay.
 - `close()` makes a final non-interactive attempt.
 
 How the write is made:
 
-1. Before writing, the session hashes the file on disk.
-2. A mismatch with the last loaded or saved fingerprint is a conflict, and so is a missing file or a read or write failure. Conflicts go to an injectable resolver; the default is an app-modal alert offering Keep My Edits, Use Disk Version, or Save a Copy….
-3. Writes go to an item-replacement directory and are swapped in with `FileManager.replaceItemAt`, which keeps permissions and creation date. Symlinks are resolved first. Where replacement is unavailable, the file is written in place.
-4. Unchanged text writes nothing.
+1. The main thread copies the editor text and its revision (a snapshot). The file I/O runs on `MarkdownSaveWorker`, one serial queue per document, so saves never overlap. A save that waits for its result first lets a save in flight finish, then writes only newer text. Results and conflict prompts are handled on the main actor. A background save requested while one runs starts when it finishes.
+2. Unchanged text writes nothing.
+3. The encoded bytes are written to an item-replacement directory. Immediately before they replace the file, the worker reads and hashes the file on disk. A mismatch with the last loaded or saved fingerprint is a conflict, and so are a missing file and a read or write failure. The file's identity, size, and modification time are compared before and after that read, so a write that lands while it is hashed is caught too; only the moment between that check and the swap remains. NSFileCoordinator is not used, because most programs that write these files (editors, agents) do not coordinate.
+4. `FileManager.replaceItemAt` swaps the new file in, keeping permissions and creation date. Symlinks are resolved first. There is no in-place fallback: when the replacement fails, the original is left as it was (and moved back if the failed swap moved it aside), and the error reaches the prompt as a write failure.
+5. Conflicts go to an injectable resolver. The default is an app-modal alert offering Keep My Edits, Use Disk Version, or Save a Copy… (for a write failure: Save a Copy…, Discard My Edits, or Cancel). The writer is injectable too, for tests.
+
+Measured on 2026-11-13 with `EditSavePerformanceTests` (`WAFER_PERF_TESTS=1`; a 5 MB document, ten autosaves per run, two debug runs and one release run), as the longest main-thread turn per keystroke-triggered autosave:
+
+| Build | Before (save on the main thread) | After (save on the worker) |
+| --- | ---: | ---: |
+| Debug | 19.8 and 20.0 ms median, 22.6 to 38.3 ms max | 3.6 ms median, 4.6 to 14.1 ms max |
+| Release | 19.5 ms median, 99.2 ms max | 4.2 ms median, 8.0 ms max |
+
+The main thread still copies the text for the snapshot and applies the result. Saves that wait for their result (`Cmd-S`, closing) still take about 17 to 20 ms on the main thread for this document.
 
 The file monitor stays active while editing:
 
@@ -105,7 +125,7 @@ How the editor recolors after each user edit (TextKit 1 with non-contiguous layo
 
 Colors come from `MarkdownEditorColors(palette:)`, so built-in and custom themes apply without new theme fields.
 
-Measured on 2026-11-09 with `MarkdownSourceEditorTests.testLargeDocumentHighlightAndEditStayFast`, two release and three debug runs on a 159,000-character document with 1,500 fenced blocks:
+Measured on 2026-11-09 with `MarkdownSourceEditorTests.testLargeDocumentHighlightAndEditStayFast`, two release and three debug runs on a 159,000-character document with 1,500 fenced blocks. Its 0.25 s keystroke threshold runs only with `WAFER_PERF_TESTS=1`; the default suite checks that the edit lands and keeps its coloring.
 
 | Build | Full coloring on load | One keystroke |
 | --- | ---: | ---: |
@@ -116,7 +136,7 @@ The keystroke cost scales with document length because of the linear structure s
 
 ### Live preview
 
-Edit-mode renders set `WebKitHTMLRenderer(annotatesSourceLines: true)`:
+Edit-mode renders set `WebKitHTMLRenderer(annotatesSourceLines: true)`. The document passes the flag with each render request, so the render worker keeps no edit-mode state:
 
 - Top-level blocks, list items, and table body rows get `data-source-line`.
 - Lines are mapped back through `MarkdownDocument.sourceLineMap`, which accounts for stripped front matter and extracted multi-line footnote definitions. Footnote content is never annotated.

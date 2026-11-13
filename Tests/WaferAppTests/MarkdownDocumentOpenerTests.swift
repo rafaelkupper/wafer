@@ -19,6 +19,56 @@ final class MarkdownDocumentOpenerTests: XCTestCase {
         XCTAssertEqual(OpenDocumentRegistry.identityForTesting(url), FileIdentity.identity(for: url))
     }
 
+    func testAnchorIDsArePercentDecoded() throws {
+        let base = URL(fileURLWithPath: "/tmp/docs/Guide.md")
+        func link(_ fragment: String?) throws -> URL {
+            var components = try XCTUnwrap(URLComponents(url: base, resolvingAgainstBaseURL: false))
+            components.fragment = fragment
+            return try XCTUnwrap(components.url)
+        }
+
+        XCTAssertEqual(MarkdownDocumentOpener.anchorID(in: try link("café")), "café")
+        XCTAssertEqual(MarkdownDocumentOpener.anchorID(in: try link("日本語")), "日本語")
+        XCTAssertEqual(MarkdownDocumentOpener.anchorID(in: try link("section-1")), "section-1")
+        XCTAssertEqual(MarkdownDocumentOpener.anchorID(in: try XCTUnwrap(URL(string: "file:///tmp/docs/Guide.md#caf%C3%A9"))), "café")
+        XCTAssertEqual(MarkdownDocumentOpener.anchorID(in: try XCTUnwrap(URL(string: "#%E6%97%A5%E6%9C%AC%E8%AA%9E", relativeTo: base))), "日本語")
+        XCTAssertNil(MarkdownDocumentOpener.anchorID(in: try link("")))
+        XCTAssertNil(MarkdownDocumentOpener.anchorID(in: base))
+    }
+
+    func testOpeningALinkWithAnEncodedFragmentScrollsToTheDecodedAnchor() throws {
+        _ = NSApplication.shared
+        defer { closeOpenMarkdownDocuments() }
+        let tempDirectory = try TemporaryTestDirectory()
+        defer { tempDirectory.remove() }
+        let fileURL = try tempDirectory.createTextFile(named: "Anchors.md", contents: "# Café\n\n## 日本語")
+        let reader = RecordingReaderViewController()
+        let document = MarkdownReaderDocument(
+            renderScheduler: { _, baseURL, _, _, completion in
+                completion(WebKitRenderOutput(html: "<html></html>", baseURL: baseURL))
+                return DispatchWorkItem {}
+            },
+            readerControllerFactory: { reader },
+            fileMonitorFactory: { _, _ in OpenerTestFileMonitor() }
+        )
+        var components = try XCTUnwrap(URLComponents(url: fileURL, resolvingAgainstBaseURL: false))
+        components.fragment = "café"
+
+        try MarkdownDocumentOpener.open(url: try XCTUnwrap(components.url), documentFactory: { document })
+        let deadline = Date(timeIntervalSinceNow: 10)
+        while reader.appliedOutputs.isEmpty, Date() < deadline {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        }
+        reader.stubbedContentReady = true
+        reader.onNavigationFinished?()
+        XCTAssertEqual(reader.scrolledHeadingIDs, ["café"])
+
+        // A second link into the open document scrolls it at once.
+        components.fragment = "日本語"
+        try MarkdownDocumentOpener.open(url: try XCTUnwrap(components.url))
+        XCTAssertEqual(reader.scrolledHeadingIDs, ["café", "日本語"])
+    }
+
     func testOpenRetainsDocumentUntilItCloses() throws {
         _ = NSApplication.shared
         defer { closeOpenMarkdownDocuments() }
@@ -128,11 +178,12 @@ final class MarkdownDocumentOpenerTests: XCTestCase {
         )
         secondDocument.navigateInCurrentWindow(to: firstURL)
 
-        let navigationExpectation = expectation(description: "same-window navigation")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            navigationExpectation.fulfill()
+        // The navigation reads the file in the background; wait for it
+        // rather than for a fixed time, which a cold first run can exceed.
+        let deadline = Date(timeIntervalSinceNow: 10)
+        while openMarkdownDocuments().filter({ $0.fileURL == firstURL }).count < 2, Date() < deadline {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
         }
-        wait(for: [navigationExpectation], timeout: 2)
 
         XCTAssertEqual(openMarkdownDocuments().filter { $0.fileURL == firstURL }.count, 2)
 
@@ -148,4 +199,10 @@ final class MarkdownDocumentOpenerTests: XCTestCase {
     private func closeOpenMarkdownDocuments() {
         openMarkdownDocuments().forEach { $0.close() }
     }
+}
+
+@MainActor
+private final class OpenerTestFileMonitor: FileChangeMonitoring {
+    func start() {}
+    func stop() {}
 }

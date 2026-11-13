@@ -345,6 +345,101 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         document.close()
     }
 
+    func testWikiLinkIndexComesFromTheInjectedLibrarySnapshot() throws {
+        let tempDirectory = try TemporaryTestDirectory()
+        defer { tempDirectory.remove() }
+        let note = try tempDirectory.createTextFile(named: "Note.md", contents: "See [[Other]]")
+        _ = try tempDirectory.createTextFile(named: "Other.md", contents: "# Other")
+        let library = SnapshotBox()
+        var renderedIndexes: [WikiLinkIndex?] = []
+        let document = MarkdownReaderDocument(
+            renderScheduler: { _, baseURL, _, wikiLinkIndex, completion in
+                renderedIndexes.append(wikiLinkIndex)
+                completion(WebKitRenderOutput(html: "<html></html>", baseURL: baseURL, hasWikiLinks: true))
+                return DispatchWorkItem {}
+            },
+            readerControllerFactory: { RecordingReaderViewController() },
+            librarySnapshotProvider: { library.snapshot }
+        )
+        document.fileURL = note
+        try document.read(from: Data("See [[Other]]".utf8), ofType: "dev.wafer.markdown")
+        document.makeWindowControllers()
+        defer { document.close() }
+
+        library.snapshot = LibrarySnapshot(files: LibraryScanner.scan(rootURL: tempDirectory.url).files)
+        NotificationCenter.default.post(name: .libraryDidChange, object: nil)
+
+        XCTAssertEqual(renderedIndexes.count, 2)
+        XCTAssertNil(renderedIndexes.first ?? nil, "no library files, no index")
+        XCTAssertEqual(renderedIndexes.last ?? nil, library.snapshot.wikiLinkIndex)
+    }
+
+    func testNonASCIIFragmentsReachTheReaderAndOpenerDecoded() throws {
+        let reader = RecordingReaderViewController()
+        var openedMarkdownLinks: [(URL, String?)] = []
+        let document = MarkdownReaderDocument(
+            renderScheduler: { _, _, _, _, _ in DispatchWorkItem {} },
+            markdownLinkOpener: { url, anchorID in
+                openedMarkdownLinks.append((url, anchorID))
+            },
+            readerControllerFactory: { reader }
+        )
+        let fileURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("Anchors.md")
+        let guideURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("Guide.md")
+        document.fileURL = fileURL
+        try document.read(from: Data("# Café\n\n## 日本語".utf8), ofType: "dev.wafer.markdown")
+        document.makeWindowControllers()
+        defer { document.close() }
+        func link(_ url: URL, _ fragment: String) throws -> URL {
+            var components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
+            components.fragment = fragment
+            return try XCTUnwrap(components.url)
+        }
+        // Clicked links arrive percent-encoded, as WebKit reports them.
+        XCTAssertEqual(try link(fileURL, "café").fragment, "caf%C3%A9")
+
+        reader.onOpenLink?(try link(fileURL, "café"))
+        reader.onOpenLink?(try link(fileURL, "日本語"))
+        reader.onOpenLink?(try link(guideURL, "café"))
+        reader.onOpenLink?(try link(guideURL, "日本語"))
+
+        XCTAssertEqual(reader.scrolledHeadingIDs, ["café", "日本語"])
+        XCTAssertEqual(openedMarkdownLinks.map(\.0), [guideURL, guideURL])
+        XCTAssertEqual(openedMarkdownLinks.map(\.1), ["café", "日本語"])
+    }
+
+    func testNewTabLinkPassesTheDecodedAnchor() throws {
+        let reader = RecordingReaderViewController()
+        let tabReader = RecordingReaderViewController()
+        tabReader.stubbedContentReady = true
+        let document = MarkdownReaderDocument(
+            renderScheduler: { _, _, _, _, _ in DispatchWorkItem {} },
+            readerControllerFactory: { reader }
+        )
+        let fileURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("Anchors.md")
+        let guideURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("Guide.md")
+        document.fileURL = fileURL
+        try document.read(from: Data("# Anchors".utf8), ofType: "dev.wafer.markdown")
+        document.makeWindowControllers()
+        let host = try XCTUnwrap(document.windowControllers.first as? DocumentHostWindowController)
+        host.tabDocumentFactoryForTesting = { url in
+            let tabDocument = MarkdownReaderDocument(
+                renderScheduler: { _, _, _, _, _ in DispatchWorkItem {} },
+                readerControllerFactory: { tabReader }
+            )
+            tabDocument.fileURL = url
+            return tabDocument
+        }
+        defer { host.tabs.forEach { $0.document.close() } }
+        var components = try XCTUnwrap(URLComponents(url: guideURL, resolvingAgainstBaseURL: false))
+        components.fragment = "日本語"
+
+        reader.onOpenLinkInNewTab?(try XCTUnwrap(components.url))
+
+        XCTAssertEqual(host.tabs.count, 2)
+        XCTAssertEqual(tabReader.scrolledHeadingIDs, ["日本語"])
+    }
+
     func testSidebarNavigationReplacesCurrentFileInSameWindow() throws {
         let tempDirectory = try TemporaryTestDirectory()
         defer { tempDirectory.remove() }
@@ -990,4 +1085,9 @@ private final class FakeFileMonitor: FileChangeMonitoring {
     func fireChange() {
         onChange()
     }
+}
+
+@MainActor
+private final class SnapshotBox {
+    var snapshot = LibrarySnapshot()
 }

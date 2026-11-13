@@ -22,7 +22,7 @@ enum MarkdownDocumentOpener {
         guard supports(url: normalizedURL) else {
             throw CocoaError(.fileReadUnsupportedScheme)
         }
-        let requestedAnchorID = anchorID ?? url.fragment
+        let requestedAnchorID = anchorID ?? Self.anchorID(in: url)
 
         if let existingDocument = OpenDocumentRegistry.shared.document(for: normalizedURL) {
             focus(document: existingDocument)
@@ -79,6 +79,19 @@ enum MarkdownDocumentOpener {
         }
 
         return FileIdentity.normalized(url)
+    }
+
+    /// The heading anchor a link points at, percent-decoded, or nil when the
+    /// link has no fragment. `URL.fragment` keeps the percent-encoding, so a
+    /// link to `#café` would otherwise ask for `caf%C3%A9`.
+    nonisolated static func anchorID(in url: URL) -> String? {
+        let fragment = URLComponents(url: url, resolvingAgainstBaseURL: true)?.fragment
+            ?? url.fragment(percentEncoded: false)
+        guard let fragment, !fragment.isEmpty else {
+            return nil
+        }
+
+        return fragment
     }
 
     private static func focus(document: MarkdownReaderDocument) {
