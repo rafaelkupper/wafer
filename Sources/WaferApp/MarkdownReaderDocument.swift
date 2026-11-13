@@ -8,7 +8,7 @@ final class MarkdownReaderDocument: NSDocument {
         _ baseURL: URL?,
         _ palette: ReaderThemePalette,
         _ wikiLinkIndex: WikiLinkIndex?,
-        _ completion: @escaping (WebKitRenderOutput) -> Void
+        _ completion: @escaping @MainActor @Sendable (WebKitRenderOutput) -> Void
     ) -> DispatchWorkItem
     typealias WikiLinkIndexProvider = @MainActor () -> WikiLinkIndex?
     typealias LibrarySnapshotProvider = @MainActor () -> LibrarySnapshot
@@ -465,7 +465,7 @@ final class MarkdownReaderDocument: NSDocument {
         _ baseURL: URL?,
         _ palette: ReaderThemePalette,
         _ wikiLinkIndex: WikiLinkIndex?,
-        completion: @escaping (WebKitRenderOutput) -> Void
+        completion: @escaping @MainActor @Sendable (WebKitRenderOutput) -> Void
     ) -> DispatchWorkItem {
         if let injectedRenderScheduler {
             return injectedRenderScheduler(source, baseURL, palette, wikiLinkIndex, completion)

@@ -5,6 +5,7 @@ import WaferCore
 /// metadata are confined to the serial queue and kept only for the last
 /// source, so wiki-index and theme re-renders reuse them. The only state
 /// shared with the caller is the current request's cancellation, behind a lock.
+// NSLock protects cancellation; parsed and metadata are confined to the serial queue.
 final class MarkdownRenderWorker: @unchecked Sendable {
     private let queue = DispatchQueue(label: "dev.wafer.document-render", qos: .userInitiated)
     private let lock = NSLock()
@@ -29,11 +30,10 @@ final class MarkdownRenderWorker: @unchecked Sendable {
         palette: ReaderThemePalette,
         wikiLinkIndex: WikiLinkIndex?,
         annotatesSourceLines: Bool,
-        completion: @escaping (WebKitRenderOutput) -> Void
+        completion: @escaping @MainActor @Sendable (WebKitRenderOutput) -> Void
     ) -> DispatchWorkItem {
         let token = WorkCancellation()
         lock.withLock { cancellation?.cancel(); cancellation = token }
-        let completionBox = RenderCompletionBox(completion: completion)
         let workItem = DispatchWorkItem { @Sendable [self] in
             guard !token.isCancelled else { return }
             let renderer = WebKitHTMLRenderer(
@@ -52,7 +52,7 @@ final class MarkdownRenderWorker: @unchecked Sendable {
             guard !token.isCancelled else { return }
             DispatchQueue.main.async {
                 guard !token.isCancelled else { return }
-                completionBox.completion(output)
+                completion(output)
             }
         }
         queue.async(execute: workItem)
@@ -60,10 +60,3 @@ final class MarkdownRenderWorker: @unchecked Sendable {
     }
 }
 
-private final class RenderCompletionBox: @unchecked Sendable {
-    let completion: (WebKitRenderOutput) -> Void
-
-    init(completion: @escaping (WebKitRenderOutput) -> Void) {
-        self.completion = completion
-    }
-}
