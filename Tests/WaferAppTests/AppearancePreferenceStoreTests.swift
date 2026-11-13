@@ -32,6 +32,7 @@ final class AppearancePreferenceStoreTests: XCTestCase {
             queue: nil
         ) { note in
             XCTAssertEqual(note.userInfo?["appearanceSelection"] as? String, "dark")
+            XCTAssertEqual(AppearancePreferenceChange.value(from: note)?.selection, .dark)
             expectation.fulfill()
         }
 

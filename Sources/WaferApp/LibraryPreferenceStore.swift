@@ -5,6 +5,7 @@ extension Notification.Name {
     static let libraryPreferenceDidChange = Notification.Name("LibraryPreferenceStore.libraryPreferenceDidChange")
 }
 
+// Safe to share: immutable references to thread-safe UserDefaults and NotificationCenter.
 final class LibraryPreferenceStore: @unchecked Sendable {
     static let shared = LibraryPreferenceStore()
 
@@ -46,7 +47,7 @@ final class LibraryPreferenceStore: @unchecked Sendable {
             notificationCenter.post(
                 name: .libraryPreferenceDidChange,
                 object: self,
-                userInfo: ["libraryFolderURL": normalizedURL as Any]
+                userInfo: LibraryPreferenceChange(folderURL: normalizedURL).userInfo
             )
         }
     }
