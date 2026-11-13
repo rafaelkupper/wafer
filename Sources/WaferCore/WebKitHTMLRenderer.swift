@@ -83,7 +83,7 @@ public final class WebKitHTMLRenderer {
             )
             cspMetaTag = "  <meta http-equiv=\"Content-Security-Policy\" content=\"\(csp.escapedHTMLAttribute)\">"
             katexStyleSheet = visitor.hasMathDisplays
-                ? "\n\(Self.katexStyleSheet())"
+                ? "\n\(Self.katexStyleSheet ?? "")"
                 : ""
             rendererScripts = hasScriptedRenderers
                 ? Self.rendererScripts(
@@ -132,8 +132,6 @@ public final class WebKitHTMLRenderer {
             hasMathDisplays: visitor.hasMathDisplays
         )
     }
-
-
 }
 
 private struct WebKitHTMLRenderVisitor: MarkupVisitor {
@@ -532,10 +530,10 @@ private struct WebKitHTMLRenderVisitor: MarkupVisitor {
     mutating func visitCodeBlock(_ codeBlock: CodeBlock) -> String {
         let normalizedLanguage = codeBlock.language?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let code = codeBlock.code.trimmingCharacters(in: .newlines)
-        if target == .reader, isMermaidLanguage(normalizedLanguage) {
+        if target == .reader, isMermaidLanguage(normalizedLanguage), WebKitHTMLRenderer.canRenderMermaid {
             return renderMermaidDiagram(source: code)
         }
-        if target == .reader, isMathLanguage(normalizedLanguage) {
+        if target == .reader, isMathLanguage(normalizedLanguage), WebKitHTMLRenderer.canRenderMath {
             return renderMathDisplay(source: code)
         }
 
@@ -1086,6 +1084,4 @@ private struct WebKitHTMLRenderVisitor: MarkupVisitor {
     private func htmlLinkHref(for rawHref: String) -> String? {
         resolvedLinkHref(for: rawHref)
     }
-
-
 }

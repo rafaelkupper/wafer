@@ -302,12 +302,12 @@ enum HTMLTokenizer {
     static func isAttributeNameCharacter(_ character: Character) -> Bool {
         character.isLetter || character.isNumber || character == "-" || character == "_" || character == ":"
     }
+    private static let entityRegex = try! NSRegularExpression(pattern: #"&(#(?:[xX][0-9a-fA-F]+|[0-9]+)|[a-zA-Z]+);?"#)
+
     static func decodeEntities(_ source: String) -> String {
-        let pattern = #"&(#(?:[xX][0-9a-fA-F]+|[0-9]+)|[a-zA-Z]+);?"#
-        let regex = try! NSRegularExpression(pattern: pattern)
         var result = source
         let named = ["quot": "\"", "apos": "'", "lt": "<", "gt": ">", "amp": "&", "colon": ":", "Tab": "\t", "NewLine": "\n"]
-        for match in regex.matches(in: source, range: NSRange(source.startIndex..., in: source)).reversed() {
+        for match in entityRegex.matches(in: source, range: NSRange(source.startIndex..., in: source)).reversed() {
             guard let range = Range(match.range, in: source), let keyRange = Range(match.range(at: 1), in: source) else { continue }
             let key = String(source[keyRange])
             var replacement = named[key]
