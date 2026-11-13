@@ -55,7 +55,7 @@ enum AppearanceSelection: Equatable, Sendable {
 }
 
 @MainActor
-final class AppearancePreferenceStore: @unchecked Sendable {
+final class AppearancePreferenceStore {
     static let shared = AppearancePreferenceStore()
 
     private enum DefaultsKey {
@@ -101,7 +101,7 @@ final class AppearancePreferenceStore: @unchecked Sendable {
             notificationCenter.post(
                 name: .appearancePreferenceDidChange,
                 object: self,
-                userInfo: ["appearanceSelection": newValue.rawValue]
+                userInfo: AppearancePreferenceChange(selection: newValue).userInfo
             )
         }
     }

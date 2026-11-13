@@ -5,6 +5,7 @@ extension Notification.Name {
     static let documentStatisticKindDidChange = Notification.Name("DocumentStatisticPreferenceStore.documentStatisticKindDidChange")
 }
 
+// Safe to share: immutable references to thread-safe UserDefaults and NotificationCenter.
 final class DocumentStatisticPreferenceStore: @unchecked Sendable {
     static let shared = DocumentStatisticPreferenceStore()
 
@@ -40,7 +41,7 @@ final class DocumentStatisticPreferenceStore: @unchecked Sendable {
             }
 
             defaults.set(newValue.rawValue, forKey: DefaultsKey.selectedKind)
-            notificationCenter.post(name: .documentStatisticKindDidChange, object: self, userInfo: ["kind": newValue.rawValue])
+            notificationCenter.post(name: .documentStatisticKindDidChange, object: self, userInfo: DocumentStatisticPreferenceChange(kind: newValue).userInfo)
         }
     }
 }

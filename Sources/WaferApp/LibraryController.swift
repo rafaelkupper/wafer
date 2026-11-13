@@ -19,6 +19,9 @@ final class LibraryController {
     private let scanner: Scanner?
     private let monitorFactory: MonitorFactory
     private let monitorDebounceInterval: TimeInterval
+    private let monitorMaximumWait: TimeInterval
+    private var firstPendingMonitorChange: TimeInterval?
+    private let rescanScheduler: LibraryRescanScheduler
 
     private var monitor: DirectoryMonitoring?
     private var pendingMonitorWorkItem: DispatchWorkItem?
@@ -46,13 +49,17 @@ final class LibraryController {
         monitorFactory: @escaping MonitorFactory = { rootURL, onChange in
             DirectoryChangeMonitor(rootURL: rootURL, onChange: onChange)
         },
-        monitorDebounceInterval: TimeInterval = 0.5
+        monitorDebounceInterval: TimeInterval = 0.5,
+        monitorMaximumWait: TimeInterval = 2,
+        rescanScheduler: LibraryRescanScheduler = .main
     ) {
         self.preferenceStore = preferenceStore
         self.notificationCenter = notificationCenter
         self.scanner = scanner
         self.monitorFactory = monitorFactory
         self.monitorDebounceInterval = monitorDebounceInterval
+        self.monitorMaximumWait = monitorMaximumWait
+        self.rescanScheduler = rescanScheduler
     }
 
     var hasLibrary: Bool {
@@ -73,6 +80,7 @@ final class LibraryController {
     private func selectLibrary(at normalizedURL: URL, onFirstScanCompletion: FirstScanCompletion? = nil) {
         pendingMonitorWorkItem?.cancel()
         pendingMonitorWorkItem = nil
+        firstPendingMonitorChange = nil
         scanCancellation?.cancel()
         snapshot = LibrarySnapshot()
         skippedItemCount = 0
@@ -94,6 +102,7 @@ final class LibraryController {
         changedPaths = []
         pendingMonitorWorkItem?.cancel()
         pendingMonitorWorkItem = nil
+        firstPendingMonitorChange = nil
         monitor?.stop()
         monitor = nil
         rootURL = nil
@@ -146,18 +155,16 @@ final class LibraryController {
     private func scheduleMonitorRescan() {
         pendingMonitorWorkItem?.cancel()
 
-        let workItem = DispatchWorkItem { [weak self] in
-            Task { @MainActor [weak self] in
-                guard let self else {
-                    return
-                }
-
-                self.pendingMonitorWorkItem = nil
-                self.performScan()
-            }
+        let now = rescanScheduler.now()
+        let firstChange = firstPendingMonitorChange ?? now
+        firstPendingMonitorChange = firstChange
+        let delay = min(monitorDebounceInterval, max(0, firstChange + monitorMaximumWait - now))
+        pendingMonitorWorkItem = rescanScheduler.schedule(delay) { [weak self] in
+            guard let self else { return }
+            self.pendingMonitorWorkItem = nil
+            self.firstPendingMonitorChange = nil
+            self.performScan()
         }
-        pendingMonitorWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + monitorDebounceInterval, execute: workItem)
     }
 
     private func performScan() {
@@ -238,15 +245,10 @@ final class LibraryController {
         notificationCenter.post(
             name: .libraryDidChange,
             object: self,
-            userInfo: [
-                "rootURL": rootURL as Any,
-                "files": files,
-                "truncated": truncated,
-                "isScanning": isScanning,
-                "contentChanged": contentChanged,
-                "availabilityChanged": availabilityChanged,
-                "diff": diff as Any,
-            ]
+            userInfo: LibraryChange(
+                rootURL: rootURL, files: files, truncated: truncated, isScanning: isScanning,
+                contentChanged: contentChanged, availabilityChanged: availabilityChanged, diff: diff
+            ).userInfo
         )
     }
 

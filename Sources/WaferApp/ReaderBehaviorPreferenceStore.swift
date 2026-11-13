@@ -4,6 +4,7 @@ extension Notification.Name {
     static let readerBehaviorPreferenceDidChange = Notification.Name("ReaderBehaviorPreferenceStore.readerBehaviorPreferenceDidChange")
 }
 
+// Safe to share: immutable references to thread-safe UserDefaults and NotificationCenter.
 final class ReaderBehaviorPreferenceStore: @unchecked Sendable {
     static let shared = ReaderBehaviorPreferenceStore()
 
@@ -38,7 +39,7 @@ final class ReaderBehaviorPreferenceStore: @unchecked Sendable {
             notificationCenter.post(
                 name: .readerBehaviorPreferenceDidChange,
                 object: self,
-                userInfo: ["automaticallyReloadsDocuments": newValue]
+                userInfo: ReaderBehaviorPreferenceChange.automaticallyReloadsDocuments(newValue).userInfo
             )
         }
     }
@@ -58,7 +59,7 @@ final class ReaderBehaviorPreferenceStore: @unchecked Sendable {
             notificationCenter.post(
                 name: .readerBehaviorPreferenceDidChange,
                 object: self,
-                userInfo: ["loadsRemoteImages": newValue]
+                userInfo: ReaderBehaviorPreferenceChange.loadsRemoteImages(newValue).userInfo
             )
         }
     }

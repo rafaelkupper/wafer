@@ -29,6 +29,7 @@ final class ReaderBehaviorPreferenceStoreTests: XCTestCase {
             queue: nil
         ) { note in
             XCTAssertEqual(note.userInfo?["automaticallyReloadsDocuments"] as? Bool, false)
+            XCTAssertEqual(ReaderBehaviorPreferenceChange.value(from: note), .automaticallyReloadsDocuments(false))
             expectation.fulfill()
         }
 
@@ -52,6 +53,7 @@ final class ReaderBehaviorPreferenceStoreTests: XCTestCase {
             queue: nil
         ) { note in
             XCTAssertEqual(note.userInfo?["loadsRemoteImages"] as? Bool, false)
+            XCTAssertEqual(ReaderBehaviorPreferenceChange.value(from: note), .loadsRemoteImages(false))
             expectation.fulfill()
         }
 
