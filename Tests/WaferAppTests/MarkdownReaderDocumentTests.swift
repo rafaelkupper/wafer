@@ -345,6 +345,35 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         document.close()
     }
 
+    func testWikiLinkIndexComesFromTheInjectedLibrarySnapshot() throws {
+        let tempDirectory = try TemporaryTestDirectory()
+        defer { tempDirectory.remove() }
+        let note = try tempDirectory.createTextFile(named: "Note.md", contents: "See [[Other]]")
+        _ = try tempDirectory.createTextFile(named: "Other.md", contents: "# Other")
+        let library = SnapshotBox()
+        var renderedIndexes: [WikiLinkIndex?] = []
+        let document = MarkdownReaderDocument(
+            renderScheduler: { _, baseURL, _, wikiLinkIndex, completion in
+                renderedIndexes.append(wikiLinkIndex)
+                completion(WebKitRenderOutput(html: "<html></html>", baseURL: baseURL, hasWikiLinks: true))
+                return DispatchWorkItem {}
+            },
+            readerControllerFactory: { RecordingReaderViewController() },
+            librarySnapshotProvider: { library.snapshot }
+        )
+        document.fileURL = note
+        try document.read(from: Data("See [[Other]]".utf8), ofType: "dev.wafer.markdown")
+        document.makeWindowControllers()
+        defer { document.close() }
+
+        library.snapshot = LibrarySnapshot(files: LibraryScanner.scan(rootURL: tempDirectory.url).files)
+        NotificationCenter.default.post(name: .libraryDidChange, object: nil)
+
+        XCTAssertEqual(renderedIndexes.count, 2)
+        XCTAssertNil(renderedIndexes.first ?? nil, "no library files, no index")
+        XCTAssertEqual(renderedIndexes.last ?? nil, library.snapshot.wikiLinkIndex)
+    }
+
     func testNonASCIIFragmentsReachTheReaderAndOpenerDecoded() throws {
         let reader = RecordingReaderViewController()
         var openedMarkdownLinks: [(URL, String?)] = []
@@ -1056,4 +1085,9 @@ private final class FakeFileMonitor: FileChangeMonitoring {
     func fireChange() {
         onChange()
     }
+}
+
+@MainActor
+private final class SnapshotBox {
+    var snapshot = LibrarySnapshot()
 }
