@@ -76,7 +76,7 @@ final class WebKitLocalAssetSchemeHandler: NSObject, WKURLSchemeHandler {
                 )
             }
 
-            let operation = LocalAssetReadOperation(fileURL: fileURL, maximumByteCount: byteLimit,
+            let operation = LocalAssetReadOperation(fileURL: fileURL, allowedRootDirectories: allowedRootDirectories, maximumByteCount: byteLimit,
                                                     completionBox: completionBox)
             activeTasks[taskID] = operation
             queue.addOperation(operation)
@@ -118,6 +118,7 @@ final class WebKitLocalAssetSchemeHandler: NSObject, WKURLSchemeHandler {
     }
 }
 
+// WebKit calls and all uses of the task stay on the main actor.
 private final class LocalAssetSchemeTaskBox: @unchecked Sendable {
     let task: any WKURLSchemeTask
     let identifier: ObjectIdentifier
@@ -128,7 +129,7 @@ private final class LocalAssetSchemeTaskBox: @unchecked Sendable {
     }
 }
 
-private final class LocalAssetCompletionBox: @unchecked Sendable {
+private final class LocalAssetCompletionBox: Sendable {
     let completion: @MainActor (Result<Data, Error>) -> Void
 
     init(completion: @escaping @MainActor (Result<Data, Error>) -> Void) {
@@ -136,20 +137,23 @@ private final class LocalAssetCompletionBox: @unchecked Sendable {
     }
 }
 
+// Inputs are immutable; Operation owns synchronized cancellation state.
 private final class LocalAssetReadOperation: Operation, @unchecked Sendable {
     private let fileURL: URL
+    private let allowedRootDirectories: [URL]
     private let maximumByteCount: Int
     private let completionBox: LocalAssetCompletionBox
 
-    init(fileURL: URL, maximumByteCount: Int, completionBox: LocalAssetCompletionBox) {
+    init(fileURL: URL, allowedRootDirectories: [URL], maximumByteCount: Int, completionBox: LocalAssetCompletionBox) {
         self.fileURL = fileURL
+        self.allowedRootDirectories = allowedRootDirectories
         self.maximumByteCount = maximumByteCount
         self.completionBox = completionBox
     }
 
     override func main() {
         guard !isCancelled else { return }
-        let result = Result { try BoundedFileReader.read(from: fileURL, maximumByteCount: maximumByteCount) }
+        let result = Result { try LocalAssetLoader.read(fileURL, allowedRootDirectories: allowedRootDirectories, maximumByteCount: maximumByteCount) }
         guard !isCancelled else { return }
         DispatchQueue.main.async { [completionBox] in
             completionBox.completion(result)
