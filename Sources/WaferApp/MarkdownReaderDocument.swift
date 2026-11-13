@@ -94,6 +94,8 @@ final class MarkdownReaderDocument: NSDocument {
     private weak var documentWindowController: DocumentWindowController?
     private var fileMonitor: FileChangeMonitoring?
     private var renderWorkItem: DispatchWorkItem?
+    private var isRendering = false
+    private var pendingLiveRender = false
     private var renderToken = UUID()
     private var loadState = LoadState.idle
     private var loadGeneration = 0
@@ -293,6 +295,8 @@ final class MarkdownReaderDocument: NSDocument {
         }
         editMode.stop()
         renderToken = UUID()
+        isRendering = false
+        pendingLiveRender = false
         abandonSourceRead()
         initialSourceFailureHandler = nil
         deferredReload = nil
@@ -382,6 +386,15 @@ final class MarkdownReaderDocument: NSDocument {
             return
         }
 
+        // Typing coalesces behind the active render; navigation and explicit
+        // refreshes still supersede it through the generation token.
+        if live, isRendering {
+            pendingLiveRender = true
+            return
+        }
+        pendingLiveRender = false
+        isRendering = true
+
         let fileURL = fileURL
         let restoreFraction: Double?
         if live {
@@ -410,11 +423,21 @@ final class MarkdownReaderDocument: NSDocument {
         let wikiLinkIndex = wikiLinkIndexProvider()
         lastRenderedWikiLinkIndex = wikiLinkIndex
         renderedPalette = palette
-        renderWorkItem = scheduleRender(source.sourceText, fileURL, palette, wikiLinkIndex) { [weak self] output in
+        let workItem = scheduleRender(source.sourceText, fileURL, palette, wikiLinkIndex) { [weak self] output in
             guard let self, self.renderToken == token else {
                 return
             }
 
+            self.isRendering = false
+            self.renderWorkItem = nil
+            defer {
+                if self.pendingLiveRender {
+                    self.pendingLiveRender = false
+                    self.scheduleRenderIfPossible(
+                        initialScrollFractionOverride: nil, showsLoadingPlaceholder: false, live: true
+                    )
+                }
+            }
             self.lastOutputHadWikiLinks = output.hasWikiLinks
             if live {
                 self.applyLiveRender(output)
@@ -432,6 +455,7 @@ final class MarkdownReaderDocument: NSDocument {
             }
             self.readerController?.apply(renderOutput: output, initialScrollFraction: restoreFraction)
         }
+        if renderToken == token, isRendering { renderWorkItem = workItem }
     }
 
     /// Edit-mode renders carry source-line annotations; each request says so

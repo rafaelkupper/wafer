@@ -143,7 +143,7 @@ Edit-mode renders set `WebKitHTMLRenderer(annotatesSourceLines: true)`. The docu
 
 Every reader render carries `bodyHTML` and whether Mermaid or math is present, so a page loaded for reading can later be patched.
 
-Renders are throttled to one per 100 ms rather than debounced, so the preview keeps up during continuous typing. They push statistics and the sidebar only when those changed.
+Typing requests a render every 100 ms while the worker is available. If a render is still running, it finishes and reaches the preview before the newest pending text starts. Intermediate requests coalesce, so continuous typing cannot starve the preview. Navigation and explicit refreshes still supersede older renders. They push statistics and the sidebar only when those changed.
 
 `ReaderScriptResource` loads the app scripts from `Bundle.module` under `Resources/Scripts`. Static properties cache each source once. `ReaderLivePreviewScript` keeps the live-preview installer in `reader-live-preview.js`; `reader-scroll.js` holds the reader instrumentation. The former remains in the page world and installs lazily on the first live-preview call. The latter runs in the named reader content world after navigation finishes, as before.
 
