@@ -125,6 +125,25 @@ final class DocumentSidebarViewControllerTests: XCTestCase {
         XCTAssertEqual(fixture.sidebar.libraryFooterTextsForTesting, ["Showing first 2,000 files"])
     }
 
+    func testLibraryModeShowsSkippedItemFooter() throws {
+        let fixture = try makeLibrarySidebar(
+            files: [libraryFile(path: "README.md", title: "Read Me")],
+            skippedItemCount: 3
+        )
+        defer { fixture.tempDirectory.remove() }
+        fixture.sidebar.loadViewIfNeeded()
+
+        try fixture.controller.openLibrary(at: fixture.tempDirectory.url)
+        waitForLibraryIdle(fixture.controller)
+        fixture.sidebar.setMode(.library)
+
+        XCTAssertEqual(fixture.controller.skippedItemCount, 3)
+        XCTAssertEqual(
+            fixture.sidebar.libraryFooterTextsForTesting,
+            ["3 files skipped (unreadable or too large)"]
+        )
+    }
+
     func testLibraryRowsReapplyCurrentTheme() throws {
         defer { ReaderTheme.resetToDefaultForTesting() }
         let fixture = try makeLibrarySidebar(files: [libraryFile(path: "README.md", title: "Read Me")])
@@ -382,6 +401,7 @@ final class DocumentSidebarViewControllerTests: XCTestCase {
     private func makeLibrarySidebar(
         files: [LibraryFile],
         truncated: Bool = false,
+        skippedItemCount: Int = 0,
         librarySearchRunner: @escaping DocumentSidebarViewController.LibrarySearchRunner = { query, files in
             SidebarLibrarySearchRunResult(
                 matches: LibrarySearch.fullTextMatches(query: query, in: files),
@@ -401,7 +421,9 @@ final class DocumentSidebarViewControllerTests: XCTestCase {
                 notificationCenter: notificationCenter
             ),
             notificationCenter: notificationCenter,
-            scanner: { _ in LibraryScanner.Result(files: files, truncated: truncated) },
+            scanner: { _ in
+                LibraryScanner.Result(files: files, truncated: truncated, skippedItemCount: skippedItemCount)
+            },
             monitorFactory: { rootURL, onChange in
                 FakeSidebarDirectoryMonitor(rootURL: rootURL, onChange: onChange)
             }

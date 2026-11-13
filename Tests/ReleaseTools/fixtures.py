@@ -59,6 +59,11 @@ elif command == 'xcrun':
         print(json.dumps({'id': 'fixture-submission', 'status': os.environ.get('NOTARY_STATUS', 'Accepted')}))
     elif args[:2] == ['notarytool', 'log']:
         Path(args[-1]).write_text('{}')
+elif command == 'otool':
+    print(args[-1] + ':')
+    print('\t/System/Library/Frameworks/QuickLookUI.framework/Versions/A/QuickLookUI (compatibility version 1.0.0)')
+    if os.environ.get('LINK_WEBKIT'):
+        print('\t/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit (compatibility version 1.0.0)')
 elif command == 'generate_appcast':
     (Path(args[-1]) / 'appcast.xml').write_text(os.environ['NEW_FEED'])
 elif command == 'git':
@@ -129,7 +134,7 @@ class Fixture:
         self.resources = self.make_resources(nested=True)
         bindir = self.root / 'bin'
         bindir.mkdir()
-        for name in ('swift', 'codesign', 'ditto', 'xcrun', 'security', 'spctl', 'pluginkit', 'lsregister', 'gh', 'git', 'generate_appcast'):
+        for name in ('swift', 'codesign', 'ditto', 'xcrun', 'security', 'spctl', 'pluginkit', 'lsregister', 'gh', 'git', 'generate_appcast', 'otool'):
             path = bindir / name
             path.write_text('#!' + sys.executable + '\n' + STUB)
             path.chmod(0o755)

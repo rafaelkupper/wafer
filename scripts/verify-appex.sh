@@ -48,6 +48,13 @@ require_plist_value ":CFBundlePackageType" "XPC!"
 require_plist_value ":NSExtension:NSExtensionPointIdentifier" "com.apple.quicklook.preview"
 require_plist_value ":NSExtension:NSExtensionPrincipalClass" "PreviewProvider"
 
+data_based=$(/usr/libexec/PlistBuddy -c "Print :NSExtension:NSExtensionAttributes:QLIsDataBasedPreview" "$INFO_PLIST" 2>/dev/null || true)
+[[ -z "$data_based" || "$data_based" == "false" ]] || fail "Quick Look extension must be view-based (QLIsDataBasedPreview must be absent or false)."
+
+linked_libraries=$(otool -L "$EXECUTABLE") || fail "could not read Quick Look executable linkage: $EXECUTABLE"
+[[ "$linked_libraries" == *"/QuickLookUI.framework/"* ]] || fail "Quick Look executable does not link QuickLookUI."
+[[ "$linked_libraries" != *"/WebKit.framework/"* ]] || fail "Quick Look executable must not link WebKit; previews are native and scriptless."
+
 codesign --verify --strict --verbose=2 "$QUICKLOOK_APPEX" >/dev/null
 
 entitlements_plist=$(mktemp "${TMPDIR:-/tmp}/wafer-appex-entitlements.XXXXXX.plist")

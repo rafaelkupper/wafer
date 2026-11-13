@@ -20,6 +20,8 @@ jobs:
         run: swift test
       - name: Release tooling tests
         run: python3 -m unittest discover -s Tests/ReleaseTools -v
+      - name: JavaScript tests
+        run: for test in Tests/JavaScript/*/*.cjs; do node "$test"; done
       - name: Assemble app
         run: scripts/build-app.sh release
       - name: Verify Quick Look extension

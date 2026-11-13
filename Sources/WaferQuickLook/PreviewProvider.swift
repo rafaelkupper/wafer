@@ -85,37 +85,12 @@ final class PreviewProvider: NSViewController, @preconcurrency QLPreviewingContr
     }
 
     private func applyPreviewHTML(_ html: String, palette: ReaderThemePalette) {
-        let attributed = Self.attributedPreview(from: html, palette: palette)
+        let attributed = PreviewAttributedText.make(html: html, palette: palette)
         let textView = previewTextView
         textView.backgroundColor = ReaderTheme.color(fromHex: palette.backgroundHex)
         textView.insertionPointColor = ReaderTheme.color(fromHex: palette.textHex)
         textView.textStorage?.setAttributedString(attributed)
         textView.scrollToBeginningOfDocument(nil)
-    }
-
-    private static func attributedPreview(from html: String, palette: ReaderThemePalette) -> NSAttributedString {
-        let data = Data(html.utf8)
-        let options: [NSAttributedString.DocumentReadingOptionKey: Any] = [
-            .documentType: NSAttributedString.DocumentType.html,
-            .characterEncoding: String.Encoding.utf8.rawValue,
-        ]
-        let attributed = (
-            try? NSMutableAttributedString(
-                data: data,
-                options: options,
-                documentAttributes: nil
-            )
-        ) ?? NSMutableAttributedString(string: fallbackText(from: html))
-
-        let fullRange = NSRange(location: 0, length: attributed.length)
-        attributed.addAttributes(
-            [
-                .foregroundColor: ReaderTheme.color(fromHex: palette.textHex),
-                .backgroundColor: ReaderTheme.color(fromHex: palette.backgroundHex),
-            ],
-            range: fullRange
-        )
-        return attributed
     }
 
     private static var isDarkAppearance: Bool {
@@ -125,18 +100,4 @@ final class PreviewProvider: NSViewController, @preconcurrency QLPreviewingContr
             interfaceStyle: UserDefaults.standard.string(forKey: "AppleInterfaceStyle")
         )
     }
-
-    private static func fallbackText(from html: String) -> String {
-        let withoutTags = html.replacingOccurrences(
-            of: #"<[^>]+>"#,
-            with: "",
-            options: .regularExpression
-        )
-        return withoutTags
-            .replacingOccurrences(of: "&lt;", with: "<")
-            .replacingOccurrences(of: "&gt;", with: ">")
-            .replacingOccurrences(of: "&amp;", with: "&")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
 }

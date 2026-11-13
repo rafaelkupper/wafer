@@ -33,72 +33,49 @@ final class ReaderThemeTests: XCTestCase {
         XCTAssertTrue(printBlock.contains(".md-diagram-inspector"))
     }
 
-    func testSidebarThemeUsesFixedDarkerSurfaceTokens() {
-        XCTAssertEqual(ReaderTheme.sidebarBackgroundHex, "#212427")
-        XCTAssertEqual(ReaderTheme.sidebarSelectionHex, "#1C2023")
-        XCTAssertEqual(ReaderTheme.sidebarHoverAlpha, 0.028, accuracy: 0.0001)
-        XCTAssertLessThan(
-            luminance(of: ReaderTheme.sidebarBackgroundColor),
-            luminance(of: ReaderTheme.backgroundColor)
-        )
-        XCTAssertTrue(ReaderTheme.styleSheet.contains("overflow-x: hidden;"))
-    }
-
-    func testSettingCurrentThemeUpdatesDerivedNativeAndCSSValues() {
-        defer { ReaderTheme.resetToDefaultForTesting() }
-
-        ReaderTheme.setCurrent(.light)
-
-        XCTAssertEqual(ReaderTheme.current, .light)
-        XCTAssertEqual(ReaderTheme.backgroundHex, ReaderThemePalette.light.backgroundHex)
-        XCTAssertEqual(ReaderTheme.secondaryTextHex, ReaderThemePalette.light.secondaryTextHex)
-        XCTAssertTrue(ReaderTheme.styleSheet.contains("--bg-color: #FFFFFF;"))
-        XCTAssertTrue(ReaderTheme.styleSheet.contains("--link-color: #0969DA;"))
-    }
-
     func testMermaidEntityRelationshipRowsUseDarkReaderOverrides() {
-        XCTAssertTrue(ReaderTheme.styleSheet.contains(".md-mermaid-output svg.erDiagram .row-rect-odd > path:first-child"))
-        XCTAssertTrue(ReaderTheme.styleSheet.contains(".md-mermaid-output svg.erDiagram .row-rect-even > path:first-child"))
-        XCTAssertTrue(ReaderTheme.styleSheet.contains(".md-mermaid-output svg.erDiagram foreignObject div"))
+        XCTAssertTrue(ReaderTheme.styleSheet(for: .dark).contains(".md-mermaid-output svg.erDiagram .row-rect-odd > path:first-child"))
+        XCTAssertTrue(ReaderTheme.styleSheet(for: .dark).contains(".md-mermaid-output svg.erDiagram .row-rect-even > path:first-child"))
+        XCTAssertTrue(ReaderTheme.styleSheet(for: .dark).contains(".md-mermaid-output svg.erDiagram foreignObject div"))
     }
 
     func testMermaidDiagramInspectorStylesAreBundled() {
-        XCTAssertTrue(ReaderTheme.styleSheet.contains(".md-mermaid-open"))
-        XCTAssertTrue(ReaderTheme.styleSheet.contains(".md-diagram-inspector-viewport"))
-        XCTAssertTrue(ReaderTheme.styleSheet.contains("body.md-diagram-inspector-open"))
-        XCTAssertTrue(ReaderTheme.styleSheet.contains("overscroll-behavior: contain;"))
-        XCTAssertTrue(ReaderTheme.styleSheet.contains("touch-action: none;"))
+        XCTAssertTrue(ReaderTheme.styleSheet(for: .dark).contains(".md-mermaid-open"))
+        XCTAssertTrue(ReaderTheme.styleSheet(for: .dark).contains(".md-diagram-inspector-viewport"))
+        XCTAssertTrue(ReaderTheme.styleSheet(for: .dark).contains("body.md-diagram-inspector-open"))
+        XCTAssertTrue(ReaderTheme.styleSheet(for: .dark).contains("overscroll-behavior: contain;"))
+        XCTAssertTrue(ReaderTheme.styleSheet(for: .dark).contains("touch-action: none;"))
     }
 
     func testFrontMatterMetadataStylesAreBundled() {
-        XCTAssertTrue(ReaderTheme.styleSheet.contains(".md-front-matter"))
-        XCTAssertTrue(ReaderTheme.styleSheet.contains(".md-front-matter summary"))
-        XCTAssertFalse(ReaderTheme.styleSheet.contains("Document metadata"))
+        XCTAssertTrue(ReaderTheme.styleSheet(for: .dark).contains(".md-front-matter"))
+        XCTAssertTrue(ReaderTheme.styleSheet(for: .dark).contains(".md-front-matter summary"))
+        XCTAssertFalse(ReaderTheme.styleSheet(for: .dark).contains("Document metadata"))
     }
 
     func testExpandedRawHTMLStylesAreBundled() {
-        XCTAssertTrue(ReaderTheme.styleSheet.contains("figcaption,"))
-        XCTAssertTrue(ReaderTheme.styleSheet.contains("caption-side: bottom;"))
-        XCTAssertTrue(ReaderTheme.styleSheet.contains("dl {"))
-        XCTAssertTrue(ReaderTheme.styleSheet.contains("picture img"))
-        XCTAssertTrue(ReaderTheme.styleSheet.contains("small {"))
+        XCTAssertTrue(ReaderTheme.styleSheet(for: .dark).contains("figcaption,"))
+        XCTAssertTrue(ReaderTheme.styleSheet(for: .dark).contains("caption-side: bottom;"))
+        XCTAssertTrue(ReaderTheme.styleSheet(for: .dark).contains("dl {"))
+        XCTAssertTrue(ReaderTheme.styleSheet(for: .dark).contains("picture img"))
+        XCTAssertTrue(ReaderTheme.styleSheet(for: .dark).contains("small {"))
     }
 
     func testFootnoteStylesAreBundled() {
-        XCTAssertTrue(ReaderTheme.styleSheet.contains(".md-footnote-ref"))
-        XCTAssertTrue(ReaderTheme.styleSheet.contains(".md-footnotes"))
-        XCTAssertTrue(ReaderTheme.styleSheet.contains(".md-footnote-backref"))
+        XCTAssertTrue(ReaderTheme.styleSheet(for: .dark).contains(".md-footnote-ref"))
+        XCTAssertTrue(ReaderTheme.styleSheet(for: .dark).contains(".md-footnotes"))
+        XCTAssertTrue(ReaderTheme.styleSheet(for: .dark).contains(".md-footnote-backref"))
     }
 
     func testHighlightStylesAreBundled() {
-        XCTAssertTrue(ReaderTheme.styleSheet.contains("mark {"))
-        XCTAssertTrue(ReaderTheme.styleSheet.contains("background: var(--selection-bg-color);"))
+        XCTAssertTrue(ReaderTheme.styleSheet(for: .dark).contains("mark {"))
+        XCTAssertTrue(ReaderTheme.styleSheet(for: .dark).contains("background: var(--selection-bg-color);"))
     }
 
     func testMathDisplayStylesAreBundled() {
-        XCTAssertTrue(ReaderTheme.styleSheet.contains(".md-math-display"))
-        XCTAssertTrue(ReaderTheme.styleSheet.contains(".md-math-output .katex"))
-        XCTAssertTrue(ReaderTheme.styleSheet.contains("color: var(--text-color);"))
+        XCTAssertTrue(ReaderTheme.styleSheet(for: .dark).contains(".md-math-display"))
+        XCTAssertTrue(ReaderTheme.styleSheet(for: .dark).contains(".md-math-output .katex"))
+        XCTAssertTrue(ReaderTheme.styleSheet(for: .dark).contains("color: var(--text-color);"))
     }
 
     func testFallbackStyleSheetKeepsEmergencyReaderStyles() {
@@ -121,11 +98,6 @@ final class ReaderThemeTests: XCTestCase {
         XCTAssertNotNil(ReaderTheme.resourceURL(named: "katex/katex.min.css"))
         XCTAssertNotNil(ReaderTheme.resourceURL(named: "katex/katex-LICENSE.txt"))
         XCTAssertNotNil(ReaderTheme.resourceURL(named: "katex/fonts/KaTeX_Main-Regular.woff2"))
-    }
-
-    private func luminance(of color: NSColor) -> CGFloat {
-        let rgb = color.usingColorSpace(.deviceRGB) ?? color
-        return (0.2126 * rgb.redComponent) + (0.7152 * rgb.greenComponent) + (0.0722 * rgb.blueComponent)
     }
 
     private func screenStyleSheetBody() throws -> String {

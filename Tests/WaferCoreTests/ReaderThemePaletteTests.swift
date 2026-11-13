@@ -22,12 +22,12 @@ final class ReaderThemePaletteTests: XCTestCase {
 
         XCTAssertEqual(palette.name, "Dark")
         XCTAssertTrue(palette.appearanceIsDark)
-        XCTAssertEqual(palette.backgroundHex, ReaderTheme.backgroundHex)
+        XCTAssertEqual(palette.backgroundHex, cssRootToken("--bg-color"))
         XCTAssertEqual(palette.textHex, cssRootToken("--text-color"))
         XCTAssertEqual(palette.headingHex, cssRootToken("--heading-color"))
         assertStyleSheetRule("h4 {\n    font-size: 1.12rem;", property: "color", includesHex: palette.minorHeadingHex)
         assertStyleSheetRule("h6 {\n    font-size: 0.93rem;", property: "color", includesHex: palette.minorHeadingHex)
-        XCTAssertEqual(palette.secondaryTextHex, ReaderTheme.secondaryTextHex)
+        XCTAssertEqual(palette.secondaryTextHex, cssRootToken("--secondary-text-color"))
         XCTAssertEqual(palette.linkHex, cssRootToken("--link-color"))
         assertStyleSheetRule("a:hover {", property: "color", includesHex: palette.linkHoverHex)
         XCTAssertEqual(palette.ruleHex, cssRootToken("--rule-color"))
@@ -191,41 +191,10 @@ final class ReaderThemePaletteTests: XCTestCase {
         assertStyleSheetRule(".cm-s-inner .cm-negative {", property: "color", includesHex: palette.syntaxNegativeHex)
     }
 
-    func testDarkPaletteMatchesCurrentReaderThemeNativeColors() {
-        let palette = ReaderThemePalette.dark
-
-        XCTAssertEqual(palette.sidebarBackgroundHex, ReaderTheme.sidebarBackgroundHex)
-        XCTAssertEqual(palette.sidebarSelectionHex, ReaderTheme.sidebarSelectionHex)
-        XCTAssertEqual(palette.sidebarHover.alpha, Double(ReaderTheme.sidebarHoverAlpha), accuracy: 0.0001)
-        XCTAssertEqual(palette.sidebarChromeFill.alpha, Double(ReaderTheme.sidebarChromeFillAlpha), accuracy: 0.0001)
-        XCTAssertEqual(palette.sidebarChromeBorder.alpha, Double(ReaderTheme.sidebarChromeBorderAlpha), accuracy: 0.0001)
-        XCTAssertEqual(
-            palette.sidebarChromeSelectedFill.alpha,
-            Double(ReaderTheme.sidebarChromeSelectedFillAlpha),
-            accuracy: 0.0001
-        )
-        XCTAssertEqual(
-            palette.sidebarChromeHoverFill.alpha,
-            Double(ReaderTheme.sidebarChromeHoverFillAlpha),
-            accuracy: 0.0001
-        )
-
-        assertPaletteHex(palette.backgroundHex, matches: ReaderTheme.backgroundColor)
-        assertPaletteHex(palette.sidebarBackgroundHex, matches: ReaderTheme.sidebarBackgroundColor)
-        assertPaletteHex(palette.sidebarSelectionHex, matches: ReaderTheme.sidebarSelectionColor)
-        assertPaletteColor(palette.sidebarHover, matches: ReaderTheme.sidebarHoverColor)
-        assertPaletteColor(palette.sidebarChromeFill, matches: ReaderTheme.sidebarChromeFillColor)
-        assertPaletteColor(palette.sidebarChromeBorder, matches: ReaderTheme.sidebarChromeBorderColor)
-        assertPaletteColor(palette.sidebarChromeSelectedFill, matches: ReaderTheme.sidebarChromeSelectedFillColor)
-        assertPaletteColor(palette.sidebarChromeHoverFill, matches: ReaderTheme.sidebarChromeHoverFillColor)
-        assertPaletteColor(palette.sidebarPrimaryText, matches: ReaderTheme.sidebarPrimaryTextColor)
-        assertPaletteColor(palette.sidebarSecondaryText, matches: ReaderTheme.sidebarSecondaryTextColor)
-    }
-
     func testDarkPaletteCapturesCurrentHardcodedAppChromeColors() {
         let palette = ReaderThemePalette.dark
 
-        assertPaletteColor(palette.titlebarPrimaryText, matches: ReaderTheme.sidebarPrimaryTextColor.withAlphaComponent(0.72))
+        assertPaletteColor(palette.titlebarPrimaryText, matches: ReaderTheme.color(palette.sidebarPrimaryText).withAlphaComponent(0.72))
         XCTAssertEqual(palette.statisticsLabel, ReaderThemeColor(hex: "#DBDBDB", alpha: 0.98))
         XCTAssertEqual(palette.statisticsIcon, ReaderThemeColor(hex: "#D1D1D1", alpha: 0.9))
         XCTAssertEqual(palette.statisticsIconButton, ReaderThemeColor(hex: "#D1D1D1", alpha: 0.92))
@@ -282,7 +251,7 @@ final class ReaderThemePaletteTests: XCTestCase {
     }
 
     private func cssRootToken(_ name: String) -> String {
-        for line in ReaderTheme.styleSheet.components(separatedBy: .newlines) {
+        for line in ReaderTheme.styleSheet(for: .dark).components(separatedBy: .newlines) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard trimmed.hasPrefix("\(name): ") else {
                 continue
@@ -338,14 +307,14 @@ final class ReaderThemePaletteTests: XCTestCase {
         line: UInt
     ) {
         guard
-            let selectorRange = ReaderTheme.styleSheet.range(of: selector),
-            let blockEnd = ReaderTheme.styleSheet[selectorRange.upperBound...].range(of: "}")?.upperBound
+            let selectorRange = ReaderTheme.styleSheet(for: .dark).range(of: selector),
+            let blockEnd = ReaderTheme.styleSheet(for: .dark)[selectorRange.upperBound...].range(of: "}")?.upperBound
         else {
             XCTFail("Missing style rule for \(selector)", file: file, line: line)
             return
         }
 
-        let block = ReaderTheme.styleSheet[selectorRange.lowerBound..<blockEnd]
+        let block = ReaderTheme.styleSheet(for: .dark)[selectorRange.lowerBound..<blockEnd]
         XCTAssertTrue(block.contains("\(property):"), "Missing property \(property) in \(selector)", file: file, line: line)
         XCTAssertTrue(
             colors.contains { block.contains($0) } || propertyUsesThemeVariable(property, in: block),

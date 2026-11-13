@@ -490,6 +490,10 @@ final class DocumentSidebarViewController: NSViewController, NSTextFieldDelegate
                 if libraryTree == nil { libraryTree = LibraryTreeBuilder.build(files: libraryController.files) }
                 appendLibraryRows(libraryTree?.children ?? [], level: 0, to: &updated)
                 if libraryController.truncated { updated.append(.footer("Showing first 2,000 files")) }
+                if libraryController.skippedItemCount > 0 {
+                    let count = libraryController.skippedItemCount
+                    updated.append(.footer("\(count) \(count == 1 ? "file" : "files") skipped (unreadable or too large)"))
+                }
             }
         }
         guard rows != updated else { return }

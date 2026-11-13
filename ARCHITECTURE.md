@@ -1,6 +1,6 @@
 # Wafer Architecture
 
-Wafer is a SwiftPM-based macOS document viewer for Markdown files. The app is split into a reusable rendering core and a small AppKit shell.
+Wafer is a SwiftPM-based macOS document viewer for Markdown files. The app is split into a reusable rendering core and an AppKit app target that owns windows, editing, and presentation.
 
 ## Modules
 
@@ -26,7 +26,7 @@ The bundle identifier is `dev.wafer.app`, and the minimum macOS version is 14.0.
 `CFBundleShortVersionString` follows a three-component marketing version format.
 The build script copies SwiftPM resource bundles into `Contents/Resources`; `ReaderTheme` checks that packaged location before using SwiftPM `Bundle.module` in debug and test contexts.
 
-The Quick Look extension is hand-assembled at `Contents/PlugIns/WaferQuickLook.appex`. Its bundle identifier is `dev.wafer.app.quicklook`, its extension point is `com.apple.quicklook.preview`, and its principal class is the Objective-C-visible `PreviewProvider`. SwiftPM builds it as the `WaferQuickLook` executable product with the `_NSExtensionMain` linker entry point and links QuickLookUI explicitly because the repository does not use an Xcode appex target. The appex also receives `Wafer_WaferCore.bundle` in `Contents/Resources` so `Bundle.module` can resolve reader CSS and renderer resources from inside the extension process. SwiftPM 6.4 and later emit resource bundles in the standard macOS layout (`Contents/Resources`), while earlier toolchains emitted them flat; runtime lookup goes through `Bundle` APIs and `scripts/verify-appex.sh` accepts either layout.
+The Quick Look extension is hand-assembled at `Contents/PlugIns/WaferQuickLook.appex`. Its bundle identifier is `dev.wafer.app.quicklook`, its extension point is `com.apple.quicklook.preview`, and its principal class is the Objective-C-visible `PreviewProvider`. SwiftPM builds it as the `WaferQuickLook` executable product with the `_NSExtensionMain` linker entry point and links QuickLookUI explicitly because the repository does not use an Xcode appex target. The appex also receives `Wafer_WaferCore.bundle` in `Contents/Resources` so `Bundle.module` can resolve reader CSS and emoji data from inside the extension process. `build-app.sh` removes the Mermaid and KaTeX runtime files from the appex copy because Quick Look is scriptless, and `verify-appex.sh` checks they are absent while the needed resources are present. SwiftPM 6.4 and later emit resource bundles in the standard macOS layout (`Contents/Resources`), while earlier toolchains emitted them flat; runtime lookup goes through `Bundle` APIs and `scripts/verify-appex.sh` accepts either layout.
 
 ## Document Windows
 
@@ -275,7 +275,11 @@ Quick Look uses `PreviewComposer` in `WaferCore` plus a view-based `NSViewContro
 Wafer uses a single `ReaderThemePalette` model for both the WebKit reader and native AppKit chrome.
 The built-in palettes are `ReaderThemePalette.dark` and `.light`; Dark remains the compatibility
 baseline for the pre-v0.6 look. `ReaderTheme.current` is the process-wide active palette and posts
-`.readerThemeDidChange` whenever it changes.
+`.readerThemeDidChange` whenever it changes. That state and the native colors derived from it live
+in the app target (`ReaderTheme+Current.swift`); WaferCore holds no global theme state and takes a
+palette as an explicit parameter. WaferCore still imports AppKit for stateless palette-to-`NSColor`
+conversion, the editor color set, and Quick Look's attributed-text import, all of which the app and
+the extension share.
 
 Renderer bootstraps are cached from `Resources/async-renderer.js`, `mermaid-bootstrap.js`, and `katex-bootstrap.js`. Per-render palette data travels as escaped JSON in a script data attribute, while script elements retain CSP nonces. Quick Look does not load these scripts or KaTeX styles. KaTeX ships WOFF2 fonts only. `node Tests/JavaScript/core/renderers.cjs` exercises the shipped scripts with a controlled DOM and scheduler.
 

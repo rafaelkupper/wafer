@@ -140,7 +140,7 @@ flowchart LR
 
 ## Build from source
 
-You need macOS 14 or later and Xcode 16 or another Swift 6 toolchain.
+You need macOS 14 or later and Swift 6.2 or later (Xcode 26 or a matching toolchain). The pinned swift-markdown dependency requires Swift 6.2.
 
 ```sh
 scripts/build-app.sh release

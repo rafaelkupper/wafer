@@ -33,6 +33,9 @@ final class LibraryController {
     var files: [LibraryFile] { snapshot.files }
     var backlinksByIdentity: [String: [Backlink]] { snapshot.backlinksByIdentity }
     var truncated: Bool { snapshot.truncated }
+    /// Items the last successful scan could not index because they were
+    /// unreadable or over the size budget.
+    private(set) var skippedItemCount = 0
     private(set) var isScanning = false
     private(set) var scanFailure: LibraryScanner.Failure?
 
@@ -72,6 +75,7 @@ final class LibraryController {
         pendingMonitorWorkItem = nil
         scanCancellation?.cancel()
         snapshot = LibrarySnapshot()
+        skippedItemCount = 0
         scanFailure = nil
         changedPaths = nil
         pendingFirstScanCompletion = onFirstScanCompletion
@@ -94,6 +98,7 @@ final class LibraryController {
         monitor = nil
         rootURL = nil
         snapshot = LibrarySnapshot()
+        skippedItemCount = 0
         scanFailure = nil
         isScanning = false
         preferenceStore.libraryFolderURL = nil
@@ -175,6 +180,7 @@ final class LibraryController {
         let cancellation = WorkCancellation()
         scanCancellation = cancellation
         let previous = snapshot
+        let previousSkippedItemCount = skippedItemCount
         let paths = changedPaths
         let scanner = self.scanner
 
@@ -201,6 +207,7 @@ final class LibraryController {
             let diff = LibraryIndexDiff.apply(scan: result, to: previous.files)
             let contentChanged = !diff.added.isEmpty || !diff.changed.isEmpty || !diff.removed.isEmpty
                 || result.truncated != previous.truncated
+                || result.skippedItemCount != previousSkippedItemCount
                 || diff.files.map(\.identity) != previous.files.map(\.identity)
             let snapshot = contentChanged && !cancellation.isCancelled
                 ? LibrarySnapshot(files: diff.files, truncated: diff.truncated) : previous
@@ -210,6 +217,7 @@ final class LibraryController {
                 if self.scanGeneration == generation, !cancellation.isCancelled {
                     let availabilityChanged = self.scanFailure != nil
                     self.snapshot = snapshot
+                    self.skippedItemCount = result.skippedItemCount
                     self.scanFailure = nil
                     self.changedPaths = []
                     self.isScanning = false

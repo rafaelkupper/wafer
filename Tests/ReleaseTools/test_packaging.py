@@ -81,6 +81,17 @@ class PackagingTests(unittest.TestCase):
         (resources / 'mermaid.min.js').unlink()
         result = self.run_script('verify-appex.sh', NETWORK_ENTITLEMENT='1')
         self.assertIn('must not request com.apple.security.network.client', result.stderr)
+        result = self.run_script('verify-appex.sh', LINK_WEBKIT='1')
+        self.assertIn('must not link WebKit', result.stderr)
+        info = self.root / 'build/Wafer.app/Contents/PlugIns/WaferQuickLook.appex/Contents/Info.plist'
+        original = info.read_bytes()
+        plist = plistlib.loads(original)
+        plist['NSExtension'].setdefault('NSExtensionAttributes', {})['QLIsDataBasedPreview'] = True
+        info.write_bytes(plistlib.dumps(plist))
+        result = self.run_script('verify-appex.sh')
+        self.assertIn('must be view-based', result.stderr)
+        info.write_bytes(original)
+        self.assert_success(self.run_script('verify-appex.sh'))
 
     def test_package_refuses_nonempty_external_dist_including_symlink_and_hidden_file(self):
         external = self.root / 'external'

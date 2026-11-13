@@ -2,92 +2,14 @@ import AppKit
 import Foundation
 
 public enum ReaderTheme {
-    @MainActor public private(set) static var current: ReaderThemePalette = .dark
-
-    @MainActor public static func setCurrent(_ palette: ReaderThemePalette) {
-        guard current != palette else {
-            return
-        }
-
-        current = palette
-        NotificationCenter.default.post(name: .readerThemeDidChange, object: palette)
-    }
-
-    @MainActor public static func resetToDefaultForTesting() {
-        current = .dark
-    }
-
-    @MainActor public static var backgroundHex: String { current.backgroundHex }
-    @MainActor public static var secondaryTextHex: String { current.secondaryTextHex }
     public static let bodyFontStack = "\"Helvetica Neue\", Helvetica, Arial, \"Segoe UI Emoji\", \"SF Pro\", sans-serif"
     public static let contentMaxWidth = 928
     public static let contentHorizontalPadding = 31
     public static let bodyLineHeight = "1.66rem"
 
-    @MainActor static var sidebarBackgroundHex: String { current.sidebarBackgroundHex }
-    @MainActor static var sidebarSelectionHex: String { current.sidebarSelectionHex }
-    @MainActor static var sidebarHoverAlpha: CGFloat { CGFloat(current.sidebarHover.alpha) }
-    @MainActor static var sidebarChromeFillAlpha: CGFloat { CGFloat(current.sidebarChromeFill.alpha) }
-    @MainActor static var sidebarChromeBorderAlpha: CGFloat { CGFloat(current.sidebarChromeBorder.alpha) }
-    @MainActor static var sidebarChromeSelectedFillAlpha: CGFloat { CGFloat(current.sidebarChromeSelectedFill.alpha) }
-    @MainActor static var sidebarChromeHoverFillAlpha: CGFloat { CGFloat(current.sidebarChromeHoverFill.alpha) }
-
-    @MainActor public static var backgroundColor: NSColor { current.backgroundHex.readerColor }
-    @MainActor public static var sidebarBackgroundColor: NSColor { current.sidebarBackgroundHex.readerColor }
-    @MainActor public static var sidebarSelectionColor: NSColor { current.sidebarSelectionHex.readerColor }
-    @MainActor public static var sidebarHoverColor: NSColor { current.sidebarHover.readerColor }
-    @MainActor public static var sidebarChromeFillColor: NSColor { current.sidebarChromeFill.readerColor }
-    @MainActor public static var sidebarChromeBorderColor: NSColor { current.sidebarChromeBorder.readerColor }
-    @MainActor public static var tabBarBackgroundColor: NSColor { current.resolvedTab.barBackground.readerColor }
-    @MainActor public static var tabBarBorderColor: NSColor { current.resolvedTab.barBorder.readerColor }
-    @MainActor public static var tabRestingFillColor: NSColor { current.resolvedTab.restingFill.readerColor }
-    @MainActor public static var tabHoverFillColor: NSColor { current.resolvedTab.hoverFill.readerColor }
-    @MainActor public static var tabSelectedFillColor: NSColor { current.resolvedTab.selectedFill.readerColor }
-    @MainActor public static var tabSelectedTextColor: NSColor { current.resolvedTab.selectedText.readerColor }
-    @MainActor public static var tabUnselectedTextColor: NSColor { current.resolvedTab.unselectedText.readerColor }
-    @MainActor public static var tabCloseIconColor: NSColor { current.resolvedTab.closeIcon.readerColor }
-    @MainActor public static var tabCloseHoverFillColor: NSColor { current.resolvedTab.closeHoverFill.readerColor }
-    @MainActor public static var tabInsertionIndicatorColor: NSColor { current.resolvedTab.insertionIndicator.readerColor }
-    @MainActor public static var sidebarChromeSelectedFillColor: NSColor { current.sidebarChromeSelectedFill.readerColor }
-    @MainActor public static var sidebarChromeHoverFillColor: NSColor { current.sidebarChromeHoverFill.readerColor }
-    @MainActor public static var sidebarPrimaryTextColor: NSColor { current.sidebarPrimaryText.readerColor }
-    @MainActor public static var sidebarSecondaryTextColor: NSColor { current.sidebarSecondaryText.readerColor }
-    @MainActor public static var titlebarPrimaryTextColor: NSColor { current.titlebarPrimaryText.readerColor }
-    @MainActor public static var findBarBackgroundColor: NSColor { current.findBarBackground.readerColor }
-    @MainActor public static var findBarBorderColor: NSColor { current.findBarBorder.readerColor }
-    @MainActor public static var statisticsLabelColor: NSColor { current.statisticsLabel.readerColor }
-    @MainActor public static var statisticsIconColor: NSColor { current.statisticsIcon.readerColor }
-    @MainActor public static var statisticsIconButtonColor: NSColor { current.statisticsIconButton.readerColor }
-    @MainActor public static var statisticsPillRestingBackgroundColor: NSColor {
-        current.statisticsPillRestingBackground.readerColor
-    }
-    @MainActor public static var statisticsPillHoverBackgroundColor: NSColor {
-        current.statisticsPillHoverBackground.readerColor
-    }
-    @MainActor public static var statisticsPillHoverBorderColor: NSColor {
-        current.statisticsPillHoverBorder.readerColor
-    }
-    @MainActor public static var statisticsIconButtonRestingBackgroundColor: NSColor {
-        current.statisticsIconButtonRestingBackground.readerColor
-    }
-    @MainActor public static var statisticsIconButtonHoverBackgroundColor: NSColor {
-        current.statisticsIconButtonHoverBackground.readerColor
-    }
-    @MainActor public static var statisticsIconButtonActiveBackgroundColor: NSColor {
-        current.statisticsIconButtonActiveBackground.readerColor
-    }
-    @MainActor public static var statisticsIconButtonHoverBorderColor: NSColor {
-        current.statisticsIconButtonHoverBorder.readerColor
-    }
-    @MainActor public static var windowAppearance: NSAppearance? {
-        NSAppearance(named: current.appearanceIsDark ? .darkAqua : .aqua)
-    }
-
-    @MainActor public static var styleSheet: String {
-        styleSheet(for: current)
-    }
-
     public static func color(fromHex hex: String) -> NSColor { hex.readerColor }
+
+    public static func color(_ color: ReaderThemeColor) -> NSColor { color.readerColor }
 
     public static func styleSheet(for palette: ReaderThemePalette) -> String {
         "\(generatedRootBlock(for: palette))\n\n\(styleSheetBody)"
@@ -344,7 +266,7 @@ public extension Notification.Name {
 }
 
 extension ReaderThemeColor {
-    var readerColor: NSColor {
+    public var readerColor: NSColor {
         hex.readerColor.withAlphaComponent(CGFloat(alpha))
     }
 }
