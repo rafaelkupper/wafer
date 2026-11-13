@@ -510,7 +510,9 @@ final class MarkdownSaveWorker: Sendable {
             let before = FileState(url)
             let data: Data
             do {
-                data = try Data(contentsOf: url)
+                data = try BoundedFileReader.read(from: url, maximumByteCount: MarkdownReaderDocument.maximumSourceByteCount)
+            } catch BoundedFileReader.ReadError.tooLarge {
+                throw DiskConflict(kind: .changedOnDisk, diskData: nil)
             } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
                 throw DiskConflict(kind: .missingOnDisk, diskData: nil)
             } catch {
