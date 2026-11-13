@@ -39,13 +39,13 @@ public struct LibraryFile: Equatable, Sendable {
         self.relativePath = relativePathComponents.joined(separator: "/")
         self.searchFields = LibrarySearchFields(
             fileURL: fileURL, relativePath: relativePathComponents.joined(separator: "/"),
-            title: displayTitle, headings: outlineItems, plainText: plainText, body: searchableText
+            title: displayTitle, headings: outlineItems, body: searchableText
         )
         self.fileURL = fileURL
         self.relativePathComponents = relativePathComponents
         self.displayTitle = displayTitle
         self.outlineItems = outlineItems
-        self.plainText = plainText
+        self.plainText = plainText.collapsingWhitespace
         self.contentFingerprint = contentFingerprint
         self.outgoingReferences = outgoingReferences
     }
