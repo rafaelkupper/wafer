@@ -67,6 +67,63 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(calls[register][1:], ['-f', str(self.root / 'build/Wafer.app')])
         self.assertEqual(calls[plugin][1:], ['-a', str(self.root / 'build/Wafer.app/Contents/PlugIns/WaferQuickLook.appex')])
 
+    def test_build_ignores_stale_bundles_and_verifier_rejects_any_extra(self):
+        for name in ('Wafer_WaferCoreTests.bundle', 'Wafer_Stale.bundle'):
+            (self.fixture.products / name).mkdir()
+        self.assert_success(self.run_script('build-app.sh', 'release'))
+        app = self.root / 'build/Wafer.app'
+        expected = {
+            'Contents/Resources/Wafer_WaferCore.bundle',
+            'Contents/Resources/Wafer_WaferApp.bundle',
+            'Contents/PlugIns/WaferQuickLook.appex/Contents/Resources/Wafer_WaferCore.bundle',
+        }
+        self.assertEqual({str(p.relative_to(app)) for p in app.rglob('*.bundle')}, expected)
+        self.assert_success(self.run_script('verify-appex.sh'))
+        for extra in ('Contents/Resources/Wafer_WaferCoreTests.bundle',
+                      'Contents/PlugIns/WaferQuickLook.appex/Contents/Resources/Stale.bundle'):
+            path = app / extra
+            path.mkdir()
+            result = self.run_script('verify-appex.sh')
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('unexpected resource bundle: ' + extra, result.stderr)
+            path.rmdir()
+
+    def test_release_generates_symbols_then_strips_shipping_copies_before_signing(self):
+        self.assert_success(self.run_script('package-release.sh'))
+        calls = self.fixture.calls()
+        for product in ('Wafer', 'WaferQuickLook'):
+            relative = f'{product}.dSYM/Contents/Resources/DWARF/{product}'
+            self.assertTrue((self.root / 'build' / relative).is_file())
+            self.assertTrue((self.root / 'dist' / relative).is_file())
+            symbols = next(i for i, c in enumerate(calls) if c[:2] == ['xcrun', 'dsymutil']
+                           and c[2] == str(self.fixture.products / product))
+            stripping = next(i for i, c in enumerate(calls) if c[0] == 'strip')
+            self.assertLess(symbols, stripping)
+        stripping = next(i for i, c in enumerate(calls) if c[0] == 'strip')
+        self.assertEqual(calls[stripping][1:3], ['-S', '-x'])
+        self.assertTrue(all('/build/Wafer.app/' in path for path in calls[stripping][3:]))
+        self.assertTrue(all(i > stripping for i, c in enumerate(calls) if c[0] == 'codesign'))
+        for build in (c for c in calls if c[:2] == ['swift', 'build']):
+            self.assertIn('-debug-prefix-map', build)
+            self.assertIn('-file-prefix-map', build)
+            self.assertIn(str(self.root) + '=/wafer', build)
+
+    def test_password_credentials_are_rejected_without_leaking_to_argv(self):
+        secret = 'fixture-password-never-in-argv'
+        result = self.run_script('package-release.sh', WAFER_NOTARY_PROFILE='',
+                                 WAFER_APPLE_ID='fixture@example.org', WAFER_APP_PASSWORD=secret,
+                                 WAFER_TEAM_ID='FIXTURE')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Set WAFER_NOTARY_PROFILE', result.stderr)
+        self.assertNotIn(secret, result.stdout + result.stderr + repr(self.fixture.calls()))
+        self.assertFalse(any(c[0] == 'xcrun' for c in self.fixture.calls()))
+
+    def test_dirty_packaging_stops_before_build_or_signing(self):
+        result = self.run_script('package-release.sh', SOURCE_STATUS=' M Sources/Example.swift')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('clean source tree', result.stderr)
+        self.assertFalse(any(c[0] in ('swift', 'codesign', 'xcrun') for c in self.fixture.calls()))
+
     def test_verify_rejects_missing_resources_unused_runtime_and_network_entitlement(self):
         self.assert_success(self.run_script('build-app.sh', 'release'))
         resources = self.root / 'build/Wafer.app/Contents/PlugIns/WaferQuickLook.appex/Contents/Resources/Wafer_WaferCore.bundle/Contents/Resources'

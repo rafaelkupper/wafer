@@ -128,7 +128,7 @@ class Fixture:
         self.root = Path(self.temporary.name).resolve()
         (self.root / 'scripts').mkdir()
         for name in ('build-app.sh', 'verify-appex.sh', 'package-release.sh', 'release.py', 'verify-update.swift',
-                     'check.sh', 'verify-vendored-assets.py'):
+                     'check.sh', 'check-source.py', 'verify-vendored-assets.py'):
             shutil.copy2(ROOT / 'scripts' / name, self.root / 'scripts' / name)
         shutil.copytree(ROOT / 'App', self.root / 'App')
         version = {'CFBundleShortVersionString': '1.0.0', 'CFBundleVersion': '2'}

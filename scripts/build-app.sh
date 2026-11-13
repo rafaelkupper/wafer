@@ -11,6 +11,7 @@ APP_BUNDLE="$ROOT_DIR/build/$APP_NAME.app"
 EXECUTABLE_PATH="$ROOT_DIR/.build/$MODE/$APP_NAME"
 QUICKLOOK_EXECUTABLE_PATH="$ROOT_DIR/.build/$MODE/$QUICKLOOK_NAME"
 BUILD_PRODUCTS_DIR="$ROOT_DIR/.build/$MODE"
+RESOURCE_BUNDLES=(Wafer_WaferCore.bundle Wafer_WaferApp.bundle)
 QUICKLOOK_APPEX="$APP_BUNDLE/Contents/PlugIns/$QUICKLOOK_NAME.appex"
 LSREGISTER=${WAFER_LSREGISTER:-"/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"}
 
@@ -43,10 +44,19 @@ fi
 mkdir -p "$ROOT_DIR/build"
 
 # Build the Swift executable that backs the app bundle.
-swift build -c "$MODE" --product "$APP_NAME"
-swift build -c "$MODE" --product "$QUICKLOOK_NAME"
+BUILD_FLAGS=()
+if [[ "$MODE" == "release" ]]; then
+  BUILD_FLAGS=(-Xswiftc -g -Xswiftc -debug-prefix-map -Xswiftc "$ROOT_DIR=/wafer"
+    -Xswiftc -file-prefix-map -Xswiftc "$ROOT_DIR=/wafer"
+    -Xcc "-fdebug-prefix-map=$ROOT_DIR=/wafer")
+fi
+swift build -c "$MODE" "${BUILD_FLAGS[@]}" --product "$APP_NAME"
+swift build -c "$MODE" "${BUILD_FLAGS[@]}" --product "$QUICKLOOK_NAME"
 
 # Check required bundles before replacing the previous app.
+for bundle_name in "${RESOURCE_BUNDLES[@]}"; do
+  [[ -d "$BUILD_PRODUCTS_DIR/$bundle_name" ]] || { print -u2 -- "error: missing required resource bundle: $bundle_name"; exit 1; }
+done
 CORE_RESOURCES=$(resource_directory "$BUILD_PRODUCTS_DIR/Wafer_WaferCore.bundle")
 for resource in reader-theme.css gemoji-shortcodes.json gemoji-LICENSE.txt \
   mermaid.min.js mermaid-LICENSE.txt katex.min.js katex.min.css katex-LICENSE.txt KaTeX_Main-Regular.woff2; do
@@ -77,13 +87,11 @@ mkdir -p "$APP_BUNDLE/Contents/Frameworks"
 cp -R "$SPARKLE_FRAMEWORK" "$APP_BUNDLE/Contents/Frameworks/"
 
 # Copy SwiftPM resource bundles so bundled CSS and other assets are available at runtime.
-for resource_bundle in "$BUILD_PRODUCTS_DIR"/Wafer_*.bundle; do
-  bundle_name=$(basename "$resource_bundle")
-  rm -rf "$APP_BUNDLE/Contents/Resources/$bundle_name"
+for bundle_name in "${RESOURCE_BUNDLES[@]}"; do
+  resource_bundle="$BUILD_PRODUCTS_DIR/$bundle_name"
   cp -R "$resource_bundle" "$APP_BUNDLE/Contents/Resources/"
 
   if [[ "$bundle_name" == "Wafer_WaferCore.bundle" ]]; then
-    rm -rf "$QUICKLOOK_APPEX/Contents/Resources/$bundle_name"
     cp -R "$resource_bundle" "$QUICKLOOK_APPEX/Contents/Resources/"
   fi
 done
@@ -91,6 +99,14 @@ done
 # Quick Look imports static HTML into NSTextView and never runs these renderers.
 QUICKLOOK_RESOURCES=$(resource_directory "$QUICKLOOK_APPEX/Contents/Resources/Wafer_WaferCore.bundle")
 rm -f -- "$QUICKLOOK_RESOURCES"/mermaid* "$QUICKLOOK_RESOURCES"/katex* "$QUICKLOOK_RESOURCES"/KaTeX_*
+
+if [[ "$MODE" == "release" ]]; then
+  for product in "$APP_NAME" "$QUICKLOOK_NAME"; do
+    xcrun dsymutil "$BUILD_PRODUCTS_DIR/$product" --object-prefix-map "/wafer=$ROOT_DIR" -o "$ROOT_DIR/build/$product.dSYM"
+  done
+  # Keep the unstripped SwiftPM products for symbol generation; strip only shipping copies.
+  strip -S -x "$APP_BUNDLE/Contents/MacOS/$APP_NAME" "$QUICKLOOK_APPEX/Contents/MacOS/$QUICKLOOK_NAME"
+fi
 
 codesign --force --sign - --entitlements "$ROOT_DIR/App/QuickLook.entitlements" "$QUICKLOOK_APPEX"
 
