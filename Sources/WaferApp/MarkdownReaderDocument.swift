@@ -656,9 +656,11 @@ final class MarkdownReaderDocument: NSDocument {
         let target = assetResolver.classify(url)
         switch target {
         case .markdownFile(let markdownURL):
+            // The anchor comes from the clicked URL: classify rebuilds the
+            // fragment, which can add a layer of percent-encoding.
             markdownLinkOpener(
                 MarkdownDocumentOpener.normalizedFileURL(for: markdownURL),
-                markdownURL.fragment
+                MarkdownDocumentOpener.anchorID(in: url)
             )
         default:
             linkTargetHandler(target)
@@ -685,7 +687,7 @@ final class MarkdownReaderDocument: NSDocument {
            case .markdownFile(let markdownURL) = assetResolver.classify(url) {
             host.openTab(
                 for: MarkdownDocumentOpener.normalizedFileURL(for: markdownURL),
-                anchorID: markdownURL.fragment
+                anchorID: MarkdownDocumentOpener.anchorID(in: url)
             )
             return
         }
@@ -697,14 +699,13 @@ final class MarkdownReaderDocument: NSDocument {
         guard
             let currentFileURL = fileURL,
             url.isFileURL,
-            let fragment = url.fragment,
-            !fragment.isEmpty,
+            let anchorID = MarkdownDocumentOpener.anchorID(in: url),
             MarkdownDocumentOpener.normalizedFileURL(for: currentFileURL) == MarkdownDocumentOpener.normalizedFileURL(for: url)
         else {
             return nil
         }
 
-        return fragment
+        return anchorID
     }
 
     private static func defaultOpenMarkdownLink(_ url: URL, _ anchorID: String?) {
