@@ -20,6 +20,7 @@ final class ThemeLibrary {
 
     private let fileManager: FileManager
     private let revealHandler: RevealHandler
+    private let expectedBundledFileNames: [String]
 
     let themesDirectoryURL: URL
     let bundledThemesDirectoryURL: URL?
@@ -29,11 +30,13 @@ final class ThemeLibrary {
     init(
         themesDirectoryURL: URL = ThemeLibrary.defaultThemesDirectoryURL(),
         bundledThemesDirectoryURL: URL? = ThemeLibrary.defaultBundledThemesDirectoryURL(),
+        expectedBundledFileNames: [String] = ThemeLibrary.bundledFileNames,
         fileManager: FileManager = .default,
         revealHandler: @escaping RevealHandler = ThemeLibrary.defaultRevealHandler
     ) {
         self.themesDirectoryURL = themesDirectoryURL
         self.bundledThemesDirectoryURL = bundledThemesDirectoryURL
+        self.expectedBundledFileNames = expectedBundledFileNames
         self.fileManager = fileManager
         self.revealHandler = revealHandler
     }
@@ -57,8 +60,16 @@ final class ThemeLibrary {
             let bundledURLs: [URL]
             do {
                 bundledURLs = try themeFileURLs(in: bundledThemesDirectoryURL)
+                let presentNames = Set(bundledURLs.map(\.lastPathComponent))
+                for name in expectedBundledFileNames where !presentNames.contains(name) {
+                    loadDiagnostics.append(Self.bundledResourceFailure(
+                        fileName: name, message: "Bundled theme is missing. This is a packaging defect."
+                    ))
+                }
             } catch {
-                WaferLog.resources.fault("Bundled themes are unreadable: \(error.localizedDescription, privacy: .public)")
+                loadDiagnostics.append(Self.bundledResourceFailure(
+                    fileName: "Themes", message: "Bundled themes are unreadable: \(error.localizedDescription)"
+                ))
                 bundledURLs = []
             }
             for url in bundledURLs {
@@ -66,7 +77,7 @@ final class ThemeLibrary {
                     let data = try Data(contentsOf: url)
                     let palette = try ThemeFile.decodePalette(from: data, fileName: url.lastPathComponent)
                     guard loadedPalettes[palette.name] == nil else {
-                        loadDiagnostics.append(ThemeLibraryDiagnostic(
+                        loadDiagnostics.append(Self.bundledResourceFailure(
                             fileName: url.lastPathComponent,
                             message: "Duplicate bundled theme name '\(palette.name)' was skipped."
                         ))
@@ -74,12 +85,16 @@ final class ThemeLibrary {
                     }
                     loadedPalettes[palette.name] = palette
                 } catch {
-                    loadDiagnostics.append(ThemeLibraryDiagnostic(
+                    loadDiagnostics.append(Self.bundledResourceFailure(
                         fileName: url.lastPathComponent,
                         message: error.localizedDescription
                     ))
                 }
             }
+        } else {
+            loadDiagnostics.append(Self.bundledResourceFailure(
+                fileName: "Themes", message: "Bundled themes directory is missing. This is a packaging defect."
+            ))
         }
 
         if let diagnostic = ensureThemesDirectoryAndExample() {
@@ -165,20 +180,40 @@ final class ThemeLibrary {
         }
     }
 
-    static func defaultBundledThemesDirectoryURL() -> URL? {
-        // In the packaged .app, SwiftPM resource bundles are copied into
-        // Contents/Resources; Bundle.module covers `swift run` and tests.
-        if
-            let resourceURL = Bundle.main.resourceURL,
-            let packagedBundle = Bundle(
-                url: resourceURL.appendingPathComponent("Wafer_WaferApp.bundle", isDirectory: true)
-            ),
-            let themesURL = packagedBundle.url(forResource: "Themes", withExtension: nil)
-        {
-            return themesURL
-        }
+    static let bundledFileNames = [
+        "Catppuccin Latte.json", "Catppuccin Mocha.json", "Dracula.json", "GitHub Dark.json",
+        "GitHub Light.json", "Gruvbox Dark.json", "Monokai.json", "Nord.json", "One Dark.json",
+        "Rose Pine.json", "Solarized Dark.json", "Solarized Light.json", "Synthwave '84.json",
+        "Tokyo Night.json",
+    ]
 
-        return Bundle.module.url(forResource: "Themes", withExtension: nil)
+    private static func bundledResourceFailure(fileName: String, message: String) -> ThemeLibraryDiagnostic {
+        WaferLog.resources.fault("Bundled theme resource failure in \(fileName, privacy: .public): \(message, privacy: .private)")
+        return ThemeLibraryDiagnostic(fileName: fileName, message: message)
+    }
+
+    static func defaultBundledThemesDirectoryURL() -> URL? {
+        // Resolve optionally rather than using SwiftPM's trapping Bundle.module accessor.
+        var candidates = [Bundle.main.resourceURL, Bundle(for: ThemeLibrary.self).resourceURL, Bundle.main.bundleURL]
+            .compactMap { $0 }
+        #if DEBUG
+        if let override = ProcessInfo.processInfo.environment["PACKAGE_RESOURCE_BUNDLE_PATH"]
+            ?? ProcessInfo.processInfo.environment["PACKAGE_RESOURCE_BUNDLE_URL"] {
+            candidates.insert(URL(fileURLWithPath: override), at: 0)
+        }
+        #endif
+        return bundledThemesDirectoryURL(in: candidates.map {
+            $0.appendingPathComponent("Wafer_WaferApp.bundle", isDirectory: true)
+        })
+    }
+
+    static func bundledThemesDirectoryURL(in bundleURLs: [URL]) -> URL? {
+        for url in bundleURLs {
+            if let themesURL = Bundle(url: url)?.url(forResource: "Themes", withExtension: nil) {
+                return themesURL
+            }
+        }
+        return nil
     }
 
     static let supportDirectoryName = "Wafer"
