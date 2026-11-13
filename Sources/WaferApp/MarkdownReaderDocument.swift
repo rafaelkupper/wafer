@@ -484,7 +484,7 @@ final class MarkdownReaderDocument: NSDocument {
     }
 
     @objc private func handleLibraryDidChangeForWikiLinks(_ notification: Notification) {
-        guard notification.userInfo?["contentChanged"] as? Bool != false, lastOutputHadWikiLinks else {
+        guard LibraryChange.value(from: notification)?.contentChanged != false, lastOutputHadWikiLinks else {
             return
         }
 

@@ -740,8 +740,8 @@ final class DocumentSidebarViewController: NSViewController, NSTextFieldDelegate
             setMode(.documents)
             return
         }
-        guard notification.userInfo?["contentChanged"] as? Bool != false else {
-            if notification.userInfo?["availabilityChanged"] as? Bool == true,
+        guard LibraryChange.value(from: notification)?.contentChanged != false else {
+            if LibraryChange.value(from: notification)?.availabilityChanged == true,
                isViewLoaded, mode == .library { rebuildRows() }
             return
         }
