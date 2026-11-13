@@ -586,6 +586,36 @@ final class DocumentEditModeTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "one\nAB")
     }
 
+    func testPastedCRLFTextIsNormalizedAndSavedInTheFilesLineEnding() throws {
+        let url = try directory.createTextFile(named: "Doc.md", contents: "x\r\ny\r\n")
+        let (document, _) = try makeDocument(for: url, autosaveDelay: 60)
+        defer { document.close() }
+        document.beginEditing()
+        let editor = try XCTUnwrap(document.editorControllerForTesting)
+        let textView = editor.textViewForTesting
+        XCTAssertEqual(editor.text, "x\ny\n")
+        try type("z", in: document)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
+
+        textView.setSelectedRange(NSRange(location: 5, length: 0))
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setString("a\r\nb", forType: .string)
+        XCTAssertTrue(textView.readSelection(from: pasteboard, type: .string))
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
+
+        XCTAssertEqual(editor.text, "x\ny\nza\nb")
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: 8, length: 0), "the insertion point follows the pasted text")
+        XCTAssertTrue(document.flushEdits(interactive: true))
+        XCTAssertEqual(try Data(contentsOf: url), Data("x\r\ny\r\nza\r\nb".utf8), "no CR is doubled")
+
+        editor.undoManagerForTesting.undo()
+        XCTAssertEqual(editor.text, "x\ny\nz", "one undo removes the paste and keeps the typing")
+        editor.undoManagerForTesting.redo()
+        XCTAssertEqual(editor.text, "x\ny\nza\nb")
+    }
+
     func testReadOnlyFileRefusesEditMode() throws {
         let url = try directory.createTextFile(named: "Locked.md", contents: "locked\n")
         try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: url.path)
@@ -707,6 +737,19 @@ final class MarkdownSourceEditorTests: XCTestCase {
         editor.textViewForTesting.enclosingScrollView?.contentView.scroll(to: NSPoint(x: 0, y: 900))
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
         XCTAssertEqual(reported.count, 1)
+    }
+
+    func testInsertedCarriageReturnsBecomeLineFeeds() {
+        let editor = MarkdownSourceEditorViewController()
+        editor.loadViewIfNeeded()
+        editor.load(text: "a\n")
+        let revision = editor.revision
+
+        editor.textViewForTesting.insertText("p\rq\r\nr", replacementRange: NSRange(location: 2, length: 0))
+
+        XCTAssertEqual(editor.text, "a\np\nq\nr")
+        XCTAssertEqual(editor.textViewForTesting.selectedRange(), NSRange(location: 7, length: 0))
+        XCTAssertGreaterThan(editor.revision, revision, "the change counts as an edit")
     }
 
     func testEditorUndoIsPrivateAndClearedOnLoad() throws {

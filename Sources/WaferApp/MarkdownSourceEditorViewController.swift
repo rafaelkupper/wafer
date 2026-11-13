@@ -271,6 +271,28 @@ final class MarkdownSourceEditorViewController: NSViewController, NSTextViewDele
         editorUndoManager
     }
 
+    /// Keeps the text LF-only, as saving expects. Text with CR or CRLF line
+    /// endings (pasted, dropped, or inserted by a service) goes in normalized
+    /// instead, as its own undo step, with the insertion point after it.
+    func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
+        guard let replacementString, replacementString.utf16.contains(0x0D) else {
+            return true
+        }
+
+        let normalized = MarkdownTextFormat.normalizingLineEndings(replacementString)
+        textView.breakUndoCoalescing()
+        // Asks again with LF-only text, which this method lets through.
+        guard textView.shouldChangeText(in: affectedCharRange, replacementString: normalized) else {
+            return false
+        }
+        textStorage.replaceCharacters(in: affectedCharRange, with: normalized)
+        textView.didChangeText()
+        let insertionPoint = NSRange(location: affectedCharRange.location + (normalized as NSString).length, length: 0)
+        textView.setSelectedRange(insertionPoint)
+        textView.scrollRangeToVisible(insertionPoint)
+        return false
+    }
+
     func textStorage(
         _ textStorage: NSTextStorage,
         didProcessEditing editedMask: NSTextStorageEditActions,
