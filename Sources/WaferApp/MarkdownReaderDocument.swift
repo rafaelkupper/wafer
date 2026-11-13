@@ -889,6 +889,9 @@ final class MarkdownReaderDocument: NSDocument {
                     self.updateWindowNavigationControls()
                     break
                 }
+                // A conflict prompt runs the run loop; a reload of this file
+                // that began meanwhile must not land on the next one.
+                self.abandonSourceRead()
                 self.replaceCurrentFile(with: loaded, fileURL: normalizedURL,
                     anchorID: anchorID, historyAfterNavigation: historyAfterNavigation)
             case .failure(let error):

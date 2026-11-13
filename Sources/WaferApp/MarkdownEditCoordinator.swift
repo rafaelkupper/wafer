@@ -194,7 +194,7 @@ final class MarkdownEditCoordinator {
     func adoptDiskVersion(_ loadedSource: LoadedMarkdownSource) -> Bool {
         guard let session, let editor else { return true }
         // A save that just finished may be what changed the file.
-        session.finishPendingSave()
+        finishPendingSave(of: session)
         guard loadedSource.fingerprint != session.savedFingerprint else {
             return false
         }
@@ -248,6 +248,19 @@ final class MarkdownEditCoordinator {
         session.saveInBackground(editor.snapshot) { [weak self, weak session] outcome in
             guard let self, let session, session === self.session else { return }
             self.backgroundSaveDidFinish(outcome, in: session, promptsOnConflict: promptsOnConflict)
+        }
+    }
+
+    /// Lets a background save in flight finish now and passes its result to
+    /// the document. A save requested meanwhile goes back on the autosave
+    /// schedule, since the finished save's completion does not run.
+    private func finishPendingSave(of session: MarkdownEditSession) {
+        guard session.isSaving else { return }
+        session.finishPendingSave()
+        delegate?.editCoordinator(self, didUpdateDiskFingerprint: session.savedFingerprint, format: session.format)
+        if queuedBackgroundSave != nil {
+            queuedBackgroundSave = nil
+            scheduleAutosave()
         }
     }
 

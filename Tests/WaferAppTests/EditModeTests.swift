@@ -216,6 +216,8 @@ final class DocumentEditModeTests: XCTestCase {
     private var renderedSources: [String] = []
     private var conflicts: [EditConflictKind] = []
     private var conflictResolution: EditConflictResolution = .overwrite
+    /// Runs inside the conflict prompt, as events do while a modal alert is up.
+    private var duringConflictPrompt: (() -> Void)?
     private var loadErrors: [Error] = []
 
     override func setUp() async throws {
@@ -224,6 +226,7 @@ final class DocumentEditModeTests: XCTestCase {
         renderedSources = []
         conflicts = []
         conflictResolution = .overwrite
+        duringConflictPrompt = nil
         loadErrors = []
     }
 
@@ -255,6 +258,7 @@ final class DocumentEditModeTests: XCTestCase {
             sourceLoadErrorHandler: { [weak self] in self?.loadErrors.append($0) },
             editConflictResolver: { [weak self] kind, _ in
                 self?.conflicts.append(kind)
+                self?.duringConflictPrompt?()
                 return self?.conflictResolution ?? .cancel
             },
             editFileWriter: fileWriter,
@@ -492,6 +496,35 @@ final class DocumentEditModeTests: XCTestCase {
         XCTAssertTrue(document.navigationHistory.backEntries.isEmpty)
     }
 
+    func testReloadStartedDuringTheCommitPromptCannotReplaceTheNextFile() throws {
+        let first = try directory.createTextFile(named: "First.md", contents: "first\n")
+        let second = try directory.createTextFile(named: "Second.md", contents: "second\n")
+        let gate = SourceReadGate()
+        let (document, _) = try makeDocument(for: first, autosaveDelay: 60, sourceLoader: { url in
+            if url.lastPathComponent == "Second.md" { gate.wait() }
+            return try MarkdownReaderDocument.loadSource(from: url)
+        })
+        defer { gate.release(); document.close() }
+        document.beginEditing()
+        document.navigateInCurrentWindow(to: second)
+        waitUntil("the next file is being read") { gate.isWaiting }
+        try type("mine", in: document)
+        try Data("theirs\n".utf8).write(to: first)
+        // The first file changes again while the commit's conflict prompt is open.
+        duringConflictPrompt = { [weak self] in
+            self?.duringConflictPrompt = nil
+            self?.monitors.last?.onChange()
+        }
+        conflictResolution = .overwrite
+        gate.release()
+
+        waitUntil("navigated") { document.fileURL?.lastPathComponent == "Second.md" }
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.3))
+        XCTAssertEqual(document.editorControllerForTesting?.text, "second\n", "the stale reload of the first file was dropped")
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "first\nmine")
+        XCTAssertEqual(conflicts, [.changedOnDisk])
+    }
+
     func testFailedAutosaveKeepsTheFileAndReportsTheError() throws {
         let url = try directory.createTextFile(named: "Doc.md", contents: "one\n")
         let failure = CocoaError(.fileWriteVolumeReadOnly)
@@ -547,6 +580,29 @@ final class DocumentEditModeTests: XCTestCase {
         waitUntil("the newer text was saved too") { (try? String(contentsOf: url, encoding: .utf8)) == "one\nAB" }
         XCTAssertEqual(writer.writes, ["one\nA", "one\nAB"])
         XCTAssertEqual(conflicts, [])
+    }
+
+    func testExternalChangeDuringABackgroundSaveIsAConflictNotALoss() throws {
+        let url = try directory.createTextFile(named: "Doc.md", contents: "one\n")
+        let writer = RecordingFileWriter()
+        let (document, _) = try makeDocument(for: url, autosaveDelay: 0.01, fileWriter: { try writer.write($0, $1, $2) })
+        defer { writer.release(); document.close() }
+        document.beginEditing()
+        writer.holdNextWrite()
+        try type("A", in: document)
+        waitUntil("autosave is writing") { writer.isHolding }
+        try type("B", in: document)
+        // The next autosave comes due while the first save is still running.
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        try Data("theirs\n".utf8).write(to: url)
+        conflictResolution = .overwrite
+
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { writer.release() }
+        monitors.last?.onChange()
+
+        waitUntil("the conflict was resolved") { (try? String(contentsOf: url, encoding: .utf8)) == "one\nAB" }
+        XCTAssertEqual(conflicts, [.changedOnDisk], "asked once")
+        XCTAssertEqual(document.editorControllerForTesting?.text, "one\nAB")
     }
 
     func testDeactivationSavesInTheBackgroundAndNeverPrompts() throws {
