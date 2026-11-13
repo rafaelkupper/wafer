@@ -441,6 +441,57 @@ final class DocumentEditModeTests: XCTestCase {
         XCTAssertEqual(document.editorControllerForTesting?.undoManagerForTesting.canUndo, false)
     }
 
+    func testTextTypedWhileTheNextFileLoadsIsSavedBeforeTheEditorSwitches() throws {
+        let first = try directory.createTextFile(named: "First.md", contents: "first\n")
+        let second = try directory.createTextFile(named: "Second.md", contents: "second\n")
+        let gate = SourceReadGate()
+        let (document, _) = try makeDocument(for: first, autosaveDelay: 60, sourceLoader: { url in
+            if url.lastPathComponent == "Second.md" { gate.wait() }
+            return try MarkdownReaderDocument.loadSource(from: url)
+        })
+        defer { gate.release(); document.close() }
+        document.beginEditing()
+        try type("one", in: document)
+
+        document.navigateInCurrentWindow(to: second)
+        waitUntil("the next file is being read") { gate.isWaiting }
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "first\none", "saved before the read")
+        try type(" two", in: document)
+        gate.release()
+
+        waitUntil("navigated") { document.fileURL?.lastPathComponent == "Second.md" }
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "first\none two", "text typed during the read was saved")
+        XCTAssertEqual(document.editorControllerForTesting?.text, "second\n")
+        XCTAssertEqual(conflicts, [])
+    }
+
+    func testFailedSaveWhenTheNextFileArrivesKeepsTheCurrentFile() throws {
+        let first = try directory.createTextFile(named: "First.md", contents: "first\n")
+        let second = try directory.createTextFile(named: "Second.md", contents: "second\n")
+        let gate = SourceReadGate()
+        let (document, _) = try makeDocument(for: first, autosaveDelay: 60, sourceLoader: { url in
+            if url.lastPathComponent == "Second.md" { gate.wait() }
+            return try MarkdownReaderDocument.loadSource(from: url)
+        })
+        defer { gate.release(); document.close() }
+        document.beginEditing()
+
+        document.navigateInCurrentWindow(to: second)
+        waitUntil("the next file is being read") { gate.isWaiting }
+        try type("mine", in: document)
+        try Data("theirs\n".utf8).write(to: first)
+        conflictResolution = .cancel
+        gate.release()
+
+        waitUntil("the commit tried to save") { self.conflicts == [.changedOnDisk] }
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        XCTAssertEqual(document.fileURL?.lastPathComponent, "First.md", "navigation was abandoned")
+        XCTAssertTrue(document.isEditing)
+        XCTAssertEqual(document.editorControllerForTesting?.text, "first\nmine")
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "theirs\n")
+        XCTAssertTrue(document.navigationHistory.backEntries.isEmpty)
+    }
+
     func testFailedAutosaveKeepsTheFileAndReportsTheError() throws {
         let url = try directory.createTextFile(named: "Doc.md", contents: "one\n")
         let failure = CocoaError(.fileWriteVolumeReadOnly)
@@ -1197,6 +1248,24 @@ extension EditModeEndToEndTests {
 private final class ResultBox: @unchecked Sendable {
     var value: Any?
     var finished = false
+}
+
+/// Holds a background source read until released.
+private final class SourceReadGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private let semaphore = DispatchSemaphore(value: 0)
+    private var waiting = false
+
+    var isWaiting: Bool { lock.withLock { waiting } }
+
+    func wait() {
+        lock.withLock { waiting = true }
+        _ = semaphore.wait(timeout: .now() + 10)
+    }
+
+    func release() {
+        semaphore.signal()
+    }
 }
 
 /// Writes through `MarkdownEditSession.replaceContents`, recording each

@@ -898,6 +898,13 @@ final class MarkdownReaderDocument: NSDocument {
             guard let self else { return }
             switch result {
             case .success(let loaded):
+                // The editor stayed editable during the read: save what was
+                // typed meanwhile before it shows the new file, and stay on
+                // this file if that save fails or is cancelled.
+                guard self.flushEdits(interactive: true) else {
+                    self.updateWindowNavigationControls()
+                    break
+                }
                 self.replaceCurrentFile(with: loaded, fileURL: normalizedURL,
                     anchorID: anchorID, historyAfterNavigation: historyAfterNavigation)
             case .failure(let error):
