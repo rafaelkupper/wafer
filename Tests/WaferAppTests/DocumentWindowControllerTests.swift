@@ -140,6 +140,13 @@ final class DocumentWindowControllerTests: XCTestCase {
         XCTAssertFalse(WindowChromeSuppression.shouldHideView(named: "NSView", topLevel: false))
     }
 
+    func testUnknownOSLeavesOptionalPrivateDecorationDisabled() {
+        XCTAssertTrue(WindowChromeSuppression.supportsPrivateDecoration(on: 27))
+        XCTAssertFalse(WindowChromeSuppression.supportsPrivateDecoration(on: 28))
+        XCTAssertFalse(WindowChromeSuppression.shouldStyleView(named: "FutureTitlebar", superviewName: nil))
+        XCTAssertFalse(WindowChromeSuppression.shouldHideView(named: "FutureDecoration", topLevel: true))
+    }
+
     func testInitialContentSizeUsesDefaultWidthAndFullVisibleHeight() {
         let visibleFrame = NSRect(x: 100, y: 80, width: 1600, height: 1000)
 

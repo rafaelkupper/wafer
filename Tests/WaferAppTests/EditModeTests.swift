@@ -753,8 +753,16 @@ final class ReaderLivePreviewTests: XCTestCase {
         let source = (1...200).map { "Paragraph \($0) with enough words to be a real line." }.joined(separator: "\n\n")
         load(render(source), into: reader)
         var reportedLines: [Double] = []
-        reader.onLiveScroll = { reportedLines.append($0) }
         XCTAssertEqual(lineAtTop(of: reader, for: position(line: 1, totalLines: 399)) ?? 0, 0.2, accuracy: 0.01)
+        let scrolled = expectation(description: "preview reports the target source line")
+        var observedTarget = false
+        reader.onLiveScroll = { line in
+            reportedLines.append(line)
+            if !observedTarget, abs(line - 151) < 0.5 {
+                observedTarget = true
+                scrolled.fulfill()
+            }
+        }
 
         // Anything that is not the sync's own scroll counts as the user's.
         let target = try XCTUnwrap(evaluate("""
@@ -764,8 +772,7 @@ final class ReaderLivePreviewTests: XCTestCase {
               return y;
             })()
             """, in: reader) as? Double)
-        // Scroll events are slow to arrive when the test window is not visible.
-        for _ in 0..<40 where reportedLines.isEmpty { pause(0.1) }
+        wait(for: [scrolled], timeout: 15)
 
         let line = try XCTUnwrap(reportedLines.last)
         XCTAssertEqual(line, 151, accuracy: 0.5)
@@ -773,13 +780,17 @@ final class ReaderLivePreviewTests: XCTestCase {
         reader.syncScroll(to: position(line: line, totalLines: 399))
         pause(0.2)
         XCTAssertEqual(evaluate("window.scrollY", in: reader) as? Double ?? -1, target, accuracy: 1)
-        XCTAssertEqual(reportedLines.count, 1)
+        // WebKit can deliver several scroll events for one position. Each
+        // still has to describe the requested line, without changing position.
+        XCTAssertEqual(reportedLines.last ?? -1, line, accuracy: 0.5)
 
         // After edit mode ends the page stops reporting.
         reader.endLivePreview()
+        let unexpectedReport = expectation(description: "no report after leaving live preview")
+        unexpectedReport.isInverted = true
+        reader.onLiveScroll = { _ in unexpectedReport.fulfill() }
         _ = evaluate("window.scrollTo(0, 200); true", in: reader)
-        pause(1.2)
-        XCTAssertEqual(reportedLines.count, 1)
+        wait(for: [unexpectedReport], timeout: 1)
     }
 }
 

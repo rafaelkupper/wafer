@@ -88,7 +88,7 @@ final class RemoteImageSchemeHandler: NSObject, WKURLSchemeHandler {
             request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
             request.timeoutInterval = 15
             request.httpShouldHandleCookies = false
-            request.setValue("Wafer/0.5 RemoteImageLoader", forHTTPHeaderField: "User-Agent")
+            request.setValue(Self.userAgent(), forHTTPHeaderField: "User-Agent")
 
             let taskID = taskBox.identifier
             let token = fetcher.fetch(request) { [weak self] result in
@@ -144,6 +144,12 @@ final class RemoteImageSchemeHandler: NSObject, WKURLSchemeHandler {
         guard response.data.count <= maximumByteCount else {
             throw RemoteImageError.responseTooLarge
         }
+    }
+
+    static func userAgent(bundle: Bundle = .main) -> String {
+        let version = (bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return "Wafer/\(version.flatMap { $0.isEmpty ? nil : $0 } ?? "unknown") RemoteImageLoader"
     }
 
     static func remoteImageURL(from proxyURL: URL?) throws -> URL {

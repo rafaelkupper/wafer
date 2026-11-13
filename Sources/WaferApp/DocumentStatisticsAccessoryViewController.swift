@@ -60,7 +60,9 @@ final class DocumentStatisticsAccessoryViewController: NSTitlebarAccessoryViewCo
     }
 
     override func loadView() {
-        containerView.translatesAutoresizingMaskIntoConstraints = false
+        // AppKit sizes titlebar accessories from the root frame. Only the
+        // contents use Auto Layout; do not constrain the root as well.
+        containerView.translatesAutoresizingMaskIntoConstraints = true
 
         stackView.orientation = .horizontal
         stackView.alignment = .centerY
@@ -103,9 +105,13 @@ final class DocumentStatisticsAccessoryViewController: NSTitlebarAccessoryViewCo
         stackView.addArrangedSubview(sidebarButton)
         containerView.addSubview(stackView)
 
+        let trailing = stackView.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -Self.trailingInset)
+        trailing.priority = .defaultHigh
         NSLayoutConstraint.activate([
             stackView.leadingAnchor.constraint(equalTo: containerView.leadingAnchor),
-            stackView.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -Self.trailingInset),
+            // AppKit can temporarily constrain the accessory narrower while
+            // recomputing titlebar placement. Let its intrinsic width win next pass.
+            trailing,
             stackView.centerYAnchor.constraint(equalTo: containerView.centerYAnchor),
         ])
 
@@ -232,17 +238,12 @@ final class DocumentStatisticsAccessoryViewController: NSTitlebarAccessoryViewCo
             pillView.isHidden = true
         }
 
-        let clusterSize = NSSize(width: clusterWidth(), height: clusterHeight())
         let containerSize = NSSize(
-            width: clusterSize.width + Self.trailingInset,
-            height: titlebarContainerHeight()
+            width: clusterWidth() + Self.trailingInset,
+            height: Self.minimumContainerHeight
         )
         preferredContentSize = containerSize
-        view.frame = NSRect(origin: .zero, size: containerSize)
-        view.needsLayout = true
-        view.layoutSubtreeIfNeeded()
-        view.superview?.needsLayout = true
-        view.superview?.layoutSubtreeIfNeeded()
+        containerView.setFrameSize(containerSize)
     }
 
     private func clusterWidth() -> CGFloat {
@@ -260,28 +261,6 @@ final class DocumentStatisticsAccessoryViewController: NSTitlebarAccessoryViewCo
         }
 
         return widths.reduce(0, +) + (Self.controlSpacing * CGFloat(max(visibleViews.count - 1, 0)))
-    }
-
-    private func clusterHeight() -> CGFloat {
-        stackView.arrangedSubviews
-            .filter { !$0.isHidden }
-            .map { view in
-                let intrinsic = view.intrinsicContentSize.height
-                if intrinsic > 0 {
-                    return intrinsic
-                }
-                return view.fittingSize.height
-            }
-            .max() ?? DocumentStatisticsPillView.defaultHeight
-    }
-
-    private func titlebarContainerHeight() -> CGFloat {
-        guard let window = view.window else {
-            return Self.minimumContainerHeight
-        }
-
-        let titlebarHeight = window.frame.height - window.contentLayoutRect.height
-        return max(Self.minimumContainerHeight, titlebarHeight)
     }
 
     private func showMetricMenu() {

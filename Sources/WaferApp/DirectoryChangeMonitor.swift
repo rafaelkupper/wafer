@@ -38,11 +38,18 @@ final class DirectoryChangeMonitor: DirectoryMonitoring {
             return
         }
 
+        let contextBox = DirectoryMonitorWeakBox(self)
         var context = FSEventStreamContext(
             version: 0,
-            info: Unmanaged.passUnretained(self).toOpaque(),
-            retain: nil,
-            release: nil,
+            info: Unmanaged.passUnretained(contextBox).toOpaque(),
+            retain: { pointer in
+                guard let pointer else { return nil }
+                _ = Unmanaged<DirectoryMonitorWeakBox>.fromOpaque(pointer).retain()
+                return pointer
+            },
+            release: { pointer in
+                if let pointer { Unmanaged<DirectoryMonitorWeakBox>.fromOpaque(pointer).release() }
+            },
             copyDescription: nil
         )
         let callback: FSEventStreamCallback = { _, info, count, eventPaths, flags, _ in
@@ -50,11 +57,11 @@ final class DirectoryChangeMonitor: DirectoryMonitoring {
                 return
             }
 
-            let monitor = Unmanaged<DirectoryChangeMonitor>.fromOpaque(info).takeUnretainedValue()
+            let box = Unmanaged<DirectoryMonitorWeakBox>.fromOpaque(info).takeUnretainedValue()
             let paths = Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue() as! [String]
             let eventFlags = Array(UnsafeBufferPointer(start: flags, count: count))
             Task { @MainActor in
-                monitor.handleChange(paths: paths, flags: eventFlags)
+                box.monitor?.handleChange(paths: paths, flags: eventFlags)
             }
         }
 
@@ -126,4 +133,12 @@ final class DirectoryChangeMonitor: DirectoryMonitoring {
         }
         return changes
     }
+}
+
+// FSEvents owns this box rather than the monitor, so even a leaked stream cannot
+// dereference a monitor after its owner releases it.
+@MainActor
+final class DirectoryMonitorWeakBox {
+    weak var monitor: DirectoryChangeMonitor?
+    init(_ monitor: DirectoryChangeMonitor) { self.monitor = monitor }
 }
