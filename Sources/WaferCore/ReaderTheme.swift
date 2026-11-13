@@ -66,6 +66,7 @@ public enum ReaderTheme {
             return inlineStyleSheetBody(from: styleSheet)
         }
 
+        WaferLog.resources.fault("reader-theme.css is missing or unreadable; using the built-in fallback style sheet.")
         return fallbackStyleSheetBody
     }
 

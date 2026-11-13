@@ -95,6 +95,7 @@ final class ExportAssetInliner {
         } catch let error as ExportError {
             throw error
         } catch {
+            WaferLog.export.info("Left export asset as a link because it could not be inlined: \(error.localizedDescription, privacy: .public)")
             return nil
         }
     }

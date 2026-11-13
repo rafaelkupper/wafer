@@ -38,7 +38,9 @@ This guide describes Wafer's behavior in detail. For an overview and screenshots
 - Offline Mermaid rendering for `mermaid` and `mmd` fenced blocks using bundled Mermaid 11.14.0, with dark-reader styling, an explicit diagram inspector, and invalid diagrams showing an inline error and source fallback
 - Offline KaTeX rendering for `math` fenced blocks using bundled KaTeX 0.17.0, with local CSS/font resources loaded only when math is present
 - Syntax-highlighted fenced code blocks for common languages including Swift, shell, JSON, YAML, Markdown, Go, Ruby, Python, Elixir, JavaScript, TypeScript, PHP, C, C++, Rust, Zig, Haskell, Java, HTML/XML, CSS/SCSS, TOML, Diff, Dockerfile, SQL, Kotlin, C#, Objective-C, Lua, Makefile, INI/conf/properties, GraphQL, HCL/Terraform, and protobuf
-- External links open in the default browser
+- External links open in the default browser or mail app. Only `http`, `https`, and `mailto` links open; links with other schemes (for example `javascript:` or app URL schemes) render as plain text and do nothing.
+- A link to a file that can run code (an app, script, `.command`, executable, installer package, or similar) asks first and offers Show in Finder, Open, or Cancel
+- Files must be UTF-8, or UTF-16 with a byte-order mark; other encodings show an error instead of garbled text. Files over 32 MB are refused rather than shown in part.
 - Local markdown links reuse open windows by file identity and cascade new windows when needed
 - Local images load through a custom local asset scheme in WebKit
 - Remote images load only from `https` URLs through a custom remote-image scheme in WebKit; disable them with File > Load Remote Images when privacy matters, then reload with Cmd-R
@@ -63,7 +65,7 @@ Limits: the panes are aligned by their top line, so a tall diagram or image can 
 
 ## Folder Library
 
-Open a folder with File > Open Folder... or by dropping a folder on the app. Wafer indexes markdown files with extensions `.md`, `.markdown`, `.mdown`, and `.mkd`, skips hidden files plus `.git`, `.build`, `build`, `dist`, and `node_modules`, and caps the visible library at 2,000 markdown files. If the cap is reached, the Library sidebar shows a quiet truncation footer.
+Open a folder with File > Open Folder... or by dropping a folder on the app. Wafer indexes markdown files with extensions `.md`, `.markdown`, `.mdown`, and `.mkd`, skips hidden files plus `.git`, `.build`, `build`, `dist`, and `node_modules`, and caps the visible library at 2,000 markdown files. If the cap is reached, the Library sidebar shows a quiet truncation footer. Files that cannot be read, or that exceed the indexing budget (2 MiB per file, 128 MiB for the whole library), are left out of the index and counted in a footer such as "3 files skipped (unreadable or too large)". One unreadable file never empties the library; a file that becomes unreadable keeps its last indexed entry.
 
 When a folder is opened without an existing reader window, Wafer opens the first markdown file from the completed background scan as the visible entry point for the library.
 
@@ -134,10 +136,9 @@ Wafer ships a Quick Look preview extension for Finder space-bar previews of mark
 Quick Look previews are intentionally static:
 
 - Mermaid and math fences render as highlighted source code because Finder previews do not emit or execute bundled JavaScript.
-- Local images are inlined as `data:` URLs so they can render without Wafer's custom WebKit schemes.
+- Local images are omitted. The sandboxed extension is not allowed to read files next to the previewed document.
 - Remote images render as placeholders and are never fetched from Finder previews.
 - Markdown source larger than 2 MB is truncated at a newline and ends with a truncation note.
-- Local image attachments are capped at 10 MB total for the preview.
 - The preview follows the current system light/dark appearance. App-selected custom themes are deferred to the main app.
 
 ## Appearance Themes

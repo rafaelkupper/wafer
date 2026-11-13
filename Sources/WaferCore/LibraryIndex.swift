@@ -87,7 +87,7 @@ public enum LibraryScanner {
     public static func scan(
         rootURL: URL, fileLimit: Int = 2_000, existingFiles: [LibraryFile] = [],
         changedPaths: Set<String>? = [], cancellation: WorkCancellation? = nil,
-        maximumFileByteCount: Int = 2 * 1024 * 1024, maximumLibraryByteCount: Int = 32 * 1024 * 1024
+        maximumFileByteCount: Int = 2 * 1024 * 1024, maximumLibraryByteCount: Int = 128 * 1024 * 1024
     ) -> Result {
         guard fileLimit > 0 else {
             var traversal = LibraryTraversal(rootURL: FileIdentity.normalized(rootURL), fileLimit: 1)
@@ -135,6 +135,7 @@ public enum LibraryScanner {
                 files.append(file)
             } catch {
                 skippedItemCount += 1
+                WaferLog.library.info("Skipped library item \(url.path, privacy: .private): \(error.localizedDescription, privacy: .public)")
                 if let previous = existing[FileIdentity.identity(for: url)] {
                     remainingBytes -= Int(clamping: previous.contentFingerprint.fileSize)
                     files.append(previous)

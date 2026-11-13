@@ -255,6 +255,7 @@ final class SidebarOutlineRowView: SidebarSelectableRowView {
         }
     }
 
+    #if DEBUG
     var leadingInsetForTesting: CGFloat {
         rowLeadingInset
     }
@@ -262,6 +263,7 @@ final class SidebarOutlineRowView: SidebarSelectableRowView {
     var labelMinXForTesting: CGFloat {
         titleLabel.frame.minX
     }
+    #endif
 
     override func updateAppearance() {
         layer?.backgroundColor = NSColor.clear.cgColor
@@ -347,8 +349,10 @@ enum LibraryTreeBuilder {
 
 @MainActor
 protocol SidebarLibraryRowTesting {
+    #if DEBUG
     var libraryTitleForTesting: String { get }
     var primaryTextColorForTesting: NSColor? { get }
+    #endif
 }
 
 @MainActor
@@ -395,6 +399,7 @@ final class SidebarLibraryFolderRowView: SidebarSelectableRowView, SidebarLibrar
         nil
     }
 
+    #if DEBUG
     var libraryTitleForTesting: String {
         titleLabel.stringValue
     }
@@ -402,6 +407,7 @@ final class SidebarLibraryFolderRowView: SidebarSelectableRowView, SidebarLibrar
     var primaryTextColorForTesting: NSColor? {
         titleLabel.textColor
     }
+    #endif
 
     override func applyCurrentTheme() {
         super.applyCurrentTheme()
@@ -456,6 +462,7 @@ final class SidebarLibraryFileRowView: SidebarSelectableRowView, SidebarLibraryR
         nil
     }
 
+    #if DEBUG
     var relativePathForTesting: String {
         file.relativePathComponents.joined(separator: "/")
     }
@@ -467,6 +474,7 @@ final class SidebarLibraryFileRowView: SidebarSelectableRowView, SidebarLibraryR
     var primaryTextColorForTesting: NSColor? {
         titleLabel.textColor
     }
+    #endif
 
     override func applyCurrentTheme() {
         super.applyCurrentTheme()
@@ -523,9 +531,11 @@ final class SidebarLibrarySearchResultRowView: SidebarSelectableRowView {
         nil
     }
 
+    #if DEBUG
     var titleForTesting: String {
         titleLabel.stringValue
     }
+    #endif
 
     override func applyCurrentTheme() {
         super.applyCurrentTheme()
@@ -563,9 +573,11 @@ final class SidebarLibraryMessageRowView: NSView, ThemeApplying {
         nil
     }
 
+    #if DEBUG
     var textForTesting: String {
         label.stringValue
     }
+    #endif
 
     func applyCurrentTheme() {
         label.textColor = ReaderTheme.sidebarSecondaryTextColor.withAlphaComponent(0.72)
@@ -599,9 +611,11 @@ final class SidebarLibraryFooterView: NSView, ThemeApplying {
         nil
     }
 
+    #if DEBUG
     var textForTesting: String {
         label.stringValue
     }
+    #endif
 
     func applyCurrentTheme() {
         label.textColor = ReaderTheme.sidebarSecondaryTextColor.withAlphaComponent(0.72)
@@ -677,11 +691,13 @@ final class SidebarModeToggleView: NSView, ThemeApplying {
         outlineButton.applyCurrentTheme()
     }
 
+    #if DEBUG
     var availableTitlesForTesting: [String] {
         [libraryButton, documentsButton, outlineButton].compactMap { button in
             button.isHidden ? nil : button.titleForTesting
         }
     }
+    #endif
 }
 
 @MainActor
@@ -730,9 +746,11 @@ final class SidebarModeButton: NSView, ThemeApplying {
         updateAppearance()
     }
 
+    #if DEBUG
     var titleForTesting: String {
         label.stringValue
     }
+    #endif
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {

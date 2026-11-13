@@ -310,7 +310,13 @@ final class MarkdownEditSession {
             // A failed swap can leave the original in the replacement
             // directory; keep the directory unless the file is back in place.
             if fileManager.fileExists(atPath: url.path) {
-                try? fileManager.removeItem(at: replacementDirectory)
+                do {
+                    try fileManager.removeItem(at: replacementDirectory)
+                } catch {
+                    WaferLog.editing.error("Could not remove save staging directory \(replacementDirectory.path, privacy: .private): \(error.localizedDescription, privacy: .public)")
+                }
+            } else {
+                WaferLog.editing.fault("Save left \(url.path, privacy: .private) missing; staging directory kept at \(replacementDirectory.path, privacy: .private)")
             }
         }
 
@@ -322,7 +328,11 @@ final class MarkdownEditSession {
         } catch {
             if !fileManager.fileExists(atPath: url.path),
                let original = (error as NSError).userInfo["NSFileOriginalItemLocationKey"] as? URL {
-                try? fileManager.moveItem(at: original, to: url)
+                do {
+                    try fileManager.moveItem(at: original, to: url)
+                } catch {
+                    WaferLog.editing.fault("Could not restore \(url.path, privacy: .private) from \(original.path, privacy: .private) after a failed save: \(error.localizedDescription, privacy: .public)")
+                }
             }
             throw error
         }

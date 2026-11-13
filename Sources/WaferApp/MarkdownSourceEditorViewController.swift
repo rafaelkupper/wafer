@@ -139,6 +139,7 @@ final class MarkdownSourceEditorViewController: NSViewController, NSTextViewDele
         EditSnapshot(text: text, revision: revision)
     }
 
+    #if DEBUG
     var textViewForTesting: NSTextView {
         textView
     }
@@ -146,6 +147,7 @@ final class MarkdownSourceEditorViewController: NSViewController, NSTextViewDele
     var undoManagerForTesting: UndoManager {
         editorUndoManager
     }
+    #endif
 
     override func loadView() {
         layoutManager.allowsNonContiguousLayout = true

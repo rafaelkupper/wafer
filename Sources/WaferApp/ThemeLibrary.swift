@@ -54,7 +54,13 @@ final class ThemeLibrary {
         var loadedPalettes: [String: ReaderThemePalette] = [:]
 
         if let bundledThemesDirectoryURL {
-            let bundledURLs = (try? themeFileURLs(in: bundledThemesDirectoryURL)) ?? []
+            let bundledURLs: [URL]
+            do {
+                bundledURLs = try themeFileURLs(in: bundledThemesDirectoryURL)
+            } catch {
+                WaferLog.resources.fault("Bundled themes are unreadable: \(error.localizedDescription, privacy: .public)")
+                bundledURLs = []
+            }
             for url in bundledURLs {
                 do {
                     let data = try Data(contentsOf: url)

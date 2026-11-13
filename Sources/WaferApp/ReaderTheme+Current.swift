@@ -17,9 +17,11 @@ extension ReaderTheme {
         NotificationCenter.default.post(name: .readerThemeDidChange, object: palette)
     }
 
+    #if DEBUG
     @MainActor static func resetToDefaultForTesting() {
         current = .dark
     }
+    #endif
 
     @MainActor static var backgroundHex: String { current.backgroundHex }
     @MainActor static var secondaryTextHex: String { current.secondaryTextHex }

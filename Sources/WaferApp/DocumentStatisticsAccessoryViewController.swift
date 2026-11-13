@@ -141,6 +141,7 @@ final class DocumentStatisticsAccessoryViewController: NSTitlebarAccessoryViewCo
         editButton.isActive = isActive
     }
 
+    #if DEBUG
     var editButtonIsActiveForTesting: Bool {
         editButton.isActive
     }
@@ -148,6 +149,7 @@ final class DocumentStatisticsAccessoryViewController: NSTitlebarAccessoryViewCo
     func triggerEditToggleForTesting() {
         editButton.onActivate?()
     }
+    #endif
 
     func applyCurrentTheme() {
         pillView.applyCurrentTheme()
@@ -177,6 +179,7 @@ final class DocumentStatisticsAccessoryViewController: NSTitlebarAccessoryViewCo
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.copyConfirmationDuration, execute: workItem)
     }
 
+    #if DEBUG
     var copyButtonSymbolForTesting: String {
         copyButton.symbolName
     }
@@ -212,6 +215,7 @@ final class DocumentStatisticsAccessoryViewController: NSTitlebarAccessoryViewCo
     func triggerSidebarToggleForTesting() {
         sidebarButton.onActivate?()
     }
+    #endif
 
     @objc
     func selectKind(_ sender: NSMenuItem) {
@@ -457,6 +461,7 @@ final class TitlebarAccessoryIconButtonView: NSView, ThemeApplying {
 
     var onActivate: (() -> Void)?
 
+    #if DEBUG
     var imageTintForTesting: NSColor? {
         imageView.contentTintColor
     }
@@ -464,6 +469,7 @@ final class TitlebarAccessoryIconButtonView: NSView, ThemeApplying {
     var imageAlphaForTesting: CGFloat {
         imageView.alphaValue
     }
+    #endif
 
     private(set) var symbolName: String
 

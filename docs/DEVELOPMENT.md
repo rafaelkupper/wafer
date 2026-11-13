@@ -28,7 +28,16 @@ The build fails if either resource bundle or a required reader asset is missing.
 
 Run the logic tests with `swift test` and the release-configuration tests with `python3 -m unittest discover -s Tests/ReleaseTools -v`. The release-tool tests use disposable app products and stub external signing, notarization, Git, and GitHub commands. They publish nothing.
 
-[CI](../.github/workflows/ci.yml) runs the Swift and Python tests, builds the app, and verifies the Quick Look extension on macOS 15 with Xcode 26.3. Its Swift toolchain satisfies both the package's Swift 6.0 minimum and swift-markdown's Swift 6.2 requirement, and the app retains its macOS 14 deployment target. The runner's available toolchains are listed in the [GitHub runner image manifest](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md).
+Run the JavaScript tests with `for test in Tests/JavaScript/*/*.cjs; do node "$test"; done`. They execute the bundled reader and renderer scripts against a controlled DOM.
+
+Test switches:
+
+- `WAFER_PERF_TESTS=1 swift test` also runs the wall-clock performance assertions (for example `EditSavePerformanceTests`), which are skipped by default because they depend on machine load.
+- `WAFER_UPDATE_GOLDENS=1 swift test --filter RenderCompatibilityCorpusTests` rewrites the golden HTML files under `Tests/Fixtures/WaferCore/Goldens`. Review the diff before committing.
+
+Runtime failures that are handled without user interaction are written to unified logging. Watch them with `log stream --predicate 'subsystem == "dev.wafer.app"'`.
+
+[CI](../.github/workflows/ci.yml) runs the Swift, Python, and JavaScript tests, builds the app, and verifies the Quick Look extension on macOS 15 with Xcode 26.3. Its Swift toolchain satisfies both the package's Swift 6.0 minimum and swift-markdown's Swift 6.2 requirement, and the app retains its macOS 14 deployment target. The runner's available toolchains are listed in the [GitHub runner image manifest](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md).
 
 ## Development Files
 

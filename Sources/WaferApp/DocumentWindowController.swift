@@ -259,6 +259,7 @@ class DocumentWindowController: NSWindowController, ThemeApplying, NSUserInterfa
         setEditorPane(controller, animated: animated)
     }
 
+    #if DEBUG
     var editorPaneControllerForTesting: NSViewController? {
         chromeViewController.editorPaneController
     }
@@ -279,14 +280,17 @@ class DocumentWindowController: NSWindowController, ThemeApplying, NSUserInterfa
     var lastEditorPaneAnimationStatsForTesting: (frames: Int, slowestStep: TimeInterval)? {
         chromeViewController.lastEditorPaneAnimationStats
     }
+    #endif
 
     func setEditingActive(_ isActive: Bool) {
         statisticsAccessoryController.setEditingActive(isActive)
     }
 
+    #if DEBUG
     var editButtonIsActiveForTesting: Bool {
         statisticsAccessoryController.editButtonIsActiveForTesting
     }
+    #endif
 
     /// Saves unsaved editor text before the window closes.
     func prepareToCloseWindow() -> Bool {
@@ -305,6 +309,7 @@ class DocumentWindowController: NSWindowController, ThemeApplying, NSUserInterfa
         chromeViewController.isTabStripVisible
     }
 
+    #if DEBUG
     var displayedStatisticTextForTesting: String? {
         statisticsAccessoryController.displayedTextForTesting
     }
@@ -376,6 +381,7 @@ class DocumentWindowController: NSWindowController, ThemeApplying, NSUserInterfa
     func handleEffectiveAppearanceChangeForTesting() {
         appearancePreferenceStore.applySystemAppearanceIfNeeded()
     }
+    #endif
 
     override func showWindow(_ sender: Any?) {
         super.showWindow(sender)
@@ -396,6 +402,7 @@ class DocumentWindowController: NSWindowController, ThemeApplying, NSUserInterfa
         }
     }
 
+    #if DEBUG
     func prepareSidebarForAnimatedOpenForTesting() {
         chromeViewController.prepareSidebarForAnimatedOpen()
     }
@@ -415,11 +422,13 @@ class DocumentWindowController: NSWindowController, ThemeApplying, NSUserInterfa
     func triggerOutlineSelectionForTesting(_ anchorID: String) {
         chromeViewController.triggerOutlineSelectionForTesting(anchorID)
     }
+    #endif
 
     func updateNavigationControls(canGoBack: Bool, canGoForward: Bool) {
         navigationAccessoryController.setNavigationState(canGoBack: canGoBack, canGoForward: canGoForward)
     }
 
+    #if DEBUG
     var navigationBackEnabledForTesting: Bool {
         navigationAccessoryController.backButtonIsEnabledForTesting
     }
@@ -435,6 +444,7 @@ class DocumentWindowController: NSWindowController, ThemeApplying, NSUserInterfa
     var navigationAccessoryForTesting: NavigationHistoryAccessoryViewController {
         navigationAccessoryController
     }
+    #endif
 
     func apply(documentStatistics: DocumentStatistics?) {
         statisticsAccessoryController.apply(statistics: documentStatistics)
@@ -697,6 +707,7 @@ private final class DocumentChromeViewController: NSViewController, ThemeApplyin
         sidebarViewController.mode
     }
 
+    #if DEBUG
     var sidebarDocumentTitlesForTesting: [String] {
         sidebarViewController.documentTitlesForTesting
     }
@@ -736,6 +747,7 @@ private final class DocumentChromeViewController: NSViewController, ThemeApplyin
     var librarySearchFieldIsFocusedForTesting: Bool {
         sidebarViewController.librarySearchFieldIsFocusedForTesting
     }
+    #endif
 
     override func loadView() {
         let rootView = ThemeObservingView(frame: NSRect(origin: .zero, size: DocumentWindowController.initialContentSize))
@@ -836,6 +848,7 @@ private final class DocumentChromeViewController: NSViewController, ThemeApplyin
         sidebarViewController.focusLibrarySearch()
     }
 
+    #if DEBUG
     func triggerSidebarDocumentSelectionForTesting(_ url: URL) {
         sidebarViewController.triggerDocumentSelectionForTesting(url)
     }
@@ -843,6 +856,7 @@ private final class DocumentChromeViewController: NSViewController, ThemeApplyin
     func triggerOutlineSelectionForTesting(_ anchorID: String) {
         sidebarViewController.triggerOutlineSelectionForTesting(anchorID)
     }
+    #endif
 
     func setDisplayedTitle(_ title: String) {
         centeredTitleView.title = title
@@ -868,6 +882,7 @@ private final class DocumentChromeViewController: NSViewController, ThemeApplyin
 
     // MARK: Editor pane
 
+    #if DEBUG
     var editorPaneWidthForTesting: CGFloat {
         contentContainerView.editorWidth
     }
@@ -875,6 +890,7 @@ private final class DocumentChromeViewController: NSViewController, ThemeApplyin
     var hostedContentWidthForTesting: CGFloat {
         contentContainerView.mainWidth
     }
+    #endif
 
     var isEditorPaneAnimating: Bool {
         editorPaneAnimation != nil

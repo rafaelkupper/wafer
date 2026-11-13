@@ -25,7 +25,9 @@ final class QuickOpenPanelController: NSObject, NSTextFieldDelegate, NSTableView
     private var results: [LibraryFile] = []
     private let searchWork = LatestWorkQueue<LibrarySearchInput, [LibraryFile]>()
     private var isSearching = false
+    #if DEBUG
     var isSearchingForTesting: Bool { isSearching }
+    #endif
     private var pendingSubmission: Bool?
     private var selectedIndex: Int?
     private weak var presentingWindow: NSWindow?
@@ -155,6 +157,7 @@ final class QuickOpenPanelController: NSObject, NSTextFieldDelegate, NSTableView
         tableView?.reloadData()
     }
 
+    #if DEBUG
     var resultTitlesForTesting: [String] {
         results.map(\.displayTitle)
     }
@@ -189,6 +192,7 @@ final class QuickOpenPanelController: NSObject, NSTextFieldDelegate, NSTableView
     func submitSelectionForTesting(opensNewWindow: Bool = false) {
         openSelectedResult(opensNewWindow: opensNewWindow)
     }
+    #endif
 
     private func ensurePanel() -> QuickOpenPanel {
         if let panel {

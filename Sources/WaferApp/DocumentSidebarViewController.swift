@@ -286,6 +286,7 @@ final class DocumentSidebarViewController: NSViewController, NSTextFieldDelegate
         updateActiveOutlineSelection()
     }
 
+    #if DEBUG
     var documentTitlesForTesting: [String] {
         sidebarEntries.map(\.displayTitle)
     }
@@ -464,6 +465,7 @@ final class DocumentSidebarViewController: NSViewController, NSTextFieldDelegate
     func toggleLibraryFolderForTesting(_ pathKey: String) {
         toggleLibraryFolder(pathKey: pathKey)
     }
+    #endif
 
     private func rebuildRows() {
         var updated: [SidebarRow] = []
@@ -632,6 +634,7 @@ final class DocumentSidebarViewController: NSViewController, NSTextFieldDelegate
         }
     }
 
+    #if DEBUG
     private var rowViewsForTesting: [NSView] {
         view.layoutSubtreeIfNeeded()
         return rows.indices.compactMap {
@@ -640,6 +643,7 @@ final class DocumentSidebarViewController: NSViewController, NSTextFieldDelegate
             return cell?.content
         }
     }
+    #endif
 
     private func toggleLibraryFolder(pathKey: String) {
         if collapsedLibraryFolderPaths.contains(pathKey) {

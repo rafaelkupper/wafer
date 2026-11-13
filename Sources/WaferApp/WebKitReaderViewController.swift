@@ -51,12 +51,16 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
     private var scrollSyncInFlight = false
     private var pendingScrollSync: EditorScrollPosition?
     private var lastSyncedMetrics: EditorScrollPosition?
+    #if DEBUG
     private(set) var livePatchCountForTesting = 0
     private(set) var liveFullReloadCountForTesting = 0
+    #endif
     private(set) var currentActiveHeadingID: String?
+    #if DEBUG
     private(set) var lastFindQueryForTesting: String?
     private(set) var lastFindDirectionForTesting: String?
     private(set) var lastFindMatchFoundForTesting: Bool?
+    #endif
 
     var onOpenLink: ((URL) -> Void)?
     var onOpenLinkInNewTab: ((URL) -> Void)?
@@ -109,6 +113,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         lastKnownScrollFraction
     }
 
+    #if DEBUG
     var horizontalScrollElasticityForTesting: NSScrollView.Elasticity? {
         webContentScrollView()?.horizontalScrollElasticity
     }
@@ -132,6 +137,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
     var isAwaitingContentReadyForTesting: Bool {
         awaitingContentReady
     }
+    #endif
 
     var isContentReadyForExport: Bool {
         hasRenderableContent && didCompleteCurrentNavigation && !awaitingContentReady && themeUpdateID == nil
@@ -157,6 +163,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
     }
     #endif
 
+    #if DEBUG
     func setFindQueryForTesting(_ query: String) {
         findBarView.searchField.stringValue = query
     }
@@ -168,6 +175,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
     static var scrollScriptSourceForTesting: String {
         scrollScript
     }
+    #endif
 
     override func loadView() {
         rootView.frame = NSRect(x: 0, y: 0, width: 920, height: 760)
@@ -369,9 +377,11 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
     }
     #endif
 
+    #if DEBUG
     func invalidateForTesting() {
         shutdown()
     }
+    #endif
 
     func shutdown() {
         invalidateWebViewCallbacks()
@@ -437,7 +447,9 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
                 self.liveBodyHTML = body
                 self.liveHelpersInstalled = true
                 self.livePatchStateReady = true
+                #if DEBUG
                 self.livePatchCountForTesting += 1
+                #endif
                 completion?(true)
             } else {
                 self.applyLiveFullReload(renderOutput)
@@ -540,7 +552,9 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
     }
 
     private func applyLiveFullReload(_ renderOutput: WebKitRenderOutput) {
+        #if DEBUG
         liveFullReloadCountForTesting += 1
+        #endif
         let fraction = lastKnownScrollFraction
         apply(renderOutput: renderOutput, initialScrollFraction: fraction >= 0.98 ? 1 : fraction)
     }
@@ -664,11 +678,17 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         (onOpenLinkInNewTab ?? onOpenLink)?(url)
     }
 
+    #if DEBUG
     /// Test seam; nil writes to the general pasteboard.
     var pasteboardForCopyCodeForTesting: NSPasteboard?
+    #endif
 
     func handleCopyCode(_ text: String) {
+        #if DEBUG
         let pasteboard = pasteboardForCopyCodeForTesting ?? NSPasteboard.general
+        #else
+        let pasteboard = NSPasteboard.general
+        #endif
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
     }
@@ -679,8 +699,10 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         }
 
         if normalizedFindQuery().isEmpty {
+            #if DEBUG
             lastFindQueryForTesting = nil
             lastFindMatchFoundForTesting = nil
+            #endif
             updateFindStatus(nil)
             clearBrowserSelection()
             return
@@ -890,13 +912,17 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
             return
         }
 
+        #if DEBUG
         lastFindQueryForTesting = query
         lastFindDirectionForTesting = direction == .previous ? "previous" : "next"
+        #endif
 
         #if DEBUG
         if suppressFindExecutionForTesting {
             let matchFound = suppressedFindMatchResultForTesting ?? true
+            #if DEBUG
             lastFindMatchFoundForTesting = matchFound
+            #endif
             updateFindStatus(matchFound ? nil : "No matches")
             return
         }
@@ -912,7 +938,9 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
                 return
             }
 
+            #if DEBUG
             self.lastFindMatchFoundForTesting = result.matchFound
+            #endif
             self.updateFindStatus(result.matchFound ? nil : "No matches")
         }
     }

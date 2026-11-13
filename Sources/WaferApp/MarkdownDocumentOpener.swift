@@ -61,6 +61,7 @@ enum MarkdownDocumentOpener {
         OpenDocumentRegistry.shared.release(document)
     }
 
+    #if DEBUG
     static var retainedDocumentCountForTesting: Int {
         OpenDocumentRegistry.shared.count
     }
@@ -68,6 +69,7 @@ enum MarkdownDocumentOpener {
     static func currentMarkdownWindowForTesting() -> NSWindow? {
         currentMarkdownWindow()
     }
+    #endif
 
     static var hasVisibleMarkdownWindow: Bool {
         currentMarkdownWindow() != nil
@@ -197,9 +199,11 @@ final class OpenDocumentRegistry {
         return preferredDocument(from: candidates)
     }
 
+    #if DEBUG
     static func identityForTesting(_ url: URL) -> String {
         identity(for: url)
     }
+    #endif
 
     func reindex(_ document: NSDocument) {
         let identifier = ObjectIdentifier(document)

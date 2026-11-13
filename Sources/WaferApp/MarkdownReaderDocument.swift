@@ -952,7 +952,9 @@ final class MarkdownReaderDocument: NSDocument {
         editMode.isEditing
     }
 
+    #if DEBUG
     var editorControllerForTesting: MarkdownSourceEditorViewController? { editMode.editor }
+    #endif
 
     /// The editor to show beside this document's reader while editing.
     var editorPaneController: NSViewController? {

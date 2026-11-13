@@ -64,8 +64,18 @@ public struct PreviewComposer {
             guard let range = Range(match.range, in: html), let keyRange = Range(match.range(at: 1), in: html) else { continue }
             result += html[cursor..<range.lowerBound]
             let key = String(html[keyRange])
-            if let url = composition.attachments[key],
-               let data = try? BoundedFileReader.read(from: url, maximumByteCount: remaining) {
+            let data: Data?
+            if let url = composition.attachments[key] {
+                do {
+                    data = try BoundedFileReader.read(from: url, maximumByteCount: remaining)
+                } catch {
+                    WaferLog.rendering.info("Preview omitted image \(url.path, privacy: .private): \(error.localizedDescription, privacy: .public)")
+                    data = nil
+                }
+            } else {
+                data = nil
+            }
+            if let url = composition.attachments[key], let data {
                 remaining -= data.count
                 let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
                 let image = String(html[range]).replacingOccurrences(of: "cid:" + key, with: "data:\(mime);base64,\(data.base64EncodedString())")

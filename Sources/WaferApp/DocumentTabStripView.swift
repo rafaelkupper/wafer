@@ -37,9 +37,11 @@ final class DocumentTabStripView: NSView, ThemeApplying {
     private var dragCancelled = false
     private var escapeKeyMonitor: Any?
 
+    #if DEBUG
     var tabViewsForTesting: [NSView] {
         tabViews
     }
+    #endif
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -331,6 +333,7 @@ final class TabItemView: NSView, ThemeApplying {
     var onCloseOthers: (() -> Void)?
     var onDragEvent: ((DocumentTabStripView.DragPhase, NSEvent) -> Void)?
 
+    #if DEBUG
     var titleForTesting: String {
         titleLabel.stringValue
     }
@@ -342,6 +345,7 @@ final class TabItemView: NSView, ThemeApplying {
     var closeButtonForTesting: NSButton {
         closeButton
     }
+    #endif
 
     init(title: String, isSelected: Bool) {
         self.titleLabel = NSTextField(labelWithString: title)

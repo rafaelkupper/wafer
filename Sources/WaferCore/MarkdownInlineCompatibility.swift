@@ -7,6 +7,7 @@ enum EmojiShortcodes {
             let data = try? Data(contentsOf: resourceURL),
             let shortcodes = try? JSONDecoder().decode([String: String].self, from: data)
         else {
+            WaferLog.resources.fault("Emoji shortcode resource is missing or invalid; shortcodes stay literal.")
             return [:]
         }
 

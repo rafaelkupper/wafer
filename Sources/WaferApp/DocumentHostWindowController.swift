@@ -19,18 +19,22 @@ final class DocumentHostWindowController: DocumentWindowController {
     // the nonisolated deinit can clean up.
     nonisolated(unsafe) private var windowWillCloseObserver: NSObjectProtocol?
 
+    #if DEBUG
     /// Test seam for command-click routing; nil uses NSApp.currentEvent.
     var commandClickProviderForTesting: (() -> Bool)?
     /// Test seam for secondary-tab document creation; nil uses the normal loader.
     var tabDocumentFactoryForTesting: ((URL) -> MarkdownReaderDocument?)?
+    #endif
 
     var activeTab: DocumentTab {
         tabs[activeTabIndex]
     }
 
+    #if DEBUG
     var tabStripViewForTesting: DocumentTabStripView {
         tabStripView
     }
+    #endif
 
     init(
         tab: DocumentTab,
@@ -290,9 +294,11 @@ final class DocumentHostWindowController: DocumentWindowController {
     }
 
     private func makeTabDocument(for url: URL) -> MarkdownReaderDocument? {
+        #if DEBUG
         if let tabDocumentFactoryForTesting {
             return tabDocumentFactoryForTesting(url)
         }
+        #endif
 
         let document = MarkdownReaderDocument()
         document.fileURL = url
@@ -300,9 +306,11 @@ final class DocumentHostWindowController: DocumentWindowController {
     }
 
     private var isTabOpeningClick: Bool {
+        #if DEBUG
         if let commandClickProviderForTesting {
             return commandClickProviderForTesting()
         }
+        #endif
 
         guard let event = NSApp.currentEvent else {
             return false
