@@ -80,12 +80,25 @@ def team_of(details):
     return None
 
 
-def verify(app):
+def identity_of(details):
+    for line in details.splitlines():
+        if line.startswith("Authority=Developer ID Application:"):
+            return line.split("=", 1)[1]
+    raise SystemExit("Missing Developer ID Application signing identity")
+
+
+def source_commit():
+    return output_of("git", "-C", ROOT, "rev-parse", "HEAD").strip()
+
+
+def verify(app, expected_identity=None):
     run("codesign", "--verify", "--deep", "--strict", "--verbose=2", app)
     details = signing_details(app)
     team = team_of(details)
     if "Authority=Developer ID Application" not in details or not team or team == "not set":
         raise SystemExit("App is not signed with a Developer ID Application identity")
+    if expected_identity is not None and identity_of(details) != expected_identity:
+        raise SystemExit("Archive signing identity does not match review receipt")
     sparkle = app / "Contents/Frameworks/Sparkle.framework"
     nested = [sparkle / "Versions/B" / helper for helper in SPARKLE_HELPERS]
     nested += [sparkle, app / "Contents/PlugIns/WaferQuickLook.appex", app]
@@ -104,7 +117,7 @@ def verify(app):
     run("spctl", "--assess", "--type", "execute", "--verbose=4", app)
 
 
-def verify_archive(archive):
+def verify_archive(archive, expected_identity=None):
     with zipfile.ZipFile(archive) as contents:
         stray = [name for name in contents.namelist() if name.startswith("__MACOSX/") or Path(name).name.startswith("._")]
     if stray:
@@ -113,7 +126,7 @@ def verify_archive(archive):
     for extract in (["ditto", "-x", "-k", archive], ["unzip", "-q", archive, "-d"]):
         with tempfile.TemporaryDirectory(prefix="wafer-extract-") as tmp:
             run(*extract, tmp)
-            verify(Path(tmp) / f"{APP}.app")
+            verify(Path(tmp) / f"{APP}.app", expected_identity)
 
 
 def verify_update(archive, appcast, public_key):
@@ -124,35 +137,69 @@ def sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def publish(review, version, build, current_feed, repository):
+def publish(review, version, build, public_key, feed, current_feed, repository):
     receipt = json.loads((review / "review.json").read_text())
     archive = review / receipt["zip"]
-    if receipt["version"] != version or receipt["build"] != build:
-        raise SystemExit("Review receipt does not match manifest")
+    expected = dict(version=version, build=build, publicKey=public_key,
+                    sourceCommit=source_commit(), repository=repository, feedURL=feed)
+    for key, value in expected.items():
+        if receipt.get(key) != value:
+            raise SystemExit(f"Review receipt does not match {key}")
+    if not receipt.get("signingIdentity") or not receipt.get("baseFeedSHA256"):
+        raise SystemExit("Review receipt is missing signing identity or base feed hash; prepare again")
     for name, expected in receipt["sha256"].items():
         if sha256(review / name) != expected:
             raise SystemExit(f"Review artifact changed: {name}")
-    verify_archive(archive)
-    verify_update(archive, review / "appcast.xml", receipt["publicKey"])
+    verify_archive(archive, receipt["signingIdentity"])
+    verify_update(archive, review / "appcast.xml", public_key)
+    desired_feed = (review / "appcast.xml").read_bytes()
+    if current_feed != desired_feed and hashlib.sha256(current_feed).hexdigest() != receipt["baseFeedSHA256"]:
+        raise SystemExit("Live feed changed since preparation")
     with tempfile.TemporaryDirectory(prefix="wafer-publish-") as tmp:
         checkout = Path(tmp) / "releases"
         run("gh", "repo", "clone", repository, checkout)
-        if (checkout / "appcast.xml").read_bytes() != current_feed:
-            raise SystemExit("Release repo and live feed disagree")
-        run("gh", "release", "create", f"v{version}", archive, "--repo", repository, "--title", f"{APP} {version}", "--notes", f"{APP} {version}")
-        shutil.copy2(review / "appcast.xml", checkout / "appcast.xml")
-        run("git", "-C", checkout, "add", "appcast.xml")
-        run("git", "-C", checkout, "commit", "-m", f"{APP} {version}")
-        run("git", "-C", checkout, "push")
+        remote_feed = (checkout / "appcast.xml").read_bytes()
+        if remote_feed != desired_feed and hashlib.sha256(remote_feed).hexdigest() != receipt["baseFeedSHA256"]:
+            raise SystemExit("Release repo feed changed since preparation")
+        tag = f"v{version}"
+        existing = subprocess.run(["gh", "release", "view", tag, "--repo", repository,
+                                   "--json", "isDraft,assets"], capture_output=True, text=True)
+        if existing.returncode:
+            if "release not found" not in existing.stderr.lower():
+                raise SystemExit(f"Cannot inspect existing release: {existing.stderr.strip()}")
+            run("gh", "release", "create", tag, archive, "--repo", repository,
+                "--target", receipt["sourceCommit"], "--title", f"{APP} {version}", "--notes", f"{APP} {version}")
+        else:
+            state = json.loads(existing.stdout)
+            if state["isDraft"]:
+                raise SystemExit("Existing release is a draft")
+        if output_of("gh", "api", f"repos/{repository}/commits/{tag}", "--jq", ".sha").strip() != receipt["sourceCommit"]:
+            raise SystemExit("Release tag does not match source commit")
+        if not existing.returncode:
+            if any(asset["name"] == archive.name for asset in state["assets"]):
+                downloaded = Path(tmp) / archive.name
+                run("gh", "release", "download", tag, "--repo", repository,
+                    "--pattern", archive.name, "--output", downloaded)
+                if sha256(downloaded) != receipt["sha256"][archive.name]:
+                    raise SystemExit("Existing release archive does not match reviewed artifact")
+            else:
+                run("gh", "release", "upload", tag, archive, "--repo", repository)
+        if remote_feed != desired_feed:
+            shutil.copy2(review / "appcast.xml", checkout / "appcast.xml")
+            run("git", "-C", checkout, "add", "appcast.xml")
+            run("git", "-C", checkout, "commit", "-m", f"{APP} {version}")
+            run("git", "-C", checkout, "push")
 
 
-def prepare(output, version, build, public_key, current_feed, tools, repository):
+def prepare(output, version, build, public_key, feed, current_feed, tools, repository):
     if output.exists():
         raise SystemExit(f"Output directory already exists: {output}")
+    commit = source_commit()
     environment = dict(os.environ, WAFER_DIST_DIR=str(output))
     environment.setdefault("WAFER_NOTARY_PROFILE", "VibeMD")
     environment.pop("WAFER_SKIP_NOTARIZATION", None)
     run(ROOT / "scripts/package-release.sh", env=environment)
+    identity = identity_of(signing_details(ROOT / "build/Wafer.app"))
     final = output / f"{APP}-{version}.zip"
     # generate_appcast reads every archive in the directory.
     (output / f"{APP}-{version}-notarization.zip").unlink()
@@ -160,7 +207,12 @@ def prepare(output, version, build, public_key, current_feed, tools, repository)
     (output / "appcast.xml").write_bytes(current_feed)
     run(tools / "generate_appcast", "--maximum-deltas", "0", "--download-url-prefix", f"https://github.com/{repository}/releases/download/v{version}/", output)
     verify_update(final, output / "appcast.xml", public_key)
-    receipt = dict(version=version, build=build, zip=final.name, publicKey=public_key, sha256={p.name: sha256(p) for p in (final, output / "appcast.xml")})
+    if source_commit() != commit:
+        raise SystemExit("Source commit changed during preparation; prepare again")
+    receipt = dict(version=version, build=build, zip=final.name, publicKey=public_key,
+                   sourceCommit=commit, repository=repository, feedURL=feed, signingIdentity=identity,
+                   baseFeedSHA256=hashlib.sha256(current_feed).hexdigest(),
+                   sha256={p.name: sha256(p) for p in (final, output / "appcast.xml")})
     (output / "review.json").write_text(json.dumps(receipt, indent=2) + "\n")
     print(f"Prepared for review at {output}. Nothing published.")
 
@@ -174,12 +226,12 @@ def main():
     args = parser.parse_args()
     version, build, public_key, feed = manifest()
     current_feed = live_feed(feed)
-    if build <= feed_build(current_feed):
-        raise SystemExit("Manifest build must be greater than every published feed build")
     if args.publish:
-        publish(args.publish.resolve(), version, build, current_feed, args.repository)
+        publish(args.publish.resolve(), version, build, public_key, feed, current_feed, args.repository)
     else:
-        prepare(args.output.resolve() / f"{version}-{build}", version, build, public_key, current_feed, args.sparkle_tools.resolve(), args.repository)
+        if build <= feed_build(current_feed):
+            raise SystemExit("Manifest build must be greater than every published feed build")
+        prepare(args.output.resolve() / f"{version}-{build}", version, build, public_key, feed, current_feed, args.sparkle_tools.resolve(), args.repository)
 
 
 if __name__ == "__main__":
