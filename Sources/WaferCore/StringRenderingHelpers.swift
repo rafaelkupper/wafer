@@ -39,14 +39,19 @@ extension String {
     }
 }
 
-extension URL {
+public extension URL {
+    /// The decoded heading ID, suitable for DOM lookup. URL.fragment may be percent encoded.
+    var decodedFragment: String? {
+        URLComponents(url: self, resolvingAgainstBaseURL: true)?.fragment
+    }
+
     func standardizedFileURLPreservingFragment() -> URL {
         let standardizedURL = standardizedFileURL
-        guard let fragment else {
+        guard let fragment = decodedFragment else {
             return standardizedURL
         }
 
-        var components = URLComponents(url: standardizedURL, resolvingAgainstBaseURL: false)
+        var components = URLComponents(url: standardizedURL, resolvingAgainstBaseURL: true)
         components?.fragment = fragment
         return components?.url ?? standardizedURL
     }

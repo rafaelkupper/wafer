@@ -174,7 +174,7 @@ public enum LibrarySearch {
     static func quickOpenCharacters(for candidate: String) -> [QuickOpenCharacter] {
         candidate.compactMap { original -> QuickOpenCharacter? in
             let folded = String(original)
-                .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+                .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
                 .lowercased()
             guard let foldedCharacter = folded.first, !foldedCharacter.isWhitespace else {
                 return nil

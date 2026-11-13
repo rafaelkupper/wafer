@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 import XCTest
 @testable import WaferCore
 
@@ -111,11 +110,11 @@ final class WebKitHTMLRendererTests: XCTestCase {
         assertCSSVariable("--link-color", equals: "#0969DA", in: output.html)
         assertCSSVariable("--inline-code-bg", equals: "#F6F8FA", in: output.html)
         assertCSSVariable("--mermaid-container-bg", equals: "rgba(246, 248, 250, 0.86)", in: output.html)
-        XCTAssertTrue(output.html.contains("waferApplyMermaidTheme('base'"))
-        XCTAssertTrue(output.html.contains("background: '#FFFFFF'"))
-        XCTAssertTrue(output.html.contains("mainBkg: '#FFFFFF'"))
-        XCTAssertTrue(output.html.contains("textColor: '#24292F'"))
-        XCTAssertFalse(output.html.contains("mainBkg: '#252A2E'"))
+        XCTAssertTrue(output.html.contains("&quot;theme&quot;:&quot;base&quot;"))
+        XCTAssertTrue(output.html.contains("&quot;background&quot;:&quot;#FFFFFF&quot;"))
+        XCTAssertTrue(output.html.contains("&quot;mainBkg&quot;:&quot;#FFFFFF&quot;"))
+        XCTAssertTrue(output.html.contains("&quot;textColor&quot;:&quot;#24292F&quot;"))
+        XCTAssertFalse(output.html.contains("&quot;mainBkg&quot;:&quot;#252A2E&quot;"))
         XCTAssertFalse(output.html.contains("--bg-color: #383E44;"))
     }
 
@@ -341,21 +340,21 @@ final class WebKitHTMLRendererTests: XCTestCase {
         XCTAssertTrue(output.html.contains("</sup></p><p>Second paragraph.</p>"), output.html.bodyContent)
     }
 
-    func testReaderGoldenOutputMatchesCheckedInHash() throws {
+    func testReaderGoldenOutputMatchesCheckedInHTML() throws {
         let source = try String(contentsOf: readerGoldenFixtureURL, encoding: .utf8)
         let document = parser.parse(source: source, baseURL: nil)
         let renderer = WebKitHTMLRenderer(palette: .dark)
-
-        let firstHTML = renderer.render(document: document).html
-        let secondHTML = renderer.render(document: document).html
-
-        XCTAssertEqual(firstHTML, secondHTML, "Reader golden output must be deterministic before hashing.")
-        // This golden deliberately excludes Mermaid and images: Mermaid uses random nonces,
-        // while local image output may embed absolute asset paths when a base URL is present.
-        XCTAssertEqual(
-            sha256Hex(firstHTML),
-            "1609c8d7a0a6db0240fb09841a35878e4c9d602f6ee4365a1dac5cd73898b1af"
-        )
+        let rendered = renderer.render(document: document).html
+        XCTAssertEqual(rendered, renderer.render(document: document).html)
+        let html = rendered.replacingOccurrences(of: #"(?m)[ \t]+$"#, with: "", options: .regularExpression)
+        if ProcessInfo.processInfo.environment["WAFER_UPDATE_GOLDENS"] == "1" {
+            let destination = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                .appendingPathComponent("Tests/Fixtures/WaferCore/Goldens/reader-golden.html")
+            try html.write(to: destination, atomically: true, encoding: .utf8)
+        } else {
+            let expectedURL = readerGoldenFixtureURL.deletingLastPathComponent().appendingPathComponent("Goldens/reader-golden.html")
+            XCTAssertEqual(html, try String(contentsOf: expectedURL, encoding: .utf8))
+        }
     }
 
     func testFrontMatterRendersMetadataDetailsBeforeBodyInReaderPreviewAndExport() throws {
@@ -606,13 +605,13 @@ final class WebKitHTMLRendererTests: XCTestCase {
         XCTAssertTrue(output.html.contains("mermaid.min.js"))
         XCTAssertTrue(output.html.contains("securityLevel: 'strict'"))
         XCTAssertTrue(output.html.contains("suppressErrorRendering: true"))
-        XCTAssertTrue(output.html.contains("attributeBackgroundColorOdd: '#30363B'"))
-        XCTAssertTrue(output.html.contains("mainBkg: '#252A2E'"))
-        XCTAssertTrue(output.html.contains("altSectionBkgColor: '#2A3035'"))
-        XCTAssertTrue(output.html.contains("taskTextDarkColor: '#F1F3F5'"))
+        XCTAssertTrue(output.html.contains("&quot;attributeBackgroundColorOdd&quot;:&quot;#30363B&quot;"))
+        XCTAssertTrue(output.html.contains("&quot;mainBkg&quot;:&quot;#252A2E&quot;"))
+        XCTAssertTrue(output.html.contains("&quot;altSectionBkgColor&quot;:&quot;#2A3035&quot;"))
+        XCTAssertTrue(output.html.contains("&quot;taskTextDarkColor&quot;:&quot;#F1F3F5&quot;"))
         XCTAssertTrue(output.html.contains("waferContentReady"))
         XCTAssertTrue(output.html.contains("role', 'dialog'"))
-        XCTAssertTrue(output.html.contains("overlay.setAttribute('data-wafer-chrome', 'true');"))
+        XCTAssertTrue(output.html.contains("overlay.setAttribute(configuration.chromeAttributeName, configuration.chromeAttributeValue);"))
         XCTAssertTrue(output.html.contains("data-action=\"copy\""))
         XCTAssertTrue(output.html.contains("addEventListener('wheel', handleWheel"))
         XCTAssertFalse(output.html.contains("<pre class=\"md-fences\" lang=\"mermaid\""))
@@ -1257,17 +1256,10 @@ final class WebKitHTMLRendererTests: XCTestCase {
     }
 
     private var readerGoldenFixtureURL: URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Fixtures/WaferCore/reader-golden.md")
+        Bundle.module.resourceURL!.appendingPathComponent("Fixtures/WaferCore/reader-golden.md")
     }
 
-    private func sha256Hex(_ text: String) -> String {
-        SHA256.hash(data: Data(text.utf8))
-            .map { String(format: "%02x", Int($0)) }
-            .joined()
-    }
+
 
     private func assertCSSVariable(
         _ name: String,

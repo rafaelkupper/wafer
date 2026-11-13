@@ -1,0 +1,1169 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src &#39;none&#39;; img-src wafer-local: wafer-remote:; style-src &#39;unsafe-inline&#39; wafer-local:; font-src wafer-local:; connect-src &#39;none&#39;; object-src &#39;none&#39;; base-uri &#39;none&#39;; form-action &#39;none&#39;; script-src &#39;none&#39;;">
+  <style>
+  :root {
+    --bg-color: #383E44;
+    --text-color: #BCC3CA;
+    --heading-color: #E2E4E7;
+    --minor-heading-color: #FFFFFF;
+    --secondary-text-color: #A1A7AE;
+    --link-color: #D7DDE3;
+    --link-hover-color: #FFFFFF;
+    --rule-color: #4C525A;
+    --code-block-bg: #2F3135;
+    --inline-code-bg: #30343A;
+    --selection-bg-color: #4B84D1;
+    --selection-text-color: #FFFFFF;
+    --kbd-text-color: #FFFFFF;
+    --kbd-border-color: #727880;
+    --kbd-shadow-color: rgba(0, 0, 0, 0.22);
+    --callout-bg: rgba(255, 255, 255, 0.04);
+    --callout-note-border: rgba(125, 161, 188, 0.9);
+    --callout-note-bg: rgba(125, 161, 188, 0.11);
+    --callout-tip-border: rgba(127, 181, 151, 0.9);
+    --callout-tip-bg: rgba(127, 181, 151, 0.11);
+    --callout-important-border: rgba(143, 152, 213, 0.92);
+    --callout-important-bg: rgba(143, 152, 213, 0.11);
+    --callout-warning-border: rgba(191, 152, 102, 0.94);
+    --callout-warning-bg: rgba(191, 152, 102, 0.12);
+    --callout-caution-border: rgba(190, 125, 125, 0.94);
+    --callout-caution-bg: rgba(190, 125, 125, 0.12);
+    --symbol-link-text-color: #C8D6F0;
+    --symbol-link-border-color: rgba(200, 214, 240, 0.14);
+    --inline-chip-border-color: rgba(255, 255, 255, 0.08);
+    --inline-chip-bg: rgba(255, 255, 255, 0.055);
+    --mermaid-container-bg: rgba(47, 49, 53, 0.78);
+    --mermaid-container-border-color: rgba(215, 221, 227, 0.12);
+    --mermaid-grid-stroke-color: rgba(215, 221, 227, 0.34);
+    --mermaid-section-bg: #252A2E;
+    --mermaid-section-alt-bg: #30363B;
+    --mermaid-today-line-color: #D7DDE3;
+    --mermaid-task-bg: #4C5662;
+    --mermaid-task-border-color: #838B94;
+    --mermaid-active-task-bg: #596579;
+    --mermaid-active-task-border-color: #A1A7AE;
+    --mermaid-done-task-bg: #3F474F;
+    --mermaid-done-task-border-color: #727880;
+    --mermaid-critical-bg: #6E4E54;
+    --mermaid-critical-border-color: #D48D8D;
+    --mermaid-task-text-color: #F1F3F5;
+    --mermaid-er-node-border-color: #838B94;
+    --mermaid-er-even-bg: #252A2E;
+    --mermaid-er-odd-bg: #30363B;
+    --mermaid-er-label-bg: #252A2E;
+    --mermaid-er-text-color: #F1F3F5;
+    --mermaid-control-text-color: #F1F3F5;
+    --mermaid-control-bg: rgba(28, 32, 35, 0.92);
+    --mermaid-control-border-color: rgba(215, 221, 227, 0.26);
+    --mermaid-control-hover-bg: #1C2023;
+    --mermaid-control-hover-border-color: rgba(241, 243, 245, 0.58);
+    --mermaid-error-text-color: #E7B0B0;
+    --mermaid-source-bg: rgba(0, 0, 0, 0.14);
+    --diagram-inspector-backdrop: rgba(18, 20, 22, 0.86);
+    --diagram-inspector-text-color: #F1F3F5;
+    --diagram-inspector-toolbar-bg: rgba(33, 36, 39, 0.94);
+    --diagram-inspector-toolbar-border-color: rgba(215, 221, 227, 0.14);
+    --diagram-inspector-button-text-color: #F1F3F5;
+    --diagram-inspector-button-bg: #2F3135;
+    --diagram-inspector-button-border-color: rgba(215, 221, 227, 0.18);
+    --diagram-inspector-button-hover-bg: #383E44;
+    --diagram-inspector-button-hover-border-color: rgba(241, 243, 245, 0.52);
+    --diagram-inspector-viewport-bg: #2F3135;
+    --diagram-inspector-viewport-border-color: rgba(215, 221, 227, 0.14);
+    --diagram-inspector-viewport-focus-outline-color: rgba(241, 243, 245, 0.54);
+    --syntax-variable-color: #D2D8EA;
+    --syntax-keyword-color: #CB94D4;
+    --syntax-string-color: #D87272;
+    --syntax-comment-color: #D59452;
+    --syntax-number-color: #68AE95;
+    --syntax-atom-color: #87B8CC;
+    --syntax-secondary-variable-color: #A2BCD7;
+    --syntax-definition-color: #9496EF;
+    --syntax-positive-color: #88C09D;
+    --syntax-negative-color: #D48D8D;
+}
+
+html {
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+}
+
+html,
+body {
+    -webkit-text-size-adjust: 100%;
+    -ms-text-size-adjust: 100%;
+    background: var(--bg-color);
+    color: var(--text-color);
+    fill: currentColor;
+    line-height: 1.66rem;
+    overflow-x: hidden;
+    overscroll-behavior-x: none;
+}
+
+body,
+button,
+input,
+select,
+textarea {
+    font-family: "Helvetica Neue", Helvetica, Arial, "Segoe UI Emoji", "SF Pro", sans-serif;
+    color: var(--text-color);
+    border-color: transparent;
+    margin: 0;
+}
+
+#write {
+    box-sizing: border-box;
+    max-width: 928px;
+    margin: 0 auto;
+    padding: 0 31px 43px;
+}
+
+@media only screen and (min-width: 1400px) {
+    #write {
+        max-width: 1038px;
+    }
+}
+
+@media only screen and (min-width: 1800px) {
+    #write {
+        max-width: 1218px;
+    }
+}
+
+::selection,
+*.in-text-selection {
+    background: var(--selection-bg-color);
+    color: var(--selection-text-color);
+    text-shadow: none;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+    font-family: "Lucida Grande", "Corbel", sans-serif;
+    font-weight: normal;
+    clear: both;
+    word-wrap: break-word;
+    margin: 0;
+    padding: 0;
+    color: var(--heading-color);
+}
+
+h1 {
+    font-size: 2.5rem;
+    line-height: 2.78rem;
+    margin-top: 2.04em;
+    margin-bottom: 1.54rem;
+    letter-spacing: -1.45px;
+}
+
+h2 {
+    font-size: 1.63rem;
+    line-height: 1.9rem;
+    margin-bottom: 1.54rem;
+    letter-spacing: -0.98px;
+    font-weight: bold;
+}
+
+h3 {
+    font-size: 1.17rem;
+    line-height: 1.52rem;
+    margin-bottom: 1.54rem;
+    letter-spacing: -0.96px;
+    font-weight: bold;
+}
+
+h4 {
+    font-size: 1.12rem;
+    line-height: 1.39rem;
+    margin-bottom: 1.54rem;
+    color: var(--minor-heading-color);
+}
+
+h5 {
+    font-size: 0.97rem;
+    line-height: 1.27rem;
+    margin-bottom: 1.52rem;
+    font-weight: bold;
+}
+
+h6 {
+    font-size: 0.93rem;
+    line-height: 1.03rem;
+    margin-bottom: 0.78rem;
+    color: var(--minor-heading-color);
+}
+
+p {
+    word-wrap: break-word;
+}
+
+p,
+ul,
+dd,
+ol,
+hr,
+address,
+pre,
+table {
+    margin-top: 0;
+    margin-bottom: 1.54rem;
+}
+
+ul,
+ol {
+    padding: 0 0 0 1.95rem;
+}
+
+ul {
+    list-style: square;
+}
+
+ol {
+    list-style: decimal;
+}
+
+ul ul,
+ol ol,
+ul ol,
+ol ul {
+    margin: 0;
+}
+
+b,
+th,
+dt,
+strong {
+    font-weight: bold;
+    color: var(--heading-color);
+}
+
+i,
+em,
+dfn,
+cite {
+    font-style: italic;
+}
+
+mark {
+    padding: 0 0.14em;
+    border-radius: 3px;
+    color: var(--heading-color);
+    background: var(--selection-bg-color);
+}
+
+a {
+    color: var(--link-color);
+    text-decoration: underline;
+    outline: 0;
+    transition: color .2s ease-in-out;
+}
+
+a:hover {
+    color: var(--link-hover-color);
+}
+
+blockquote {
+    padding-left: 31px;
+    margin: 36px 0 1.95rem 1.95rem;
+    border-left: solid 2px var(--rule-color);
+}
+
+blockquote p:last-child {
+    margin-bottom: 0;
+}
+
+figure {
+    margin: 0 0 1.54rem;
+}
+
+figure img,
+picture img {
+    max-width: 100%;
+    height: auto;
+}
+
+figcaption,
+caption {
+    color: var(--secondary-text-color);
+    font-size: 0.86rem;
+    line-height: 1.42rem;
+}
+
+figcaption {
+    margin-top: 0.48rem;
+}
+
+caption {
+    caption-side: bottom;
+    padding-top: 0.48rem;
+    text-align: left;
+}
+
+dl {
+    margin-top: 0;
+    margin-bottom: 1.54rem;
+}
+
+dt {
+    margin-top: 0.72rem;
+}
+
+dd {
+    margin-left: 1.95rem;
+}
+
+small {
+    color: var(--secondary-text-color);
+    font-size: 0.86em;
+}
+
+q {
+    color: var(--text-color);
+}
+
+.md-front-matter {
+    margin: 0 0 1.54rem;
+    padding: 0.76rem 0 0;
+    color: var(--secondary-text-color);
+    border-top: 1px solid var(--rule-color);
+    font-size: 0.86rem;
+}
+
+.md-front-matter summary {
+    cursor: pointer;
+    color: var(--heading-color);
+    font-weight: 600;
+}
+
+.md-front-matter table {
+    margin: 0.72rem 0 0;
+    font-size: inherit;
+}
+
+.md-front-matter th {
+    width: 28%;
+    color: var(--heading-color);
+    text-align: left;
+}
+
+.md-front-matter td,
+.md-front-matter th {
+    padding: 4px 8px;
+}
+
+pre,
+code,
+kbd,
+tt,
+var {
+    font-size: 0.875em;
+    font-family: Monaco, Consolas, "Andale Mono", "DejaVu Sans Mono", monospace;
+}
+
+:not(pre) > code,
+tt,
+var {
+    background: var(--inline-code-bg);
+    padding: 2px 5px;
+}
+
+kbd {
+    padding: 2px 4px;
+    font-size: 90%;
+    color: var(--kbd-text-color);
+    background-color: var(--code-block-bg);
+    border: 1px solid var(--kbd-border-color);
+    border-radius: 3px;
+    box-shadow: inset 0 -1px 0 var(--kbd-shadow-color);
+}
+
+.md-callout {
+    margin: 0 0 1.54rem;
+    padding: 0.86rem 1rem 0.95rem;
+    border-left: 3px solid transparent;
+    border-radius: 8px;
+    background: var(--callout-bg);
+}
+
+.md-callout-label {
+    margin: 0 0 0.48rem;
+    font-size: 0.76rem;
+    line-height: 1.05rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    font-weight: 600;
+    color: var(--heading-color);
+}
+
+.md-callout-body > :first-child {
+    margin-top: 0;
+}
+
+.md-callout-body > :last-child {
+    margin-bottom: 0;
+}
+
+.md-callout-note {
+    border-left-color: var(--callout-note-border);
+    background: var(--callout-note-bg);
+}
+
+.md-callout-tip {
+    border-left-color: var(--callout-tip-border);
+    background: var(--callout-tip-bg);
+}
+
+.md-callout-important {
+    border-left-color: var(--callout-important-border);
+    background: var(--callout-important-bg);
+}
+
+.md-callout-warning {
+    border-left-color: var(--callout-warning-border);
+    background: var(--callout-warning-bg);
+}
+
+.md-callout-caution {
+    border-left-color: var(--callout-caution-border);
+    background: var(--callout-caution-bg);
+}
+
+.md-symbol-link {
+    color: var(--symbol-link-text-color);
+    border: 1px solid var(--symbol-link-border-color);
+}
+
+.md-inline-chip {
+    display: inline-block;
+    padding: 0 0.5rem;
+    border-radius: 999px;
+    border: 1px solid var(--inline-chip-border-color);
+    background: var(--inline-chip-bg);
+    color: var(--heading-color);
+}
+
+.md-inline-muted {
+    color: var(--secondary-text-color);
+}
+
+pre.md-fences {
+    position: relative;
+    padding: 11px 11px 11px 31px;
+    margin-bottom: 21px;
+    background: var(--code-block-bg);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+pre.md-fences code {
+    background: transparent;
+    padding: 0;
+    color: inherit;
+    font-size: inherit;
+}
+
+.md-mermaid-diagram {
+    box-sizing: border-box;
+    position: relative;
+    max-width: 100%;
+    margin: 0 0 21px;
+    padding: 15px;
+    overflow-x: auto;
+    background: var(--mermaid-container-bg);
+    border: 1px solid var(--mermaid-container-border-color);
+}
+
+.md-mermaid-open {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 1;
+    min-width: 58px;
+    min-height: 30px;
+    padding: 0 10px;
+    color: var(--mermaid-control-text-color);
+    background: var(--mermaid-control-bg);
+    border: 1px solid var(--mermaid-control-border-color);
+    border-radius: 6px;
+    font: 600 0.78rem "Helvetica Neue", Helvetica, Arial, "Segoe UI Emoji", "SF Pro", sans-serif;
+    letter-spacing: 0;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+.md-mermaid-open[hidden] {
+    display: none;
+}
+
+.md-mermaid-diagram.is-rendered:hover .md-mermaid-open,
+.md-mermaid-diagram.is-rendered:focus-within .md-mermaid-open {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.md-mermaid-open:hover,
+.md-mermaid-open:focus-visible {
+    background: var(--mermaid-control-hover-bg);
+    border-color: var(--mermaid-control-hover-border-color);
+    outline: none;
+}
+
+.md-mermaid-output {
+    min-height: 72px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.md-mermaid-output:empty::before {
+    content: "Rendering diagram...";
+    color: var(--secondary-text-color);
+    font-size: 0.88rem;
+}
+
+.md-mermaid-output svg {
+    display: block;
+    max-width: 100%;
+    height: auto;
+}
+
+.md-mermaid-output svg .section,
+.md-mermaid-output svg .section0,
+.md-mermaid-output svg .section2 {
+    fill: var(--mermaid-section-bg) !important;
+}
+
+.md-mermaid-output svg .section1,
+.md-mermaid-output svg .section3 {
+    fill: var(--mermaid-section-alt-bg) !important;
+}
+
+.md-mermaid-output svg .grid .tick,
+.md-mermaid-output svg .grid path {
+    stroke: var(--mermaid-grid-stroke-color) !important;
+}
+
+.md-mermaid-output svg .today {
+    stroke: var(--mermaid-today-line-color) !important;
+}
+
+.md-mermaid-output svg .task {
+    fill: var(--mermaid-task-bg) !important;
+    stroke: var(--mermaid-task-border-color) !important;
+}
+
+.md-mermaid-output svg .active0,
+.md-mermaid-output svg .active1,
+.md-mermaid-output svg .active2,
+.md-mermaid-output svg .active3 {
+    fill: var(--mermaid-active-task-bg) !important;
+    stroke: var(--mermaid-active-task-border-color) !important;
+}
+
+.md-mermaid-output svg .done0,
+.md-mermaid-output svg .done1,
+.md-mermaid-output svg .done2,
+.md-mermaid-output svg .done3 {
+    fill: var(--mermaid-done-task-bg) !important;
+    stroke: var(--mermaid-done-task-border-color) !important;
+}
+
+.md-mermaid-output svg .crit0,
+.md-mermaid-output svg .crit1,
+.md-mermaid-output svg .crit2,
+.md-mermaid-output svg .crit3,
+.md-mermaid-output svg .activeCrit0,
+.md-mermaid-output svg .activeCrit1,
+.md-mermaid-output svg .activeCrit2,
+.md-mermaid-output svg .activeCrit3 {
+    fill: var(--mermaid-critical-bg) !important;
+    stroke: var(--mermaid-critical-border-color) !important;
+}
+
+.md-mermaid-output svg .doneCrit0,
+.md-mermaid-output svg .doneCrit1,
+.md-mermaid-output svg .doneCrit2,
+.md-mermaid-output svg .doneCrit3 {
+    fill: var(--mermaid-done-task-bg) !important;
+    stroke: var(--mermaid-critical-border-color) !important;
+}
+
+.md-mermaid-output svg .sectionTitle,
+.md-mermaid-output svg .taskText,
+.md-mermaid-output svg .taskText0,
+.md-mermaid-output svg .taskText1,
+.md-mermaid-output svg .taskText2,
+.md-mermaid-output svg .taskText3,
+.md-mermaid-output svg .taskTextOutside,
+.md-mermaid-output svg .taskTextOutside0,
+.md-mermaid-output svg .taskTextOutside1,
+.md-mermaid-output svg .taskTextOutside2,
+.md-mermaid-output svg .taskTextOutside3,
+.md-mermaid-output svg .taskTextOutsideLeft,
+.md-mermaid-output svg .taskTextOutsideRight,
+.md-mermaid-output svg .activeText0,
+.md-mermaid-output svg .activeText1,
+.md-mermaid-output svg .activeText2,
+.md-mermaid-output svg .activeText3,
+.md-mermaid-output svg .doneText0,
+.md-mermaid-output svg .doneText1,
+.md-mermaid-output svg .doneText2,
+.md-mermaid-output svg .doneText3,
+.md-mermaid-output svg .critText0,
+.md-mermaid-output svg .critText1,
+.md-mermaid-output svg .critText2,
+.md-mermaid-output svg .critText3,
+.md-mermaid-output svg .activeCritText0,
+.md-mermaid-output svg .activeCritText1,
+.md-mermaid-output svg .activeCritText2,
+.md-mermaid-output svg .activeCritText3,
+.md-mermaid-output svg .doneCritText0,
+.md-mermaid-output svg .doneCritText1,
+.md-mermaid-output svg .doneCritText2,
+.md-mermaid-output svg .doneCritText3,
+.md-mermaid-output svg .vertText,
+.md-mermaid-output svg .titleText {
+    fill: var(--mermaid-task-text-color) !important;
+    color: var(--mermaid-task-text-color) !important;
+}
+
+.md-mermaid-output svg.erDiagram .entityBox,
+.md-mermaid-output svg.erDiagram .node rect,
+.md-mermaid-output svg.erDiagram .row-rect-odd > path:last-child,
+.md-mermaid-output svg.erDiagram .row-rect-even > path:last-child,
+.md-mermaid-output svg.erDiagram .attributeBoxOdd,
+.md-mermaid-output svg.erDiagram .attributeBoxEven {
+    stroke: var(--mermaid-er-node-border-color) !important;
+}
+
+.md-mermaid-output svg.erDiagram .entityBox,
+.md-mermaid-output svg.erDiagram .node rect,
+.md-mermaid-output svg.erDiagram .outer-path > path:first-child,
+.md-mermaid-output svg.erDiagram .row-rect-even > path:first-child,
+.md-mermaid-output svg.erDiagram .attributeBoxEven {
+    fill: var(--mermaid-er-even-bg) !important;
+    stroke: none !important;
+}
+
+.md-mermaid-output svg.erDiagram .row-rect-odd > path:first-child,
+.md-mermaid-output svg.erDiagram .node rect:nth-of-type(odd),
+.md-mermaid-output svg.erDiagram .attributeBoxOdd {
+    fill: var(--mermaid-er-odd-bg) !important;
+    stroke: none !important;
+}
+
+.md-mermaid-output svg.erDiagram .relationshipLabelBox,
+.md-mermaid-output svg.erDiagram .edgeLabel .label rect {
+    fill: var(--mermaid-er-label-bg) !important;
+}
+
+.md-mermaid-output svg.erDiagram text,
+.md-mermaid-output svg.erDiagram tspan,
+.md-mermaid-output svg.erDiagram .label,
+.md-mermaid-output svg.erDiagram .entityLabel,
+.md-mermaid-output svg.erDiagram .attributeType,
+.md-mermaid-output svg.erDiagram .attributeName,
+.md-mermaid-output svg.erDiagram .relationshipLabel {
+    fill: var(--mermaid-task-text-color) !important;
+    color: var(--mermaid-task-text-color) !important;
+}
+
+.md-mermaid-output svg.erDiagram foreignObject div,
+.md-mermaid-output svg.erDiagram foreignObject p,
+.md-mermaid-output svg.erDiagram foreignObject span,
+.md-mermaid-output svg.erDiagram .nodeLabel {
+    color: var(--mermaid-task-text-color) !important;
+}
+
+.md-mermaid-error {
+    margin: 0 0 11px;
+    color: var(--mermaid-error-text-color);
+    font-size: 0.91rem;
+}
+
+.md-mermaid-error[hidden] {
+    display: none;
+}
+
+.md-mermaid-source {
+    display: none;
+    margin: 0;
+    padding: 11px;
+    background: var(--mermaid-source-bg);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.md-mermaid-source code {
+    background: transparent;
+    padding: 0;
+    color: inherit;
+}
+
+.md-mermaid-diagram.has-error .md-mermaid-output {
+    display: none;
+}
+
+.md-mermaid-diagram.has-error .md-mermaid-source {
+    display: block;
+}
+
+.md-math-display {
+    box-sizing: border-box;
+    max-width: 100%;
+    margin: 0 0 21px;
+    padding: 15px;
+    overflow-x: auto;
+    color: var(--text-color);
+    background: var(--mermaid-container-bg);
+    border: 1px solid var(--mermaid-container-border-color);
+}
+
+.md-math-output {
+    min-height: 42px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-color);
+}
+
+.md-math-output:empty::before {
+    content: "Rendering math...";
+    color: var(--secondary-text-color);
+    font-size: 0.88rem;
+}
+
+.md-math-output .katex {
+    color: var(--text-color);
+}
+
+.md-math-error {
+    margin: 0 0 11px;
+    color: var(--mermaid-error-text-color);
+    font-size: 0.91rem;
+}
+
+.md-math-error[hidden] {
+    display: none;
+}
+
+.md-math-source {
+    margin: 0;
+    padding: 11px;
+    background: var(--mermaid-source-bg);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.md-math-source code {
+    background: transparent;
+    padding: 0;
+    color: inherit;
+}
+
+.md-math-display.is-rendered .md-math-source {
+    display: none;
+}
+
+.md-math-display.has-error .md-math-output {
+    display: none;
+}
+
+.md-math-display.has-error .md-math-source {
+    display: block;
+}
+
+body.md-diagram-inspector-open {
+    overflow: hidden;
+}
+
+.md-diagram-inspector {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    background: var(--diagram-inspector-backdrop);
+    color: var(--diagram-inspector-text-color);
+    overscroll-behavior: contain;
+}
+
+.md-diagram-inspector[hidden] {
+    display: none;
+}
+
+.md-diagram-inspector-surface {
+    box-sizing: border-box;
+    display: grid;
+    grid-template-rows: auto 1fr;
+    width: 100%;
+    height: 100%;
+    padding: 14px;
+    gap: 12px;
+}
+
+.md-diagram-inspector-toolbar {
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 40px;
+    padding: 6px;
+    background: var(--diagram-inspector-toolbar-bg);
+    border: 1px solid var(--diagram-inspector-toolbar-border-color);
+    border-radius: 8px;
+}
+
+.md-diagram-inspector-toolbar button {
+    min-width: 36px;
+    min-height: 30px;
+    padding: 0 10px;
+    color: var(--diagram-inspector-button-text-color);
+    background: var(--diagram-inspector-button-bg);
+    border: 1px solid var(--diagram-inspector-button-border-color);
+    border-radius: 6px;
+    font: 600 0.82rem "Helvetica Neue", Helvetica, Arial, "Segoe UI Emoji", "SF Pro", sans-serif;
+    letter-spacing: 0;
+}
+
+.md-diagram-inspector-toolbar button:hover,
+.md-diagram-inspector-toolbar button:focus-visible {
+    background: var(--diagram-inspector-button-hover-bg);
+    border-color: var(--diagram-inspector-button-hover-border-color);
+    outline: none;
+}
+
+.md-diagram-inspector-toolbar [data-action="close"] {
+    margin-left: auto;
+}
+
+.md-diagram-inspector-status {
+    min-width: 110px;
+    color: var(--secondary-text-color);
+    font-size: 0.82rem;
+}
+
+.md-diagram-inspector-viewport {
+    position: relative;
+    overflow: hidden;
+    min-height: 240px;
+    background: var(--diagram-inspector-viewport-bg);
+    border: 1px solid var(--diagram-inspector-viewport-border-color);
+    border-radius: 8px;
+    cursor: grab;
+    overscroll-behavior: contain;
+    touch-action: none;
+}
+
+.md-diagram-inspector-viewport:focus-visible {
+    outline: 2px solid var(--diagram-inspector-viewport-focus-outline-color);
+    outline-offset: -2px;
+}
+
+.md-diagram-inspector-viewport.is-dragging {
+    cursor: grabbing;
+}
+
+.md-diagram-inspector-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform-origin: 0 0;
+    will-change: transform;
+}
+
+.md-diagram-inspector-canvas svg {
+    display: block;
+    max-width: none;
+    height: auto;
+}
+
+.cm-s-inner,
+.cm-s-inner span {
+    font-family: Monaco, Consolas, "Andale Mono", "DejaVu Sans Mono", monospace;
+}
+
+.cm-s-inner {
+    color: var(--text-color);
+}
+
+.cm-s-inner .cm-variable,
+.cm-s-inner .cm-property {
+    color: var(--syntax-variable-color);
+}
+
+.cm-s-inner .cm-operator {
+    color: var(--text-color);
+}
+
+.cm-s-inner .cm-keyword {
+    color: var(--syntax-keyword-color);
+}
+
+.cm-s-inner .cm-string {
+    color: var(--syntax-string-color);
+}
+
+.cm-s-inner .cm-comment {
+    color: var(--syntax-comment-color);
+}
+
+.cm-s-inner .cm-number {
+    color: var(--syntax-number-color);
+}
+
+.cm-s-inner .cm-atom {
+    color: var(--syntax-atom-color);
+}
+
+.cm-s-inner .cm-link {
+    color: var(--syntax-variable-color);
+}
+
+.cm-s-inner .cm-variable-2 {
+    color: var(--syntax-secondary-variable-color);
+}
+
+.cm-s-inner .cm-header,
+.cm-s-inner .cm-def {
+    color: var(--syntax-definition-color);
+}
+
+.cm-s-inner .cm-positive {
+    color: var(--syntax-positive-color);
+}
+
+.cm-s-inner .cm-negative {
+    color: var(--syntax-negative-color);
+}
+
+table {
+    max-width: 100%;
+    width: 100%;
+    border-collapse: collapse;
+    border-spacing: 0;
+}
+
+th,
+td {
+    padding: 6px 11px;
+    vertical-align: top;
+    border: solid 1px var(--rule-color);
+}
+
+table a {
+    color: var(--heading-color);
+}
+
+hr {
+    height: 2px;
+    border: 0;
+    margin: 24px 0 !important;
+    background: var(--rule-color);
+}
+
+img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+}
+
+.task-list {
+    padding-left: 0;
+}
+
+.md-task-list-item {
+    list-style: none;
+    padding-left: 1.3rem;
+}
+
+.md-task-list-item > input {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 0.875rem;
+    height: 0.875rem;
+    margin: 0 0.5rem 0 -1.3rem;
+    vertical-align: middle;
+    border: 1px solid var(--text-color);
+    background-color: var(--bg-color);
+    position: relative;
+    top: auto;
+    pointer-events: none;
+}
+
+.md-task-list-item > input:checked::before,
+.md-task-list-item > input[checked]::before {
+    content: "\221A";
+    font-size: 0.625rem;
+    line-height: 0.625rem;
+    color: var(--heading-color);
+    position: absolute;
+    top: 0.05rem;
+    left: 0.1rem;
+}
+
+.md-footnote-ref {
+    font-size: 0.75em;
+    line-height: 0;
+    vertical-align: super;
+}
+
+.md-footnote-ref a,
+.md-footnote-backref {
+    text-decoration: none;
+}
+
+.md-footnotes {
+    margin-top: 2rem;
+    color: var(--secondary-text-color);
+    font-size: 0.92rem;
+}
+
+.md-footnotes hr {
+    margin-bottom: 1rem !important;
+}
+
+.md-footnotes ol {
+    padding-left: 1.4rem;
+}
+
+.md-footnotes li {
+    margin: 0.35rem 0;
+}
+
+.md-footnote-backref {
+    margin-left: 0.45rem;
+    color: var(--link-color);
+}
+
+.fallback-block {
+    color: var(--secondary-text-color);
+    white-space: pre-wrap;
+}
+
+.md-wikilink {
+    color: var(--link-color);
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-underline-offset: 2px;
+}
+
+.md-wikilink:hover {
+    color: var(--link-hover-color);
+    text-decoration-style: solid;
+}
+
+.md-wikilink-unresolved {
+    color: var(--secondary-text-color);
+    border-bottom: 1px dashed var(--rule-color);
+    cursor: default;
+}
+
+.md-copy-button {
+    position: absolute;
+    top: 7px;
+    right: 7px;
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 9px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    color: var(--diagram-inspector-button-text-color);
+    background: var(--diagram-inspector-button-bg);
+    border: 1px solid var(--diagram-inspector-button-border-color);
+    border-radius: 6px;
+    font: 600 0.75rem "Helvetica Neue", Helvetica, Arial, "Segoe UI Emoji", "SF Pro", sans-serif;
+    letter-spacing: 0;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+pre.md-fences:hover .md-copy-button,
+.md-copy-button:focus-visible,
+.md-copy-button.is-copied {
+    opacity: 1;
+}
+
+.md-copy-button:hover,
+.md-copy-button:focus-visible {
+    background: var(--diagram-inspector-button-hover-bg);
+    border-color: var(--diagram-inspector-button-hover-border-color);
+    outline: none;
+}
+
+@media print {
+    :root,
+    body {
+        print-color-adjust: exact;
+        -webkit-print-color-adjust: exact;
+    }
+
+    pre,
+    table,
+    figure,
+    .md-callout,
+    .md-footnotes,
+    .md-mermaid-diagram {
+        break-inside: avoid;
+        page-break-inside: avoid;
+    }
+
+    [data-wafer-chrome],
+    .md-mermaid-open,
+    .md-diagram-inspector,
+    .md-copy-button {
+        display: none !important;
+    }
+}
+
+  </style>
+</head>
+<body>
+  <div id="write">
+  <h1 id="kitchen-sink">Kitchen Sink</h1><hr /><p>Bare email: <a href="mailto:support@example.com">support@example.com</a></p><aside class="md-callout md-callout-tip">
+<div class="md-callout-label">Tip</div><div class="md-callout-body"><p>GitHub alert syntax maps to a themed callout.</p></div>
+</aside><aside class="md-callout md-callout-important">
+<div class="md-callout-label">Important</div><div class="md-callout-body"><p>Directive callouts still work beside GitHub alerts.</p></div>
+</aside>
+
+<h2>HTML Heading</h2>
+
+<ul>
+  <li>HTML unordered item</li>
+</ul>
+
+<ol start="4">
+  <li>Started ordered item</li>
+</ol>
+
+<figure>
+  <img src="wafer-local://asset?path=$FIXTURE_DIR/assets/logo-light.svg" alt="Figure logo" />
+  <figcaption>Figure caption</figcaption>
+</figure>
+
+<dl>
+  <dt>Term</dt>
+  <dd>Definition</dd>
+</dl>
+
+<picture>
+<source media="(prefers-color-scheme: dark)" type="image/svg+xml" srcset="wafer-local://asset?path=$FIXTURE_DIR/assets/logo-dark.svg 1x" />
+<img src="wafer-local://asset?path=$FIXTURE_DIR/assets/logo-light.svg" alt="Kitchen logo" />
+</picture><h2 id="what-s-new"><a id="whats-new" class="md-anchor-alias" aria-hidden="true"></a>What’s New?</h2><p><a href="kitchen-sink.md#whats-new">GitHub anchor link</a></p><pre class="md-fences" lang="sql"><code class="cm-s-inner language-sql"><span class="cm-keyword">SELECT</span> <span class="cm-variable-2">count</span>(*) <span class="cm-keyword">FROM</span> posts <span class="cm-keyword">WHERE</span> status = <span class="cm-string">'published'</span>;</code></pre><pre class="md-fences" lang="kotlin"><code class="cm-s-inner language-kotlin"><span class="cm-keyword">fun</span> <span class="cm-variable-2">render</span>(reader: Reader): <span class="cm-def">String</span> {
+    <span class="cm-keyword">return</span> reader.<span class="cm-property">title</span>
+}</code></pre><pre class="md-fences" lang="makefile"><code class="cm-s-inner language-makefile"><span class="cm-def">VERSION</span> = <span class="cm-number">1</span>
+<span class="cm-variable-2">build</span>:
+<span class="cm-string">	@echo </span><span class="cm-property">$(VERSION)</span></code></pre>
+  </div>
+
+</body>
+</html>

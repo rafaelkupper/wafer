@@ -243,14 +243,14 @@ final class ReaderThemePaletteTests: XCTestCase {
         let output = renderMermaidDocument()
 
         XCTAssertEqual(palette.theme, "base")
-        XCTAssertTrue(output.html.contains("waferApplyMermaidTheme('\(palette.theme)'"))
+        XCTAssertTrue(output.html.contains("&quot;theme&quot;:&quot;\(palette.theme)&quot;"))
         for variable in palette.themeVariables {
             XCTAssertTrue(
-                output.html.contains("\(variable.key): '\(variable.value)'"),
+                output.html.contains("&quot;\(variable.key)&quot;:&quot;\(variable.value)&quot;"),
                 "Missing Mermaid theme variable \(variable.key)=\(variable.value)"
             )
         }
-        XCTAssertTrue(output.html.contains("fontFamily: '\(palette.fontFamily)'"))
+        XCTAssertTrue(output.html.contains("&quot;fontFamily&quot;:&quot;\(palette.fontFamily)&quot;"))
     }
 
     func testLightPaletteIsPopulatedAndReadable() {
