@@ -77,6 +77,7 @@ final class MarkdownEditSession {
     private(set) var savedRevision: Int?
     private let resolveConflict: EditConflictResolver
     private let worker: MarkdownSaveWorker
+    private let diskState: MarkdownDiskState
     private var isResolvingConflict = false
     private var pendingSave: PendingSave?
 
@@ -86,7 +87,8 @@ final class MarkdownEditSession {
         fingerprint: String,
         format: MarkdownTextFormat,
         resolveConflict: @escaping EditConflictResolver,
-        worker: MarkdownSaveWorker = MarkdownSaveWorker()
+        worker: MarkdownSaveWorker = MarkdownSaveWorker(),
+        diskState: MarkdownDiskState = MarkdownDiskState()
     ) {
         self.fileURL = fileURL
         self.savedText = text
@@ -95,6 +97,7 @@ final class MarkdownEditSession {
         self.baselineText = text
         self.resolveConflict = resolveConflict
         self.worker = worker
+        self.diskState = diskState
     }
 
     /// Adopts a new disk version (external change while clean).
@@ -142,6 +145,7 @@ final class MarkdownEditSession {
             markSaved(snapshot, fingerprint: savedFingerprint)
             return .unchanged
         case .written(let fingerprint):
+            diskState.didSave()
             markSaved(snapshot, fingerprint: fingerprint)
             return .saved
         case .conflict(let kind, let diskData):
@@ -202,6 +206,7 @@ final class MarkdownEditSession {
             markSaved(pending.request.snapshot, fingerprint: savedFingerprint)
             outcome = .saved
         case .written(let fingerprint):
+            diskState.didSave()
             markSaved(pending.request.snapshot, fingerprint: fingerprint)
             outcome = .saved
         case .conflict(let kind, _):
@@ -222,6 +227,7 @@ final class MarkdownEditSession {
             case .overwrite:
                 switch worker.perform(request(for: snapshot, overwrite: true)) {
                 case .written(let fingerprint):
+                    diskState.didSave()
                     markSaved(snapshot, fingerprint: fingerprint)
                     return .saved
                 case .unchanged:

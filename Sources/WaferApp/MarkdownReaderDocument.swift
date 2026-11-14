@@ -140,19 +140,23 @@ final class MarkdownReaderDocument: NSDocument {
         self.statisticPreferenceStore = statisticPreferenceStore
         self.appearancePreferenceStore = appearancePreferenceStore
         self.readerBehaviorPreferenceStore = readerBehaviorPreferenceStore
-        self.sourceLoading = MarkdownSourceLoader(load: sourceLoader)
         self.fileMonitorFactory = fileMonitorFactory
         self.scrollPersistenceDebounceInterval = scrollPersistenceDebounceInterval
         self.wikiLinkIndexProvider = wikiLinkIndexProvider ?? {
             MarkdownReaderDocument.wikiLinkIndex(in: librarySnapshotProvider())
         }
         self.sourceLoadErrorHandler = sourceLoadErrorHandler
-        self.editMode = MarkdownEditCoordinator(configuration: .init(
+        let diskState = MarkdownDiskState()
+        let editMode = MarkdownEditCoordinator(configuration: .init(
             resolveConflict: editConflictResolver,
             autosaveDelay: autosaveDelay,
             liveRenderInterval: liveRenderInterval,
             fileWriter: editFileWriter
-        ))
+        ), diskState: diskState)
+        self.editMode = editMode
+        self.sourceLoading = MarkdownSourceLoader(
+            load: sourceLoader, diskState: diskState, finishPendingSave: { editMode.finishPendingSave() }
+        )
         super.init()
         editMode.delegate = self
         observeLibraryChanges()
