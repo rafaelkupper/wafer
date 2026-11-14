@@ -1,0 +1,44 @@
+--- a/Sources/WaferCore/LibraryIndex.swift
++++ b/Sources/WaferCore/LibraryIndex.swift
+@@ -67,12 +67,14 @@
+         public let truncated: Bool
+         public let failure: Failure?
+         public let skippedItemCount: Int
+-
+-        public init(files: [LibraryFile], truncated: Bool, failure: Failure? = nil, skippedItemCount: Int = 0) {
++        public let parsedFileCount: Int
++
++        public init(files: [LibraryFile], truncated: Bool, failure: Failure? = nil, skippedItemCount: Int = 0, parsedFileCount: Int = 0) {
+             self.files = files
+             self.truncated = truncated
+             self.failure = failure
+             self.skippedItemCount = skippedItemCount
++            self.parsedFileCount = parsedFileCount
+         }
+     }
+ 
+@@ -109,6 +111,7 @@
+             }
+         }
+         var skippedItemCount = traversal.skippedURLs.count
++        var parsedFileCount = 0
+         var remainingBytes = max(0, maximumLibraryByteCount) - files.reduce(0) { $0 + Int(clamping: $1.contentFingerprint.fileSize) }
+         for url in fileURLs {
+             if cancellation?.isCancelled == true { break }
+@@ -132,6 +135,7 @@
+                     try makeLibraryFile(for: url, rootURL: normalizedRootURL, parser: parser, data: data, source: source, before: metadata)
+                 }
+                 files.append(file)
++                parsedFileCount += 1
+             } catch {
+                 skippedItemCount += 1
+                 WaferLog.library.info("Skipped library item \(url.path, privacy: .private): \(error.localizedDescription, privacy: .public)")
+@@ -142,7 +146,7 @@
+             }
+         }
+         files.sort { $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending }
+-        return Result(files: files, truncated: traversal.truncated, skippedItemCount: skippedItemCount)
++        return Result(files: files, truncated: traversal.truncated, skippedItemCount: skippedItemCount, parsedFileCount: parsedFileCount)
+     }
+ 
+     private static func makeLibraryFile(for fileURL: URL, rootURL: URL, parser: MarkdownParser, data: Data, source: String, before: LibraryFileFingerprint) throws -> LibraryFile {
