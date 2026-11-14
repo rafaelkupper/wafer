@@ -320,6 +320,11 @@ if (!window.waferLive) {
     if (write && typeof ResizeObserver === 'function') {
       new ResizeObserver(resync).observe(write);
     }
+    if (write && typeof MutationObserver === 'function') {
+      new MutationObserver(resync).observe(write, {
+        childList: true, subtree: true, attributes: true, attributeFilter: ['data-source-line']
+      });
+    }
     document.addEventListener('load', resync, true);
     document.addEventListener('toggle', resync, true);
     window.addEventListener('resize', resync);

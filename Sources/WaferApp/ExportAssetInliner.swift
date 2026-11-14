@@ -124,17 +124,6 @@ final class ExportAssetInliner {
     }
 
     private static func remoteImageURL(from proxyURL: URL) -> URL? {
-        guard
-            proxyURL.scheme == "wafer-remote",
-            proxyURL.host == "image",
-            let components = URLComponents(url: proxyURL, resolvingAgainstBaseURL: false),
-            let rawURL = components.queryItems?.first(where: { $0.name == "url" })?.value,
-            let remoteURL = URL(string: rawURL),
-            remoteURL.scheme?.lowercased() == "https"
-        else {
-            return nil
-        }
-
-        return remoteURL
+        try? RemoteImageURL.parse(proxyURL)
     }
 }
