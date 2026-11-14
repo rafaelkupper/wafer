@@ -299,6 +299,47 @@ final class FolderAccessStore {
         return pruneSatisfiedNeeds()
     }
 
+    /// The library folder as a read-write grant of its own: stored even
+    /// inside a broader grant and never replaced by one, so its bookmark
+    /// follows the folder when it is moved or renamed. A previous library's
+    /// grant becomes an ordinary one. Returns the grant's identifier (nil
+    /// outside the sandbox or when no bookmark can be made) and the
+    /// documents whose needed files are now readable.
+    func grantLibraryAccess(to folderURL: URL) -> (grantID: String?, documents: Set<String>) {
+        guard isSandboxed else { return (nil, []) }
+        restoreGrants()
+        let path = FileIdentity.identity(for: folderURL)
+        for index in grants.indices where grants[index].isLibrary && grants[index].path != path {
+            grants[index].isLibrary = false
+        }
+        if let existing = grants.first(where: { $0.isLibrary && $0.path == path && $0.containment != nil }) {
+            persistGrants()
+            return (existing.id, pruneSatisfiedNeeds())
+        }
+        grants.removeAll { $0.isLibrary && $0.path == path }
+        guard let grant = makeGrant(for: folderURL, mode: .readWrite, isLibrary: true) else {
+            persistGrants()
+            return (nil, pruneSatisfiedNeeds())
+        }
+        store(grant)
+        return (grant.id, pruneSatisfiedNeeds())
+    }
+
+    /// Where the grant with this identifier's folder is now: a moved folder
+    /// resolves to its new place at launch. Nil when there is no such grant.
+    func folderURL(forGrantID id: String) -> URL? {
+        restoreGrants()
+        return grants.first { $0.id == id }?.folderURL
+    }
+
+    /// Close Library: the library's grant stays, as an ordinary grant.
+    func releaseLibraryGrant() {
+        restoreGrants()
+        guard grants.contains(where: \.isLibrary) else { return }
+        for index in grants.indices { grants[index].isLibrary = false }
+        persistGrants()
+    }
+
     /// Stops access to a granted folder and deletes its bookmark. Documents
     /// keep what they show; reading from the folder again asks for it.
     func revoke(grantID id: String) {
