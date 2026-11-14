@@ -93,7 +93,7 @@ public enum DocumentSidebarDataBuilder {
 
     /// Summaries are intentionally limited to the beginning of a linked note.
     public static func summary(for fileURL: URL, parser: MarkdownParser = MarkdownParser()) -> DocumentSidebarEntry {
-        guard let prefix = try? BoundedFileReader.prefix(from: fileURL, maximumByteCount: 256 * 1024),
+        guard let prefix = try? BoundedFileReader.prefix(from: fileURL, maximumByteCount: WaferLimits.linkedDocumentSummaryByteCount),
               let source = MarkdownSourceDecoding.decodePrefix(prefix.data, truncated: prefix.truncated) else {
             return DocumentSidebarEntry(fileURL: fileURL,
                 displayTitle: fileURL.deletingPathExtension().lastPathComponent,

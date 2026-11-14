@@ -10,7 +10,7 @@ public enum BoundedFileReader {
         var data = Data()
         while data.count <= maximumByteCount {
             let remaining = maximumByteCount + 1 - data.count
-            guard let chunk = try handle.read(upToCount: min(remaining, 64 * 1024)), !chunk.isEmpty else { break }
+            guard let chunk = try handle.read(upToCount: min(remaining, WaferLimits.fileReadChunkByteCount)), !chunk.isEmpty else { break }
             data.append(chunk)
         }
         let truncated = data.count > maximumByteCount

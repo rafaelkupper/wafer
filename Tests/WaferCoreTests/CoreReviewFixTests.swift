@@ -114,6 +114,9 @@ final class CoreReviewFixTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(try JSONEncoder().encode(ScrollState(fraction: 0.5)), forKey: "scroll-state:legacy")
         let store = ScrollStateStore(defaults: defaults)
+        XCTAssertNotNil(defaults.object(forKey: "scroll-state:legacy"))
+        store.pruneLegacyEntries()
+        store.pruneLegacyEntries()
         let file = URL(fileURLWithPath: "/tmp/Note.md")
         for version in 0..<100 { store.save(fraction: 0.4, for: file, fingerprint: String(version)) }
         XCTAssertEqual(defaults.dictionaryRepresentation().keys.filter { $0.hasPrefix("scroll-state") }.count, 1)

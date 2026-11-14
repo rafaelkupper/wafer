@@ -22,23 +22,10 @@ struct CodeSyntaxHighlighter {
         let kind: TokenKind?
     }
 
-    private enum TokenColor {
-        case keyword
-        case type
-        case string
-        case number
-        case comment
-        case function
-        case member
-        case meta
-        case addition
-        case deletion
-    }
-
     private struct HighlightRule {
         let pattern: String
         let options: NSRegularExpression.Options
-        let color: TokenColor
+        let color: TokenKind
         let captureGroup: Int?
     }
 
@@ -106,7 +93,7 @@ struct CodeSyntaxHighlighter {
                     targetRange = match.range
                 }
 
-                let kind = tokenKind(for: rule.color)
+                let kind = rule.color
                 let upperBound = NSMaxRange(targetRange)
                 guard targetRange.location < upperBound else {
                     return
@@ -284,31 +271,6 @@ struct CodeSyntaxHighlighter {
         }
     }
 
-    private func tokenKind(for tokenColor: TokenColor) -> TokenKind {
-        switch tokenColor {
-        case .keyword:
-            .keyword
-        case .type:
-            .type
-        case .string:
-            .string
-        case .number:
-            .number
-        case .comment:
-            .comment
-        case .function:
-            .function
-        case .member:
-            .member
-        case .meta:
-            .meta
-        case .addition:
-            .addition
-        case .deletion:
-            .deletion
-        }
-    }
-
     private func cssClass(for kind: TokenKind) -> String? {
         switch kind {
         case .keyword:
@@ -337,7 +299,7 @@ struct CodeSyntaxHighlighter {
     private func rule(
         _ pattern: String,
         options: NSRegularExpression.Options = [],
-        color: TokenColor,
+        color: TokenKind,
         captureGroup: Int? = nil
     ) -> HighlightRule {
         HighlightRule(
@@ -351,7 +313,7 @@ struct CodeSyntaxHighlighter {
     private func wordRule(
         _ words: [String],
         options: NSRegularExpression.Options = [],
-        color: TokenColor
+        color: TokenKind
     ) -> HighlightRule {
         rule(#"\b(?:\#(escapedAlternation(words)))\b"#, options: options, color: color)
     }

@@ -26,8 +26,12 @@ public final class ScrollStateStore {
         } else {
             self.defaults = .standard
         }
-        for key in self.defaults.dictionaryRepresentation().keys where key.hasPrefix(Self.legacyKeyPrefix) {
-            self.defaults.removeObject(forKey: key)
+    }
+
+    /// Call once at application launch; construction and document opens do not enumerate preferences.
+    public func pruneLegacyEntries() {
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(Self.legacyKeyPrefix) {
+            defaults.removeObject(forKey: key)
         }
     }
 
@@ -45,6 +49,10 @@ public final class ScrollStateStore {
 
     public func pruneEntries(olderThan cutoff: Date) {
         for (key, value) in defaults.dictionaryRepresentation() where key.hasPrefix(Self.keyPrefix) || key.hasPrefix(Self.legacyKeyPrefix) {
+            if key.hasPrefix(Self.legacyKeyPrefix) {
+                defaults.removeObject(forKey: key)
+                continue
+            }
             guard
                 let data = value as? Data,
                 let entry = try? decoder.decode(Entry.self, from: data),

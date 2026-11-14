@@ -6,10 +6,14 @@ public struct PreviewComposition: Equatable, Sendable {
     public let attachments: [String: URL]
     public let title: String
     public let truncated: Bool
+    fileprivate let attachmentContainments: [String: FileContainment]
 
     public init(html: String, attachments: [String: URL], title: String, truncated: Bool) {
         self.html = html
         self.attachments = attachments
+        self.attachmentContainments = attachments.mapValues {
+            FileContainment(rootDirectory: $0.deletingLastPathComponent())
+        }
         self.title = title
         self.truncated = truncated
     }
@@ -20,8 +24,8 @@ public enum PreviewComposerError: Error, Equatable {
 }
 
 public struct PreviewComposer {
-    public static let sourceByteLimit = 2 * 1024 * 1024
-    public static let attachmentByteLimit = 10 * 1024 * 1024
+    public static let sourceByteLimit = WaferLimits.previewSourceByteCount
+    public static let attachmentByteLimit = WaferLimits.previewAttachmentByteCount
 
     private let allowsLocalImages: Bool
 
@@ -67,6 +71,9 @@ public struct PreviewComposer {
             let data: Data?
             if let url = composition.attachments[key] {
                 do {
+                    guard composition.attachmentContainments[key]?.contains(url) == true else {
+                        throw CocoaError(.fileReadNoPermission)
+                    }
                     data = try BoundedFileReader.read(from: url, maximumByteCount: remaining)
                 } catch {
                     WaferLog.rendering.info("Preview omitted image \(url.path, privacy: .private): \(error.localizedDescription, privacy: .public)")

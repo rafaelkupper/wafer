@@ -3,6 +3,27 @@ import XCTest
 @testable import WaferCore
 
 final class LibrarySearchTests: XCTestCase {
+    func testCanonicalBodyInitializerDerivesSearchTextAndPreservesReadableSnippets() {
+        let file = LibraryFile(
+            fileURL: URL(fileURLWithPath: "/tmp/Body.md"), relativePathComponents: ["Body.md"],
+            displayTitle: "Body", outlineItems: [], plainText: "A quiet\n  Café table.",
+            contentFingerprint: LibraryFileFingerprint(modificationDate: .distantPast, fileSize: 22)
+        )
+        XCTAssertEqual(file.plainText, "A quiet Café table.")
+        XCTAssertEqual(file.searchableText, "a quiet cafe table.")
+        XCTAssertEqual(LibrarySearch.fullTextMatches(query: "CAFE TABLE", in: [file]).first?.snippet, "A quiet Café table.")
+    }
+
+    func testBodyMatchingAndCountingPreserveUnicodeFolding() {
+        for (text, query) in [("Straße", "STRASSE"), ("İstanbul", "istanbul"), ("Cafe\u{301}", "cafe"), ("Ångström", "ANGSTROM")] {
+            let file = libraryFile(path: "Body.md", title: "Body", plainText: text + " " + text)
+            XCTAssertEqual(file.searchableText, file.plainText.libraryFoldedSearchText)
+            let matches = LibrarySearch.fullTextMatches(query: query, in: [file])
+            XCTAssertEqual(matches.first?.score, 10_002, text)
+            XCTAssertTrue(matches.first?.snippet.contains(text) == true, text)
+        }
+    }
+
     func testFullTextRankingOrdersFilenamePrefixSubstringTitleHeadingThenBody() {
         let files = [
             libraryFile(path: "AlphaNotes.md", title: "Zed", plainText: "Plain body."),

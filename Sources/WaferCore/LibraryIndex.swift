@@ -21,10 +21,14 @@ public struct LibraryFile: Equatable, Sendable {
     public let displayTitle: String
     public let outlineItems: [DocumentOutlineItem]
     public let plainText: String
-    public var searchableText: String { searchFields.body }
+    public var searchableText: String {
+        plainText.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).lowercased()
+    }
     public let contentFingerprint: LibraryFileFingerprint
     public let outgoingReferences: [OutgoingReference]
 
+    /// Source-compatible initializer. Search text is now derived from the readable body;
+    /// the supplied folded text is no longer retained.
     public init(
         fileURL: URL,
         relativePathComponents: [String],
@@ -35,11 +39,27 @@ public struct LibraryFile: Equatable, Sendable {
         contentFingerprint: LibraryFileFingerprint,
         outgoingReferences: [OutgoingReference] = []
     ) {
+        self.init(
+            fileURL: fileURL, relativePathComponents: relativePathComponents,
+            displayTitle: displayTitle, outlineItems: outlineItems, plainText: plainText,
+            contentFingerprint: contentFingerprint, outgoingReferences: outgoingReferences
+        )
+    }
+
+    public init(
+        fileURL: URL,
+        relativePathComponents: [String],
+        displayTitle: String,
+        outlineItems: [DocumentOutlineItem],
+        plainText: String,
+        contentFingerprint: LibraryFileFingerprint,
+        outgoingReferences: [OutgoingReference] = []
+    ) {
         self.identity = FileIdentity.identity(for: fileURL)
         self.relativePath = relativePathComponents.joined(separator: "/")
         self.searchFields = LibrarySearchFields(
             fileURL: fileURL, relativePath: relativePathComponents.joined(separator: "/"),
-            title: displayTitle, headings: outlineItems, body: searchableText
+            title: displayTitle, headings: outlineItems
         )
         self.fileURL = fileURL
         self.relativePathComponents = relativePathComponents
@@ -85,9 +105,9 @@ public enum LibraryScanner {
     ]
 
     public static func scan(
-        rootURL: URL, fileLimit: Int = 2_000, existingFiles: [LibraryFile] = [],
+        rootURL: URL, fileLimit: Int = WaferLimits.libraryFileCount, existingFiles: [LibraryFile] = [],
         changedPaths: Set<String>? = [], cancellation: WorkCancellation? = nil,
-        maximumFileByteCount: Int = 2 * 1024 * 1024, maximumLibraryByteCount: Int = 128 * 1024 * 1024
+        maximumFileByteCount: Int = WaferLimits.libraryFileByteCount, maximumLibraryByteCount: Int = WaferLimits.libraryByteCount
     ) -> Result {
         guard fileLimit > 0 else {
             var traversal = LibraryTraversal(rootURL: FileIdentity.normalized(rootURL), fileLimit: 1)
@@ -105,8 +125,7 @@ public enum LibraryScanner {
         let existing = Dictionary(existingFiles.map { ($0.identity, $0) }, uniquingKeysWith: { first, _ in first })
         var files: [LibraryFile] = existingFiles.filter { previous in
             traversal.skippedURLs.contains { skipped in
-                let path = FileIdentity.identity(for: skipped)
-                return previous.fileURL.path == path || previous.fileURL.path.hasPrefix(path + "/")
+                FileContainment.isContained(previous.fileURL, in: skipped)
             }
         }
         var skippedItemCount = traversal.skippedURLs.count
@@ -159,7 +178,6 @@ public enum LibraryScanner {
             displayTitle: DocumentSidebarDataBuilder.documentDisplayTitle(for: document, fallbackURL: normalizedURL),
             outlineItems: DocumentSidebarDataBuilder.outlineItems(from: document),
             plainText: plainText,
-            searchableText: plainText.libraryFoldedSearchText,
             contentFingerprint: LibraryFileFingerprint(modificationDate: date, fileSize: UInt64(data.count), contentDigest: document.fingerprint),
             outgoingReferences: OutgoingReferenceCollector.collect(from: document, assetResolver: AssetResolver())
         )
