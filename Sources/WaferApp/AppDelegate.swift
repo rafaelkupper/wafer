@@ -79,6 +79,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         true
     }
 
+    /// Edit mode on a file covered only by a read-only folder grant is
+    /// refused as a write-permission error; it is presented with Grant
+    /// Access…, which asks for a read-write grant and then starts editing.
+    func application(_ application: NSApplication, willPresentError error: Error) -> Error {
+        FolderAccessDeniedError.explainingWriteRefusal(error) ?? error
+    }
+
     @objc
     func openDocument(_ sender: Any?) {
         let panel = NSOpenPanel()

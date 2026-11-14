@@ -45,10 +45,31 @@ struct FolderAccessScope: Sendable {
     }
 }
 
+/// Whether a grant lets Wafer change files in its folder or only read them.
+enum FolderAccessMode: String, Comparable, Sendable {
+    case readOnly
+    case readWrite
+
+    static func < (lhs: FolderAccessMode, rhs: FolderAccessMode) -> Bool {
+        lhs == .readOnly && rhs == .readWrite
+    }
+}
+
+/// A granted folder, as the Folder Access window lists it.
+struct FolderGrantInfo: Equatable, Identifiable {
+    let id: String
+    /// The folder's current path; a moved folder shows its new place.
+    let folderURL: URL
+    let mode: FolderAccessMode
+    /// False while its bookmark cannot be resolved, such as on a disconnected drive.
+    let isAvailable: Bool
+    let isLibrary: Bool
+}
+
 /// The security-scoped bookmark calls the store makes. Tests replace them.
 @MainActor
 protocol SecurityScopedBookmarking {
-    func bookmarkData(for url: URL) throws -> Data
+    func bookmarkData(for url: URL, readOnly: Bool) throws -> Data
     func resolve(_ bookmark: Data) throws -> (url: URL, isStale: Bool)
     func startAccessing(_ url: URL) -> Bool
     func stopAccessing(_ url: URL)
@@ -56,14 +77,19 @@ protocol SecurityScopedBookmarking {
 
 /// App-scoped security bookmarks (`com.apple.security.files.bookmarks.app-scope`).
 struct SystemSecurityScopedBookmarks: SecurityScopedBookmarking {
-    func bookmarkData(for url: URL) throws -> Data {
-        try url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
+    /// A read-only bookmark (`securityScopeAllowOnlyReadAccess`) restores
+    /// access that lets Wafer read the folder but not change anything in it.
+    func bookmarkData(for url: URL, readOnly: Bool) throws -> Data {
+        try url.bookmarkData(
+            options: readOnly ? [.withSecurityScope, .securityScopeAllowOnlyReadAccess] : [.withSecurityScope],
+            includingResourceValuesForKeys: nil, relativeTo: nil
+        )
     }
 
     func resolve(_ bookmark: Data) throws -> (url: URL, isStale: Bool) {
         var isStale = false
-        // No UI and no mounting at launch: an absent volume leaves the grant
-        // unresolved until a later launch.
+        // No UI and no mounting: an absent volume leaves the grant unresolved
+        // until it mounts.
         let url = try URL(
             resolvingBookmarkData: bookmark,
             options: [.withSecurityScope, .withoutUI, .withoutMounting],
@@ -85,7 +111,9 @@ struct SystemSecurityScopedBookmarks: SecurityScopedBookmarking {
 /// Folder grants under the App Sandbox. A file the user opens grants only
 /// itself; folders the user chooses (the library, or Grant Access… in a
 /// window) are stored as app-scoped security bookmarks, resolved at launch,
-/// and kept accessible for the whole session. The store also records which
+/// and kept accessible for the whole session. Grants for reading a
+/// document's images and links are read-only; the library's, and grants
+/// asked for while editing, are read-write. The store also records which
 /// files each document needed but could not read, for the window notice.
 @MainActor
 final class FolderAccessStore {
@@ -99,14 +127,26 @@ final class FolderAccessStore {
     }
 
     private struct Grant {
-        /// The folder's path when the bookmark was last made.
+        /// Stable across launches and moves; the library refers to its grant by it.
+        let id: String
+        /// The folder's path when the bookmark was last resolved or made.
         var path: String
         var bookmark: Data
+        var mode: FolderAccessMode
+        /// The library's own grant: stored even inside a broader grant and
+        /// never replaced by one, so it follows the library folder.
+        var isLibrary = false
         /// The resolved URL whose access this store started; stopped when the
-        /// grant is superseded.
+        /// grant is superseded or removed.
         var accessURL: URL?
         /// Nil while the bookmark cannot be resolved or accessed.
         var containment: FileContainment?
+
+        var folderURL: URL { URL(fileURLWithPath: path, isDirectory: true) }
+
+        var record: [String: Any] {
+            ["id": id, "path": path, "bookmark": bookmark, "readOnly": mode == .readOnly, "library": isLibrary]
+        }
     }
 
     let isSandboxed: Bool
@@ -118,6 +158,8 @@ final class FolderAccessStore {
     private let canOpenForReading: @MainActor (URL) -> Bool
     /// The container, its temporary folder, and the app bundle.
     private let alwaysReadable: [FileContainment]
+    /// The container and its temporary folder.
+    private let alwaysWritable: [FileContainment]
     private var grants: [Grant] = [] {
         didSet { cachedScope = nil }
     }
@@ -139,6 +181,7 @@ final class FolderAccessStore {
         bookmarks: SecurityScopedBookmarking = SystemSecurityScopedBookmarks(),
         isSandboxed: Bool = AppSandbox.isActive,
         alwaysReadableRoots: [URL] = FolderAccessStore.defaultAlwaysReadableRoots(),
+        alwaysWritableRoots: [URL] = FolderAccessStore.defaultAlwaysWritableRoots(),
         range: FolderAccessRange = .current,
         canOpenForReading: @escaping @MainActor (URL) -> Bool = FolderAccessStore.canOpenForReading
     ) {
@@ -149,13 +192,17 @@ final class FolderAccessStore {
         self.isSandboxed = isSandboxed
         self.canOpenForReading = canOpenForReading
         self.alwaysReadable = isSandboxed ? alwaysReadableRoots.map { FileContainment(rootDirectory: $0) } : []
+        self.alwaysWritable = isSandboxed ? alwaysWritableRoots.map { FileContainment(rootDirectory: $0) } : []
     }
 
     nonisolated static func defaultAlwaysReadableRoots() -> [URL] {
+        defaultAlwaysWritableRoots() + [Bundle.main.bundleURL]
+    }
+
+    nonisolated static func defaultAlwaysWritableRoots() -> [URL] {
         [
             URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true),
             URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true),
-            Bundle.main.bundleURL,
         ]
     }
 
@@ -174,77 +221,130 @@ final class FolderAccessStore {
                 changed = true
                 continue
             }
-            var grant = Grant(path: path, bookmark: bookmark)
-            do {
-                let resolved = try bookmarks.resolve(bookmark)
-                if bookmarks.startAccessing(resolved.url) {
-                    grant.accessURL = resolved.url
-                    grant.containment = FileContainment(rootDirectory: resolved.url)
-                    // A moved or renamed folder resolves to its new place.
-                    grant.path = FileIdentity.identity(for: resolved.url)
-                    if resolved.isStale {
-                        do {
-                            grant.bookmark = try bookmarks.bookmarkData(for: resolved.url)
-                            changed = true
-                        } catch {
-                            // Access works now; the old bookmark is tried again next launch.
-                            Self.log.error("Could not refresh the bookmark for \(path, privacy: .private): \(error.localizedDescription, privacy: .public)")
-                        }
-                    }
-                    changed = changed || grant.path != path
-                } else {
-                    Self.log.error("Could not access the granted folder \(path, privacy: .private)")
-                }
-            } catch {
-                Self.log.error("Could not restore access to \(path, privacy: .private): \(error.localizedDescription, privacy: .public)")
-            }
+            let id = record["id"] as? String ?? UUID().uuidString
+            // Bookmarks stored before grants had a mode were read-write.
+            let mode: FolderAccessMode = record["readOnly"] as? Bool == true ? .readOnly : .readWrite
+            var grant = Grant(id: id, path: path, bookmark: bookmark, mode: mode, isLibrary: record["library"] as? Bool == true)
+            changed = changed || record["id"] == nil || record["readOnly"] == nil
+            changed = resolve(&grant) || changed
             grants.append(grant)
         }
         if changed { persistGrants() }
         Self.log.info("Restored access to \(self.grants.filter { $0.containment != nil }.count, privacy: .public) of \(self.grants.count, privacy: .public) granted folders")
     }
 
+    /// Resolves an unresolved grant and starts its access. A moved or
+    /// renamed folder resolves to its new place, and a stale bookmark is made
+    /// again. Returns true when the stored record changed.
+    private func resolve(_ grant: inout Grant) -> Bool {
+        let path = grant.path
+        do {
+            let resolved = try bookmarks.resolve(grant.bookmark)
+            guard bookmarks.startAccessing(resolved.url) else {
+                Self.log.error("Could not access the granted folder \(path, privacy: .private)")
+                return false
+            }
+            grant.accessURL = resolved.url
+            grant.containment = FileContainment(rootDirectory: resolved.url)
+            grant.path = FileIdentity.identity(for: resolved.url)
+            var changed = grant.path != path
+            if resolved.isStale {
+                do {
+                    grant.bookmark = try bookmarks.bookmarkData(for: resolved.url, readOnly: grant.mode == .readOnly)
+                    changed = true
+                } catch {
+                    // Access works now; the old bookmark is tried again next launch.
+                    Self.log.error("Could not refresh the bookmark for \(path, privacy: .private): \(error.localizedDescription, privacy: .public)")
+                }
+            }
+            return changed
+        } catch {
+            Self.log.error("Could not restore access to \(path, privacy: .private): \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
     /// The folders Wafer can read now through stored grants.
     var grantedFolders: [URL] {
         restoreGrants()
-        return grants.filter { $0.containment != nil }.map { URL(fileURLWithPath: $0.path, isDirectory: true) }
+        return grants.filter { $0.containment != nil }.map(\.folderURL)
+    }
+
+    /// Every stored grant, including unavailable ones, by path.
+    var folderGrants: [FolderGrantInfo] {
+        guard isSandboxed else { return [] }
+        restoreGrants()
+        return grants
+            .map { FolderGrantInfo(id: $0.id, folderURL: $0.folderURL, mode: $0.mode, isAvailable: $0.containment != nil, isLibrary: $0.isLibrary) }
+            .sorted { $0.folderURL.path.localizedStandardCompare($1.folderURL.path) == .orderedAscending }
     }
 
     /// Remembers a folder the user chose in an open panel or dropped on the
-    /// app, for this and later launches. A grant inside an existing one adds
-    /// nothing; a grant that contains existing ones replaces them. Returns the
-    /// documents whose needed files are now readable.
+    /// app, for this and later launches. A grant inside one that allows at
+    /// least as much adds nothing; a grant replaces the ones it contains that
+    /// allow no more than it does (the library's stays). Choosing a granted
+    /// folder again makes its bookmark again. Returns the documents whose
+    /// needed files are now readable.
     @discardableResult
-    func grantAccess(to folderURL: URL) -> Set<String> {
+    func grantAccess(to folderURL: URL, mode: FolderAccessMode = .readOnly) -> Set<String> {
         guard isSandboxed else { return [] }
         restoreGrants()
-        let containment = FileContainment(rootDirectory: folderURL)
         let path = FileIdentity.identity(for: folderURL)
-        if grants.contains(where: { $0.containment?.contains(folderURL) == true }) {
+        if grants.contains(where: { ($0.path != path || $0.isLibrary) && $0.mode >= mode && $0.containment?.contains(folderURL) == true }) {
             return pruneSatisfiedNeeds()
         }
+        let mode = max(mode, grants.first { $0.path == path && !$0.isLibrary }?.mode ?? mode)
+        guard let grant = makeGrant(for: folderURL, mode: mode) else { return pruneSatisfiedNeeds() }
+        store(grant)
+        return pruneSatisfiedNeeds()
+    }
 
+    /// Stops access to a granted folder and deletes its bookmark. Documents
+    /// keep what they show; reading from the folder again asks for it.
+    func revoke(grantID id: String) {
+        restoreGrants()
+        guard let index = grants.firstIndex(where: { $0.id == id }) else { return }
+        let grant = grants.remove(at: index)
+        grant.accessURL.map(bookmarks.stopAccessing)
+        persistGrants()
+        Self.log.info("Removed access to \(grant.path, privacy: .private)")
+        postChange()
+    }
+
+    /// A new grant for `folderURL`, with its bookmark made and its access
+    /// started. When no bookmark can be made, the folder stays readable for
+    /// this session through the panel's own access, and nil is returned.
+    private func makeGrant(for folderURL: URL, mode: FolderAccessMode, isLibrary: Bool = false) -> Grant? {
+        let path = FileIdentity.identity(for: folderURL)
         do {
-            var grant = Grant(path: path, bookmark: try bookmarks.bookmarkData(for: folderURL))
+            var grant = Grant(id: UUID().uuidString, path: path,
+                              bookmark: try bookmarks.bookmarkData(for: folderURL, readOnly: mode == .readOnly),
+                              mode: mode, isLibrary: isLibrary)
             // Access from the panel lasts until quit; starting the bookmark's
             // own access keeps one rule for every grant.
             if let resolved = try? bookmarks.resolve(grant.bookmark), bookmarks.startAccessing(resolved.url) {
                 grant.accessURL = resolved.url
                 grant.path = FileIdentity.identity(for: resolved.url)
             }
-            grant.containment = containment
-            let superseded = grants.filter { containment.contains(URL(fileURLWithPath: $0.path, isDirectory: true)) }
-            grants.removeAll { containment.contains(URL(fileURLWithPath: $0.path, isDirectory: true)) }
-            grants.append(grant)
-            superseded.compactMap(\.accessURL).forEach(bookmarks.stopAccessing)
-            persistGrants()
-            Self.log.info("Granted access to \(path, privacy: .private), replacing \(superseded.count, privacy: .public) narrower grants")
+            grant.containment = FileContainment(rootDirectory: folderURL)
+            return grant
         } catch {
-            // Still readable this session through the panel's own access.
             Self.log.error("Could not remember access to \(path, privacy: .private): \(error.localizedDescription, privacy: .public)")
-            userSelections[path] = containment
+            userSelections[path] = FileContainment(rootDirectory: folderURL)
+            return nil
         }
-        return pruneSatisfiedNeeds()
+    }
+
+    /// Adds `grant`, replacing the ordinary grants it contains that allow no
+    /// more than it does.
+    private func store(_ grant: Grant) {
+        let containment = grant.containment ?? FileContainment(rootDirectory: grant.folderURL)
+        let superseded = grants.filter { !$0.isLibrary && $0.mode <= grant.mode && containment.contains($0.folderURL) }
+        grants.removeAll { existing in superseded.contains { $0.id == existing.id } }
+        grants.append(grant)
+        superseded.compactMap(\.accessURL).forEach(bookmarks.stopAccessing)
+        persistGrants()
+        Self.log.info("Granted \(grant.mode == .readOnly ? "read-only" : "read-write", privacy: .public) access to \(grant.path, privacy: .private), replacing \(superseded.count, privacy: .public) narrower grants")
     }
 
     /// Files the user opened directly. The sandbox lets Wafer read each of
@@ -314,6 +414,16 @@ final class FolderAccessStore {
         scope.covers(url)
     }
 
+    /// True when the sandbox lets Wafer change `url`: the user opened it, it
+    /// lies in a read-write grant, or it is in the container.
+    func allowsWriting(_ url: URL) -> Bool {
+        guard isSandboxed else { return true }
+        restoreGrants()
+        let candidate = FileContainment.Candidate(url)
+        let roots = alwaysWritable + userSelections.values + grants.filter { $0.mode == .readWrite }.compactMap(\.containment)
+        return roots.contains { $0.contains(candidate) }
+    }
+
     // MARK: Needed files
 
     /// Replaces the linked documents `documentURL` shows that Wafer cannot
@@ -381,7 +491,7 @@ final class FolderAccessStore {
     }
 
     private func persistGrants() {
-        defaults.set(grants.map { ["path": $0.path, "bookmark": $0.bookmark] as [String: Any] }, forKey: DefaultsKey.grants)
+        defaults.set(grants.map(\.record), forKey: DefaultsKey.grants)
     }
 
     private func postChange() {

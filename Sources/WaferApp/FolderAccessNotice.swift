@@ -36,41 +36,46 @@ enum FolderAccessFlow {
     static var chooseFolder: FolderChooser = FolderAccessFlow.runOpenPanel
     static var refreshDocuments: DocumentRefresher = FolderAccessFlow.reloadOpenDocuments
 
-    /// True when Wafer can read `url` now. Otherwise asks for a folder that
-    /// holds it, returns false, and calls `onGranted` once `url` is readable.
+    /// True when Wafer can read `url` now, or with `.readWrite` also change
+    /// it. Otherwise asks for a folder that holds it, returns false, and
+    /// calls `onGranted` once the grant allows it. `access` defaults to
+    /// read-write while the requesting document is being edited (see
+    /// `accessMode(requestedBy:)`), and read-only otherwise.
     @discardableResult
     static func ensureAccess(
         to url: URL, requestedBy documentURL: URL?, window: NSWindow?,
-        onGranted: @escaping @MainActor () -> Void
+        access: FolderAccessMode? = nil, onGranted: @escaping @MainActor () -> Void
     ) -> Bool {
         let store = FolderAccessStore.shared
-        guard !store.covers(url) else { return true }
-        if let documentURL {
+        let access = access ?? accessMode(requestedBy: documentURL)
+        guard !allows(access, url, in: store) else { return true }
+        if let documentURL, !store.covers(url) {
             store.recordUnreadableFile(url, forDocumentAt: documentURL)
         }
-        requestAccess(to: url, requestedBy: documentURL, window: window, onGranted: onGranted)
+        requestAccess(to: url, requestedBy: documentURL, window: window, access: access, onGranted: onGranted)
         return false
     }
 
     /// Asks for a folder that holds `url`, even when Wafer believes it can
     /// read it (after a refused read), and calls `onGranted` once a grant
-    /// covers it. The panel offers only the file's own folder, never one
-    /// too broad to offer. It may be a sheet, so callers continue only from
-    /// `onGranted`, never after this returns.
+    /// allows `access`. The panel offers only the file's own folder, never
+    /// one too broad to offer. It may be a sheet, so callers continue only
+    /// from `onGranted`, never after this returns.
     static func requestAccess(
         to url: URL, requestedBy documentURL: URL? = nil, window: NSWindow?,
-        onGranted: @escaping @MainActor () -> Void
+        access: FolderAccessMode = .readOnly, onGranted: @escaping @MainActor () -> Void
     ) {
         let store = FolderAccessStore.shared
-        chooseFolder(request(opening: url, requestedBy: documentURL, range: store.range), window) { chosen in
+        chooseFolder(request(opening: url, requestedBy: documentURL, access: access, range: store.range), window) { chosen in
             guard let chosen else { return }
-            refreshDocuments(store.grantAccess(to: chosen))
-            if store.covers(url) { onGranted() }
+            refreshDocuments(store.grantAccess(to: chosen, mode: access))
+            if allows(access, url, in: store) { onGranted() }
         }
     }
 
     /// Grant Access… in a document window: offers the document's folder,
     /// widened within the range Wafer offers to hold the files it needs.
+    /// The grant is read-only unless the document is being edited.
     static func requestAccess(
         forDocumentAt documentURL: URL, window: NSWindow?,
         completion: @escaping @MainActor (Bool) -> Void = { _ in }
@@ -80,14 +85,30 @@ enum FolderAccessFlow {
             completion(false)
             return
         }
-        chooseFolder(request(showing: documentURL, suggestion: suggestion, range: store.range), window) { chosen in
+        let access = accessMode(requestedBy: documentURL)
+        chooseFolder(request(showing: documentURL, suggestion: suggestion, access: access, range: store.range), window) { chosen in
             guard let chosen else {
                 completion(false)
                 return
             }
-            refreshDocuments(store.grantAccess(to: chosen))
+            refreshDocuments(store.grantAccess(to: chosen, mode: access))
             completion(true)
         }
+    }
+
+    /// Grants made to show a document's images and links only read. One
+    /// asked for while the requesting document is being edited is
+    /// read-write: a link followed while editing opens in the editor, and
+    /// a read-only grant would leave its edits unsaveable.
+    static func accessMode(requestedBy documentURL: URL?) -> FolderAccessMode {
+        guard let documentURL, OpenDocumentRegistry.shared.document(for: documentURL)?.isEditing == true else {
+            return .readOnly
+        }
+        return .readWrite
+    }
+
+    private static func allows(_ access: FolderAccessMode, _ url: URL, in store: FolderAccessStore) -> Bool {
+        access == .readWrite ? store.allowsWriting(url) : store.covers(url)
     }
 
     /// The bar's text for the folder the window offers.
@@ -100,24 +121,41 @@ enum FolderAccessFlow {
         }
     }
 
-    static func request(opening url: URL, requestedBy documentURL: URL?, range: FolderAccessRange) -> FolderAccessRequest {
+    static func request(
+        opening url: URL, requestedBy documentURL: URL?, access: FolderAccessMode = .readOnly, range: FolderAccessRange
+    ) -> FolderAccessRequest {
         switch range.suggestion(for: url) {
         case .folder(let folder, _):
-            FolderAccessRequest(suggestedFolder: folder, message: "Wafer can read only the files and folders you choose. To open “\(url.lastPathComponent)”, grant access to its folder, “\(folder.lastPathComponent)” (\(folder.path))."
+            let purpose = access == .readWrite
+                ? "To open “\(url.lastPathComponent)” in the editor and save your changes"
+                : "To open “\(url.lastPathComponent)”"
+            return FolderAccessRequest(suggestedFolder: folder, message: "\(introduction(for: access)) \(purpose), grant access to its folder, “\(folder.lastPathComponent)” (\(folder.path))."
                 + parentFolderHint(for: folder, isWidened: false, range: range))
         case .outOfRange(let file, _):
-            outOfRangeRequest(for: file, requestedBy: documentURL, range: range)
+            return outOfRangeRequest(for: file, requestedBy: documentURL, range: range)
         }
     }
 
-    static func request(showing documentURL: URL, suggestion: FolderAccessSuggestion, range: FolderAccessRange) -> FolderAccessRequest {
+    static func request(
+        showing documentURL: URL, suggestion: FolderAccessSuggestion, access: FolderAccessMode = .readOnly,
+        range: FolderAccessRange
+    ) -> FolderAccessRequest {
         switch suggestion {
         case .folder(let folder, let isWidened):
-            FolderAccessRequest(suggestedFolder: folder, message: "Wafer can read only the files and folders you choose. To show the images and linked files in “\(documentURL.lastPathComponent)”, grant access to “\(folder.lastPathComponent)” (\(folder.path))."
+            let purpose = access == .readWrite
+                ? "To show the images and linked files in “\(documentURL.lastPathComponent)” and save the files you edit there"
+                : "To show the images and linked files in “\(documentURL.lastPathComponent)”"
+            return FolderAccessRequest(suggestedFolder: folder, message: "\(introduction(for: access)) \(purpose), grant access to “\(folder.lastPathComponent)” (\(folder.path))."
                 + parentFolderHint(for: folder, isWidened: isWidened, range: range))
         case .outOfRange(let file, _):
-            outOfRangeRequest(for: file, requestedBy: documentURL, range: range)
+            return outOfRangeRequest(for: file, requestedBy: documentURL, range: range)
         }
+    }
+
+    private static func introduction(for access: FolderAccessMode) -> String {
+        access == .readWrite
+            ? "Wafer can read and change only the files and folders you choose."
+            : "Wafer can read only the files and folders you choose, and remembers this folder for reading only."
     }
 
     /// Mentions a parent folder only while the suggestion is narrow: not
@@ -205,46 +243,84 @@ enum FolderAccessFlow {
     }
 }
 
-/// A read the App Sandbox refused. Presented errors offer Grant Access….
+/// A read, or edit mode, that the App Sandbox refused. Presented errors
+/// offer Grant Access….
 struct FolderAccessDeniedError: LocalizedError, CustomNSError, RecoverableError {
+    enum Purpose: Sendable {
+        /// Reading the file; the grant reopens it.
+        case reading
+        /// Editing a file Wafer may only read; the read-write grant starts edit mode.
+        case editing
+    }
+
     let fileURL: URL
+    var purpose = Purpose.reading
 
     static var errorDomain: String { "dev.wafer.folder-access" }
-    var errorCode: Int { 1 }
+    var errorCode: Int { purpose == .reading ? 1 : 2 }
     var errorUserInfo: [String: Any] {
         [NSURLErrorKey: fileURL, NSFilePathErrorKey: fileURL.path]
     }
 
     var errorDescription: String? {
-        "Wafer doesn't have permission to read “\(fileURL.lastPathComponent)”."
+        switch purpose {
+        case .reading: "Wafer doesn't have permission to read “\(fileURL.lastPathComponent)”."
+        case .editing: "Wafer doesn't have permission to save changes to “\(fileURL.lastPathComponent)”."
+        }
     }
 
     var recoverySuggestion: String? {
-        "macOS lets Wafer read only the files and folders you choose. Grant access to the folder that contains it."
+        switch purpose {
+        case .reading:
+            "macOS lets Wafer read only the files and folders you choose. Grant access to the folder that contains it."
+        case .editing:
+            "Its folder was granted for reading only. Grant access to the folder again to let Wafer save your edits there."
+        }
     }
 
     var recoveryOptions: [String] {
         ["Grant Access…", "Cancel"]
     }
 
-    /// Runs on the main thread after the error's alert closes. The read was
-    /// refused, so the panel opens even if Wafer believed it could read the
-    /// file. The grant's completion reopens the file, so this works whether
-    /// the panel runs modally or as a sheet; the result only says nothing was
-    /// recovered before returning.
+    /// Runs on the main thread after the error's alert closes. The panel
+    /// opens even if Wafer believed it could read the file, since the
+    /// sandbox just refused it. The grant's completion reopens the file, or
+    /// starts edit mode, so this works whether the panel runs modally or as
+    /// a sheet; the result only says nothing was recovered before returning.
     func attemptRecovery(optionIndex recoveryOptionIndex: Int) -> Bool {
         guard recoveryOptionIndex == 0 else { return false }
         let fileURL = fileURL
+        let purpose = purpose
         MainActor.assumeIsolated {
-            FolderAccessFlow.requestAccess(to: fileURL, window: nil) {
-                if let document = OpenDocumentRegistry.shared.document(for: fileURL) {
-                    document.reloadDocument(nil)
-                } else {
-                    MarkdownDocumentOpener.open(urls: [fileURL])
+            FolderAccessFlow.requestAccess(to: fileURL, window: nil, access: purpose == .editing ? .readWrite : .readOnly) {
+                let document = OpenDocumentRegistry.shared.document(for: fileURL)
+                switch purpose {
+                case .reading:
+                    if let document {
+                        document.reloadDocument(nil)
+                    } else {
+                        MarkdownDocumentOpener.open(urls: [fileURL])
+                    }
+                case .editing:
+                    document?.beginEditing()
                 }
             }
         }
         return false
+    }
+
+    /// Edit mode refuses a file it cannot write with `fileWriteNoPermission`.
+    /// When the sandbox, not the file's own permissions, is the reason (it
+    /// lies only in read-only grants), this error replaces it, offering a
+    /// read-write grant.
+    @MainActor
+    static func explainingWriteRefusal(_ error: Error) -> Error? {
+        let error = error as NSError
+        let store = FolderAccessStore.shared
+        guard store.isSandboxed, error.domain == NSCocoaErrorDomain, error.code == CocoaError.fileWriteNoPermission.rawValue,
+              let fileURL = error.userInfo[NSURLErrorKey] as? URL, fileURL.isFileURL,
+              store.covers(fileURL), !store.allowsWriting(fileURL) else { return nil }
+        return FolderAccessDeniedError(fileURL: fileURL, purpose: .editing)
     }
 
     /// A read refused for permission. The sandbox reports EPERM; a POSIX

@@ -5,13 +5,17 @@ import XCTest
 @testable import WaferCore
 
 /// Fake app-scoped bookmarks: the data names the folder; resolution can be
-/// made stale or fail per folder.
+/// made stale, moved to another folder, or fail per folder.
 @MainActor
 final class FakeSecurityScopedBookmarks: SecurityScopedBookmarking {
     var stalePaths: Set<String> = []
     var unresolvablePaths: Set<String> = []
+    /// Folders that resolve somewhere else, as a moved or renamed folder does.
+    var movedPaths: [String: String] = [:]
     var failsToCreate = false
     private(set) var createdPaths: [String] = []
+    /// Whether each bookmark in `createdPaths` was made read-only.
+    private(set) var createdReadOnly: [Bool] = []
     private(set) var started: [String] = []
     private(set) var stopped: [String] = []
 
@@ -19,9 +23,10 @@ final class FakeSecurityScopedBookmarks: SecurityScopedBookmarking {
         Data(("bookmark:" + url.path).utf8)
     }
 
-    func bookmarkData(for url: URL) throws -> Data {
+    func bookmarkData(for url: URL, readOnly: Bool) throws -> Data {
         if failsToCreate { throw CocoaError(.fileWriteNoPermission) }
         createdPaths.append(url.path)
+        createdReadOnly.append(readOnly)
         return Self.bookmark(for: url)
     }
 
@@ -31,6 +36,9 @@ final class FakeSecurityScopedBookmarks: SecurityScopedBookmarking {
         }
         let path = String(text.dropFirst("bookmark:".count))
         guard !unresolvablePaths.contains(path) else { throw CocoaError(.fileNoSuchFile) }
+        if let moved = movedPaths[path] {
+            return (URL(fileURLWithPath: moved, isDirectory: true), true)
+        }
         return (URL(fileURLWithPath: path, isDirectory: true), stalePaths.contains(path))
     }
 
@@ -90,7 +98,7 @@ extension XCTestCase {
     ) -> SandboxedFolderAccess {
         let defaults = defaults ?? makeTestUserDefaults()
         let store = FolderAccessStore(
-            defaults: defaults, bookmarks: bookmarks, isSandboxed: true, alwaysReadableRoots: [],
+            defaults: defaults, bookmarks: bookmarks, isSandboxed: true, alwaysReadableRoots: [], alwaysWritableRoots: [],
             range: range, canOpenForReading: canOpenForReading
         )
         FolderAccessTestSupport.install(store)
@@ -204,6 +212,114 @@ final class FolderAccessStoreTests: XCTestCase {
         access.store.stopAccessingAll()
         XCTAssertEqual(access.bookmarks.stopped, [child.path, directory.url.path])
         XCTAssertFalse(access.store.covers(grandchild.appendingPathComponent("Note.md")))
+    }
+
+    func testGrantsForReadingAreReadOnlyBookmarksAndReadWriteGrantsAllowSaving() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let images = directory.url.appendingPathComponent("Images", isDirectory: true)
+        let library = directory.url.appendingPathComponent("Library", isDirectory: true)
+        let access = installSandboxedFolderAccess()
+
+        access.store.grantAccess(to: images)
+        access.store.grantAccess(to: library, mode: .readWrite)
+
+        XCTAssertEqual(access.bookmarks.createdPaths, [images.path, library.path])
+        XCTAssertEqual(access.bookmarks.createdReadOnly, [true, false], "read-only bookmarks unless the grant is read-write")
+        XCTAssertTrue(access.store.covers(images.appendingPathComponent("a.png")))
+        XCTAssertFalse(access.store.allowsWriting(images.appendingPathComponent("Note.md")))
+        XCTAssertTrue(access.store.allowsWriting(library.appendingPathComponent("Note.md")))
+        let records = try XCTUnwrap(access.defaults.array(forKey: "folderAccessGrants") as? [[String: Any]])
+        XCTAssertEqual(records.compactMap { $0["readOnly"] as? Bool }, [true, false])
+        XCTAssertEqual(Set(records.compactMap { $0["id"] as? String }).count, 2)
+        XCTAssertEqual(access.store.folderGrants.map(\.mode), [.readOnly, .readWrite])
+
+        let opened = directory.url.appendingPathComponent("Opened.md")
+        access.store.noteUserSelected([opened])
+        XCTAssertTrue(access.store.allowsWriting(opened), "a file the user opened can be saved")
+    }
+
+    func testReadOnlyAndReadWriteGrantsCombineByWhatTheyAllow() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let parent = directory.url.appendingPathComponent("Parent", isDirectory: true)
+        let child = parent.appendingPathComponent("Child", isDirectory: true)
+        let note = child.appendingPathComponent("Note.md")
+        let access = installSandboxedFolderAccess()
+        func grants() -> [String] { access.store.folderGrants.map { "\($0.folderURL.lastPathComponent):\($0.mode.rawValue)" } }
+
+        access.store.grantAccess(to: parent, mode: .readWrite)
+        access.store.grantAccess(to: child)
+        XCTAssertEqual(grants(), ["Parent:readWrite"], "a read-only grant inside a read-write one adds nothing")
+
+        access.store.revoke(grantID: try XCTUnwrap(access.store.folderGrants.first?.id))
+        access.store.grantAccess(to: parent)
+        access.store.grantAccess(to: child, mode: .readWrite)
+        XCTAssertEqual(grants(), ["Parent:readOnly", "Child:readWrite"], "a read-write grant inside a read-only one is kept")
+        XCTAssertTrue(access.store.allowsWriting(note))
+        XCTAssertFalse(access.store.allowsWriting(parent.appendingPathComponent("Other.md")))
+
+        access.store.grantAccess(to: parent, mode: .readWrite)
+        XCTAssertEqual(grants(), ["Parent:readWrite"], "a read-write grant replaces what it contains")
+
+        access.store.grantAccess(to: directory.url)
+        XCTAssertEqual(grants(), [directory.url.lastPathComponent + ":readOnly", "Parent:readWrite"],
+                       "a read-only grant never replaces a read-write one")
+        XCTAssertTrue(access.store.allowsWriting(note))
+    }
+
+    func testRestoreKeepsModesAndTreatsRecordsWithoutOneAsReadWrite() throws {
+        let readOnly = try TemporaryTestDirectory()
+        defer { readOnly.remove() }
+        let older = try TemporaryTestDirectory()
+        defer { older.remove() }
+        let defaults = makeTestUserDefaults()
+        defaults.set([
+            ["id": "kept", "path": readOnly.url.path, "bookmark": FakeSecurityScopedBookmarks.bookmark(for: readOnly.url), "readOnly": true],
+            // Stored before grants had an identity and a mode: those bookmarks were read-write.
+            ["path": older.url.path, "bookmark": FakeSecurityScopedBookmarks.bookmark(for: older.url)],
+        ], forKey: "folderAccessGrants")
+        let bookmarks = FakeSecurityScopedBookmarks()
+        bookmarks.stalePaths = [readOnly.url.path]
+        let access = installSandboxedFolderAccess(defaults: defaults, bookmarks: bookmarks)
+
+        access.store.restoreGrants()
+
+        XCTAssertEqual(access.store.folderGrants.first { $0.folderURL.path == readOnly.url.path }?.mode, .readOnly)
+        XCTAssertEqual(access.store.folderGrants.first { $0.folderURL.path == older.url.path }?.mode, .readWrite)
+        XCTAssertEqual(bookmarks.createdReadOnly, [true], "a stale bookmark is made again in its own mode")
+        let records = try XCTUnwrap(defaults.array(forKey: "folderAccessGrants") as? [[String: Any]])
+        XCTAssertEqual(records.first?["id"] as? String, "kept")
+        XCTAssertNotNil(records.last?["id"] as? String, "an identity is assigned and stored")
+        XCTAssertEqual(records.last?["readOnly"] as? Bool, false)
+    }
+
+    func testRevokingAGrantStopsItsAccessAndDeletesItsBookmark() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let unmounted = URL(fileURLWithPath: "/Volumes/WaferTestUnmounted-\(UUID().uuidString)/Notes", isDirectory: true)
+        let defaults = makeTestUserDefaults()
+        defaults.set([["id": "away", "path": unmounted.path, "bookmark": FakeSecurityScopedBookmarks.bookmark(for: unmounted)]],
+                     forKey: "folderAccessGrants")
+        let bookmarks = FakeSecurityScopedBookmarks()
+        bookmarks.unresolvablePaths = [unmounted.path]
+        let access = installSandboxedFolderAccess(defaults: defaults, bookmarks: bookmarks)
+        access.store.grantAccess(to: directory.url)
+        let changes = FolderAccessChangeRecorder(store: access.store)
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: access.store.folderGrants.map { ($0.folderURL.path, $0.isAvailable) }),
+                       [unmounted.path: false, directory.url.path: true])
+
+        let granted = try XCTUnwrap(access.store.folderGrants.first { $0.folderURL.path == directory.url.path })
+        access.store.revoke(grantID: granted.id)
+
+        XCTAssertFalse(access.store.covers(directory.url.appendingPathComponent("Note.md")))
+        XCTAssertEqual(bookmarks.stopped, [directory.url.path])
+        XCTAssertEqual((defaults.array(forKey: "folderAccessGrants") as? [[String: Any]])?.compactMap { $0["id"] as? String }, ["away"])
+        XCTAssertEqual(changes.count, 1)
+
+        access.store.revoke(grantID: "away")
+        XCTAssertTrue(access.store.folderGrants.isEmpty, "an unavailable grant can be removed too")
+        XCTAssertEqual((defaults.array(forKey: "folderAccessGrants") as? [[String: Any]])?.count, 0)
     }
 
     func testABookmarkThatCannotBeMadeStillCoversTheFolderThisSession() throws {
@@ -802,6 +918,74 @@ final class FolderAccessNoticeTests: XCTestCase {
 
         XCTAssertEqual(requests.map(\.suggestedFolder?.path), [nextFolder.path])
         waitUntil { document.fileURL == FileIdentity.normalized(next) }
+    }
+
+    func testALinkFollowedWhileEditingAsksForAReadWriteGrant() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let fileURL = try directory.createTextFile(named: "Plan.md", contents: "# Plan")
+        let nextFolder = directory.url.appendingPathComponent("Other", isDirectory: true)
+        try FileManager.default.createDirectory(at: nextFolder, withIntermediateDirectories: true)
+        let next = nextFolder.appendingPathComponent("Next.md")
+        try Data("# Next".utf8).write(to: next)
+        let access = installSandboxedFolderAccess()
+        access.store.noteUserSelected([fileURL])
+        // Read-only already: reading is covered, saving is not.
+        access.store.grantAccess(to: nextFolder)
+        let (document, _, _) = try makeHostedDocument(fileURL)
+        OpenDocumentRegistry.shared.retain(document)
+        defer { document.close() }
+        document.beginEditing()
+        XCTAssertTrue(document.isEditing)
+        var requests: [FolderAccessRequest] = []
+        FolderAccessFlow.chooseFolder = { request, _, completion in
+            requests.append(request)
+            completion(request.suggestedFolder)
+        }
+
+        XCTAssertEqual(FolderAccessFlow.accessMode(requestedBy: fileURL), .readWrite)
+        document.navigateInCurrentWindow(to: next)
+
+        XCTAssertEqual(requests.map(\.suggestedFolder?.path), [nextFolder.path])
+        XCTAssertTrue(try XCTUnwrap(requests.first).message.contains("in the editor and save your changes"))
+        XCTAssertEqual(access.bookmarks.createdReadOnly, [true, false])
+        XCTAssertTrue(access.store.allowsWriting(next))
+        waitUntil { document.fileURL == FileIdentity.normalized(next) }
+        XCTAssertTrue(document.isEditing)
+    }
+
+    func testEditModeRefusedUnderAReadOnlyGrantOffersAReadWriteGrantAndThenEdits() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let fileURL = try directory.createTextFile(named: "Plan.md", contents: "# Plan")
+        let access = installSandboxedFolderAccess()
+        // Reached through a link: only the read-only folder grant covers it.
+        access.store.grantAccess(to: directory.url)
+        let (document, _, _) = try makeHostedDocument(fileURL)
+        OpenDocumentRegistry.shared.retain(document)
+        defer { document.close() }
+        let refusal = CocoaError(.fileWriteNoPermission, userInfo: [NSURLErrorKey: fileURL])
+
+        let presented = AppDelegate(openURLs: { _ in }).application(NSApplication.shared, willPresentError: refusal)
+
+        let explained = try XCTUnwrap(presented as? FolderAccessDeniedError)
+        XCTAssertEqual(explained.purpose, .editing)
+        XCTAssertEqual((presented as NSError).localizedRecoveryOptions, ["Grant Access…", "Cancel"])
+        var requests: [FolderAccessRequest] = []
+        FolderAccessFlow.chooseFolder = { request, _, completion in
+            requests.append(request)
+            completion(request.suggestedFolder)
+        }
+        XCTAssertFalse(explained.attemptRecovery(optionIndex: 0))
+        XCTAssertEqual(requests.map(\.suggestedFolder?.path), [directory.url.path])
+        XCTAssertTrue(access.store.allowsWriting(fileURL))
+        XCTAssertTrue(document.isEditing, "the read-write grant starts edit mode")
+
+        let elsewhere = URL(fileURLWithPath: "/tmp/wafer-unrelated/Note.md")
+        XCTAssertNil(FolderAccessDeniedError.explainingWriteRefusal(refusal), "now writable: the file's own permissions refused it")
+        XCTAssertNil(FolderAccessDeniedError.explainingWriteRefusal(CocoaError(.fileWriteNoPermission, userInfo: [NSURLErrorKey: elsewhere])),
+                     "a file Wafer cannot even read keeps its own error")
+        XCTAssertNil(FolderAccessDeniedError.explainingWriteRefusal(CocoaError(.fileReadNoPermission, userInfo: [NSURLErrorKey: fileURL])))
     }
 
     private static func webView(in view: NSView) -> WKWebView? {

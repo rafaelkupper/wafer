@@ -599,8 +599,9 @@ final class MarkdownReaderDocument: NSDocument {
            case .markdownFile(let markdownURL) = assetResolver.classify(url) {
             let targetURL = MarkdownDocumentOpener.normalizedFileURL(for: markdownURL)
             let anchorID = MarkdownDocumentOpener.anchorID(in: url)
-            // Under the App Sandbox a target outside the granted folders opens after a grant.
-            guard FolderAccessFlow.ensureAccess(to: targetURL, requestedBy: fileURL, window: host.window, onGranted: { [weak host] in
+            // Under the App Sandbox a target outside the granted folders opens
+            // after a grant; the new tab only reads it.
+            guard FolderAccessFlow.ensureAccess(to: targetURL, requestedBy: fileURL, window: host.window, access: .readOnly, onGranted: { [weak host] in
                 host?.openTab(for: targetURL, anchorID: anchorID)
             }) else { return }
             host.openTab(for: targetURL, anchorID: anchorID)
@@ -793,7 +794,10 @@ final class MarkdownReaderDocument: NSDocument {
 
         // Under the App Sandbox a file outside the granted folders needs the
         // user's grant first; the navigation resumes once it covers the file.
-        guard FolderAccessFlow.ensureAccess(to: normalizedURL, requestedBy: fileURL, window: windowForSheet, onGranted: { [weak self] in
+        // While editing, the file opens in the editor, so the grant must let
+        // Wafer save it too.
+        guard FolderAccessFlow.ensureAccess(to: normalizedURL, requestedBy: fileURL, window: windowForSheet,
+                                            access: isEditing ? .readWrite : .readOnly, onGranted: { [weak self] in
             self?.navigate(to: url, anchorID: anchorID, historyAfterNavigation: historyAfterNavigation)
         }) else {
             return

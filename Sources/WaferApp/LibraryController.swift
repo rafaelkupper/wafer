@@ -83,8 +83,9 @@ final class LibraryController {
             throw CocoaError(.fileReadNoSuchFile)
         }
         // Under the App Sandbox the folder chosen in the open panel or dropped
-        // on the app stays readable in later launches as a folder grant.
-        FolderAccessFlow.refreshDocuments(FolderAccessStore.shared.grantAccess(to: url))
+        // on the app stays accessible in later launches as a folder grant,
+        // read-write because library documents are edited in place.
+        FolderAccessFlow.refreshDocuments(FolderAccessStore.shared.grantAccess(to: url, mode: .readWrite))
         selectLibrary(at: normalizedURL, onFirstScanCompletion: onFirstScanCompletion)
     }
 
