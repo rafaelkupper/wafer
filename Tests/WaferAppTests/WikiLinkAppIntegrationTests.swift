@@ -15,6 +15,7 @@ final class WikiLinkAppIntegrationTests: XCTestCase {
         let reader = RecordingReaderViewController()
         var renderExpectations: [String: XCTestExpectation] = [:]
         let document = MarkdownReaderDocument(
+            scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, baseURL, _, _, _ in
                 if let name = baseURL?.lastPathComponent {
                     renderExpectations.removeValue(forKey: name)?.fulfill()
@@ -52,6 +53,7 @@ final class WikiLinkAppIntegrationTests: XCTestCase {
         let reader = RecordingReaderViewController()
         var externalTargets: [LinkTarget] = []
         let document = MarkdownReaderDocument(
+            scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, _, _, _ in DispatchWorkItem {} },
             linkTargetHandler: { externalTargets.append($0) },
             readerControllerFactory: { reader }
@@ -64,6 +66,7 @@ final class WikiLinkAppIntegrationTests: XCTestCase {
         host.tabDocumentFactoryForTesting = { url in
             let tabReader = RecordingReaderViewController()
             let tabDocument = MarkdownReaderDocument(
+                scrollStateStore: makeTestScrollStateStore(),
                 renderScheduler: { _, _, _, _, _ in DispatchWorkItem {} },
                 readerControllerFactory: { tabReader }
             )
@@ -105,6 +108,7 @@ final class WikiLinkAppIntegrationTests: XCTestCase {
         var completions: [(WebKitRenderOutput) -> Void] = []
         var currentIndex: WikiLinkIndex? = nil
         let document = MarkdownReaderDocument(
+            scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, _, _, completion in
                 renderCount += 1
                 completions.append(completion)

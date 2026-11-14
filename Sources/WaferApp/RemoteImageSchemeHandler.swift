@@ -1,7 +1,7 @@
 import Foundation
 import WebKit
 
-struct RemoteImageResponse: @unchecked Sendable {
+struct RemoteImageResponse: Sendable {
     let response: URLResponse
     let data: Data
 }
@@ -88,7 +88,7 @@ final class RemoteImageSchemeHandler: NSObject, WKURLSchemeHandler {
             request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
             request.timeoutInterval = 15
             request.httpShouldHandleCookies = false
-            request.setValue("Wafer/0.5 RemoteImageLoader", forHTTPHeaderField: "User-Agent")
+            request.setValue(Self.userAgent(), forHTTPHeaderField: "User-Agent")
 
             let taskID = taskBox.identifier
             let token = fetcher.fetch(request) { [weak self] result in
@@ -146,6 +146,12 @@ final class RemoteImageSchemeHandler: NSObject, WKURLSchemeHandler {
         }
     }
 
+    static func userAgent(bundle: Bundle = .main) -> String {
+        let version = (bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return "Wafer/\(version.flatMap { $0.isEmpty ? nil : $0 } ?? "unknown") RemoteImageLoader"
+    }
+
     static func remoteImageURL(from proxyURL: URL?) throws -> URL {
         guard
             let proxyURL,
@@ -183,7 +189,8 @@ enum RemoteImageError: LocalizedError {
     }
 }
 
-final class RemoteImageURLSessionFetcher: NSObject, RemoteImageFetching, @unchecked Sendable {
+@MainActor
+final class RemoteImageURLSessionFetcher: NSObject, RemoteImageFetching {
     private let configuration: URLSessionConfiguration
     private let delegate: RemoteImageSessionDelegate
     // Accessed only by fetch on the main actor and during teardown.
@@ -191,10 +198,11 @@ final class RemoteImageURLSessionFetcher: NSObject, RemoteImageFetching, @unchec
 
     init(
         maximumByteCount: Int = RemoteImageSchemeHandler.defaultMaximumByteCount,
-        configuration: URLSessionConfiguration = RemoteImageURLSessionFetcher.ephemeralConfiguration()
+        configuration: URLSessionConfiguration = RemoteImageURLSessionFetcher.ephemeralConfiguration(),
+        urlGuard: RemoteAssetURLGuard = RemoteAssetURLGuard()
     ) {
         self.configuration = configuration
-        self.delegate = RemoteImageSessionDelegate(maximumByteCount: maximumByteCount)
+        self.delegate = RemoteImageSessionDelegate(maximumByteCount: maximumByteCount, urlGuard: urlGuard)
         super.init()
     }
 
@@ -215,11 +223,11 @@ final class RemoteImageURLSessionFetcher: NSObject, RemoteImageFetching, @unchec
         self.session = session
         let task = session.dataTask(with: request)
         delegate.register(task: task, maximumByteCount: maximumByteCount, completion: completion)
-        task.resume()
+        delegate.start(task)
         return RemoteImageURLSessionToken(task: task)
     }
 
-    static func ephemeralConfiguration() -> URLSessionConfiguration {
+    nonisolated static func ephemeralConfiguration() -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 15
         configuration.httpCookieAcceptPolicy = .never
@@ -231,31 +239,40 @@ final class RemoteImageURLSessionFetcher: NSObject, RemoteImageFetching, @unchec
 
 }
 
-/// The session owns this delegate, which never owns the fetcher or session.
+/// The session owns this delegate; NSLock protects all mutable request state.
 private final class RemoteImageSessionDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     let maximumByteCount: Int
+    private let urlGuard: RemoteAssetURLGuard
     private let lock = NSLock()
     private var states: [Int: RemoteImageURLSessionState] = [:]
 
-    init(maximumByteCount: Int) { self.maximumByteCount = maximumByteCount }
+    init(maximumByteCount: Int, urlGuard: RemoteAssetURLGuard) {
+        self.maximumByteCount = maximumByteCount
+        self.urlGuard = urlGuard
+    }
+
+    func start(_ task: URLSessionDataTask) {
+        // DNS lookup must not block the main actor. No connection starts until it passes.
+        DispatchQueue.global(qos: .utility).async { [self] in
+            do {
+                try urlGuard.validate(task.originalRequest?.url)
+                task.resume()
+            } catch {
+                fail(task: task, error: error)
+            }
+        }
+    }
 
     func register(task: URLSessionTask, maximumByteCount: Int, completion: @escaping @MainActor (Result<RemoteImageResponse, Error>) -> Void) {
         lock.withLock { states[task.taskIdentifier] = RemoteImageURLSessionState(maximumByteCount: min(self.maximumByteCount, max(0, maximumByteCount)), completion: completion) }
     }
 
     private func complete(task: URLSessionTask, result: Result<RemoteImageResponse, Error>) {
-        let state = lock.withLock {
-            states.removeValue(forKey: task.taskIdentifier)
+        let completion = lock.withLock {
+            states.removeValue(forKey: task.taskIdentifier)?.completion
         }
-        guard let state else {
-            return
-        }
-
-        DispatchQueue.main.async {
-            MainActor.assumeIsolated {
-                state.completion(result)
-            }
-        }
+        guard let completion else { return }
+        DispatchQueue.main.async { completion(result) }
     }
 
     private func fail(task: URLSessionTask, error: Error) {
@@ -314,13 +331,15 @@ extension RemoteImageSessionDelegate {
         newRequest request: URLRequest,
         completionHandler: @escaping @Sendable (URLRequest?) -> Void
     ) {
-        guard request.url?.scheme?.lowercased() == "https" else {
+        do {
+            // Preserve the reader/export HTTPS-only transport policy.
+            guard request.url?.scheme?.lowercased() == "https" else { throw RemoteImageError.invalidURL }
+            try urlGuard.validate(request.url)
+            completionHandler(request)
+        } catch {
             completionHandler(nil)
-            fail(task: task, error: RemoteImageError.invalidURL)
-            return
+            fail(task: task, error: error)
         }
-
-        completionHandler(request)
     }
 
     nonisolated func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
@@ -344,7 +363,8 @@ extension RemoteImageSessionDelegate {
     }
 }
 
-private final class RemoteImageURLSessionState: @unchecked Sendable {
+// This mutable state never leaves RemoteImageSessionDelegate's NSLock.
+private final class RemoteImageURLSessionState {
     let completion: @MainActor (Result<RemoteImageResponse, Error>) -> Void
     let maximumByteCount: Int
     var response: URLResponse?
@@ -368,6 +388,7 @@ private final class RemoteImageURLSessionToken: RemoteImageFetchCancellable {
     }
 }
 
+// The task is created and used only inside main-actor WebKit callbacks.
 private final class RemoteImageSchemeTaskBox: @unchecked Sendable {
     let task: any WKURLSchemeTask
     let identifier: ObjectIdentifier

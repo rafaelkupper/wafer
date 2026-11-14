@@ -49,6 +49,17 @@ final class LibrarySearchTests: XCTestCase {
         XCTAssertTrue(matches.first?.snippet.contains("Café") == true)
     }
 
+    func testBodyRankingKeepsRepeatedSubstringCountsAndNormalizedSnippets() {
+        let repeated = libraryFile(path: "Repeated.md", title: "Zed", plainText: "Banana banana bandana. Café CAFE café.")
+        let single = libraryFile(path: "Single.md", title: "Zed", plainText: "Banana café.")
+        let matches = LibrarySearch.fullTextMatches(query: "ana", in: [single, repeated])
+        XCTAssertEqual(matches.map(\.file.relativePath), ["Repeated.md", "Single.md"])
+        XCTAssertEqual(matches.map(\.score), [10_003, 10_001])
+        XCTAssertEqual(LibrarySearch.fullTextMatches(query: "CAFE", in: [repeated]).first?.score, 10_003)
+        XCTAssertEqual(LibrarySearch.fullTextMatches(query: "ana cafe", in: [repeated]).first?.score, 10_006)
+        XCTAssertTrue(LibrarySearch.snippet(query: "cafe", in: repeated).contains("Café"))
+    }
+
     func testHeadingMatchUsesDuplicateSafeSlugFromOutlineItems() {
         let file = libraryFile(
             path: "Sections.md",

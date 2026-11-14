@@ -16,9 +16,11 @@ final class FileChangeMonitor: FileChangeMonitoring {
     private let onChange: () -> Void
 
     private var isStarted = false
-    private var source: DispatchSourceFileSystemObject?
+    // Main-actor access, except exclusive teardown in deinit.
+    nonisolated(unsafe) private var source: DispatchSourceFileSystemObject?
     private var pendingDebounceWorkItem: DispatchWorkItem?
     private var rearmTimer: Timer?
+    private var rearmDelay: TimeInterval = 0
 
     init(
         fileURL: URL,
@@ -49,7 +51,12 @@ final class FileChangeMonitor: FileChangeMonitoring {
         tearDownSource()
     }
 
-    deinit {}
+    deinit { source?.cancel() }
+
+    #if DEBUG
+    var rearmDelayForTesting: TimeInterval { rearmDelay }
+    func pollForReappearanceForTesting() { tryRearm() }
+    #endif
 
     private func installSource() -> Bool {
         guard isStarted, source == nil else { return source != nil }
@@ -100,15 +107,16 @@ final class FileChangeMonitor: FileChangeMonitoring {
 
     private func startRearmLoop() {
         guard isStarted, rearmTimer == nil else { return }
-
-        let timer = Timer.scheduledTimer(withTimeInterval: rearmPollInterval, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.tryRearm()
-            }
-        }
-        timer.tolerance = rearmPollInterval / 5
-        rearmTimer = timer
+        rearmDelay = rearmPollInterval
         tryRearm()
+    }
+
+    private func scheduleRearm() {
+        let timer = Timer.scheduledTimer(withTimeInterval: rearmDelay, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tryRearm() }
+        }
+        timer.tolerance = rearmDelay / 5
+        rearmTimer = timer
     }
 
     private func stopRearmLoop() {
@@ -119,9 +127,13 @@ final class FileChangeMonitor: FileChangeMonitoring {
     private func tryRearm() {
         guard isStarted, source == nil else { return }
 
+        stopRearmLoop()
         if installSource() {
-            stopRearmLoop()
+            rearmDelay = rearmPollInterval
             scheduleDebouncedChange()
+        } else {
+            scheduleRearm()
+            rearmDelay = min(rearmDelay * 2, max(5, rearmPollInterval))
         }
     }
 

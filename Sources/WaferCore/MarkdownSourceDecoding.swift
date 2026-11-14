@@ -49,11 +49,7 @@ public enum MarkdownSourceDecoding {
             return (decoded, .utf8, data.starts(with: [0xEF, 0xBB, 0xBF]))
         }
 
-        guard data.count >= 2, data.count.isMultiple(of: 2) else {
-            return nil
-        }
-
-        return String(data: data, encoding: .utf16LittleEndian).map { ($0, .utf16LittleEndian, false) }
+        return nil
     }
 
     private static func looksLikeUTF16LittleEndian(_ data: Data) -> Bool {

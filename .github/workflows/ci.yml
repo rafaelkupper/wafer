@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show toolchain
+        run: swift --version
+      - name: Check sources and tooling
+        run: scripts/check.sh
+      - name: Assemble app
+        run: scripts/build-app.sh release
+      - name: Verify Quick Look extension
+        run: scripts/verify-appex.sh build/Wafer.app

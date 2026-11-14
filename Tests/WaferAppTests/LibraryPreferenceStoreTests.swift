@@ -19,6 +19,7 @@ final class LibraryPreferenceStoreTests: XCTestCase {
 
         let token = notificationCenter.addObserver(forName: .libraryPreferenceDidChange, object: nil, queue: nil) { note in
             XCTAssertEqual(note.userInfo?["libraryFolderURL"] as? URL, FileIdentity.normalized(url))
+            XCTAssertEqual(LibraryPreferenceChange.value(from: note)?.folderURL, FileIdentity.normalized(url))
             expectation.fulfill()
         }
 
@@ -35,7 +36,18 @@ final class LibraryPreferenceStoreTests: XCTestCase {
         let store = LibraryPreferenceStore(defaults: defaults)
         store.libraryFolderURL = URL(fileURLWithPath: "/tmp/WaferLibrary", isDirectory: true)
 
-        store.libraryFolderURL = nil
+        let notificationCenter = NotificationCenter()
+        let cleared = expectation(description: "typed cleared library preference")
+        let observedStore = LibraryPreferenceStore(defaults: defaults, notificationCenter: notificationCenter)
+        let token = notificationCenter.addObserver(forName: .libraryPreferenceDidChange, object: nil, queue: nil) { note in
+            let change = LibraryPreferenceChange.value(from: note)
+            XCTAssertNotNil(change)
+            XCTAssertNil(change?.folderURL)
+            cleared.fulfill()
+        }
+        defer { notificationCenter.removeObserver(token) }
+        observedStore.libraryFolderURL = nil
+        wait(for: [cleared], timeout: 2)
 
         XCTAssertNil(store.libraryFolderURL)
         XCTAssertNil(defaults.string(forKey: "libraryFolderPath"))

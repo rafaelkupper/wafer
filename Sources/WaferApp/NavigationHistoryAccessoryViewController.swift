@@ -10,6 +10,7 @@ final class NavigationHistoryAccessoryViewController: NSTitlebarAccessoryViewCon
     var onGoBack: (() -> Void)?
     var onGoForward: (() -> Void)?
 
+    #if DEBUG
     var backButtonIsEnabledForTesting: Bool {
         backButton.isEnabled
     }
@@ -21,6 +22,7 @@ final class NavigationHistoryAccessoryViewController: NSTitlebarAccessoryViewCon
     var forwardButtonIsEnabledForTesting: Bool {
         forwardButton.isEnabled
     }
+    #endif
 
     private let containerView = NSView()
 
@@ -83,6 +85,7 @@ final class NavigationHistoryAccessoryViewController: NSTitlebarAccessoryViewCon
         forwardButton.isEnabled = canGoForward
     }
 
+    #if DEBUG
     func triggerBackForTesting() {
         guard backButton.isEnabled else {
             return
@@ -96,6 +99,7 @@ final class NavigationHistoryAccessoryViewController: NSTitlebarAccessoryViewCon
         }
         forwardButton.onActivate?()
     }
+    #endif
 
     func applyCurrentTheme() {
         backButton.applyCurrentTheme()

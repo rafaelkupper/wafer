@@ -29,7 +29,7 @@ enum MarkdownSemanticSupport {
         directiveName
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: #"[_-]+"#, with: " ", options: .regularExpression)
-            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil)
             .lowercased()
             .capitalized
     }

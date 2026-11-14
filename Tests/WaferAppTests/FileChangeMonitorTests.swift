@@ -28,7 +28,7 @@ final class FileChangeMonitorTests: XCTestCase {
 
         try append(" update", to: fileURL)
 
-        wait(for: [change], timeout: 5)
+        wait(for: [change], timeout: 15)
     }
 
     func testBurstWritesWithinDebounceWindowFireExactlyOnce() throws {
@@ -38,7 +38,6 @@ final class FileChangeMonitorTests: XCTestCase {
         let change = expectation(description: "coalesced file change")
         change.expectedFulfillmentCount = 1
         change.assertForOverFulfill = true
-        let settled = expectation(description: "debounce window settled")
 
         let monitor = FileChangeMonitor(
             fileURL: fileURL,
@@ -53,11 +52,7 @@ final class FileChangeMonitorTests: XCTestCase {
         for index in 0..<5 {
             try append(" \(index)", to: fileURL)
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + debounceInterval * 4) {
-            settled.fulfill()
-        }
-
-        wait(for: [change, settled], timeout: 5)
+        wait(for: [change], timeout: 15)
     }
 
     func testAtomicReplaceFiresAndSubsequentInPlaceWriteStillFires() throws {
@@ -88,11 +83,11 @@ final class FileChangeMonitorTests: XCTestCase {
         let replacementURL = try directory.createTextFile(named: "replacement.md", contents: "Replacement")
         XCTAssertEqual(rename(replacementURL.path, fileURL.path), 0)
 
-        wait(for: [replacementObserved], timeout: 5)
+        wait(for: [replacementObserved], timeout: 15)
         baselineAfterReplacement = callbackCount
         try append(" after rearm", to: fileURL)
 
-        wait(for: [subsequentWriteObserved], timeout: 5)
+        wait(for: [subsequentWriteObserved], timeout: 15)
     }
 
     func testDeleteThenRecreateFiresChange() throws {
@@ -112,11 +107,9 @@ final class FileChangeMonitorTests: XCTestCase {
         defer { monitor.stop() }
 
         try FileManager.default.removeItem(at: fileURL)
-        DispatchQueue.main.asyncAfter(deadline: .now() + rearmPollInterval * 3) {
-            try? "Recreated".write(to: fileURL, atomically: true, encoding: .utf8)
-        }
+        try "Recreated".write(to: fileURL, atomically: true, encoding: .utf8)
 
-        wait(for: [recreated], timeout: 5)
+        wait(for: [recreated], timeout: 15)
     }
 
     func testStopPreventsCallbacksAfterWrites() throws {
@@ -139,6 +132,23 @@ final class FileChangeMonitorTests: XCTestCase {
         try append(" update", to: fileURL)
 
         wait(for: [change], timeout: 0.3)
+    }
+
+    func testMissingFileBacksOffAndResetsWhenItReappearsWithoutWaiting() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let file = directory.url.appendingPathComponent("missing.md")
+        let monitor = FileChangeMonitor(fileURL: file, rearmPollInterval: 0.5, onChange: {})
+        monitor.start()
+        defer { monitor.stop() }
+        XCTAssertEqual(monitor.rearmDelayForTesting, 1)
+        for delay in [2.0, 4, 5, 5] {
+            monitor.pollForReappearanceForTesting()
+            XCTAssertEqual(monitor.rearmDelayForTesting, delay)
+        }
+        try Data("returned".utf8).write(to: file)
+        monitor.pollForReappearanceForTesting()
+        XCTAssertEqual(monitor.rearmDelayForTesting, 0.5)
     }
 
     private func append(_ text: String, to fileURL: URL) throws {

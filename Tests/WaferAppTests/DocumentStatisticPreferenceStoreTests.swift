@@ -24,6 +24,7 @@ final class DocumentStatisticPreferenceStoreTests: XCTestCase {
             queue: nil
         ) { note in
             XCTAssertEqual(note.userInfo?["kind"] as? String, DocumentStatisticKind.characters.rawValue)
+            XCTAssertEqual(DocumentStatisticPreferenceChange.value(from: note)?.kind, .characters)
             expectation.fulfill()
         }
 

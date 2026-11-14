@@ -32,6 +32,57 @@ final class UpdateControllerTests: XCTestCase {
         XCTAssertEqual(automaticItem.state, .off)
     }
 
+    func testQuitWaitsForActiveUpdateAndTerminatesOnceWhenCycleEnds() {
+        let state = QuitTestEnvironment()
+        state.active = true
+        let controller = UpdateController(
+            bundle: Bundle(for: Self.self), sessionInProgress: { state.active },
+            hasVisibleWindows: { false }, terminate: { state.terminations += 1 }
+        )
+
+        XCTAssertTrue(controller.postponesQuitAfterLastWindowClosed())
+        XCTAssertTrue(controller.postponesQuitAfterLastWindowClosed())
+        XCTAssertEqual(state.terminations, 0)
+        state.active = false
+        controller.updateCycleDidFinish()
+        XCTAssertEqual(state.terminations, 1)
+        controller.updateCycleDidFinish()
+        XCTAssertEqual(state.terminations, 1)
+        XCTAssertFalse(controller.postponesQuitAfterLastWindowClosed())
+    }
+
+    func testWindowOpenedDuringUpdateCancelsDeferredQuit() {
+        let state = QuitTestEnvironment()
+        state.active = true
+        let controller = UpdateController(
+            bundle: Bundle(for: Self.self), sessionInProgress: { state.active },
+            hasVisibleWindows: { state.visible }, terminate: { state.terminations += 1 }
+        )
+
+        XCTAssertTrue(controller.postponesQuitAfterLastWindowClosed())
+        state.visible = true
+        controller.updateCycleDidFinish()
+        XCTAssertEqual(state.terminations, 0)
+        state.visible = false
+        controller.updateCycleDidFinish()
+        XCTAssertEqual(state.terminations, 0, "the deferred quit must have been cleared")
+        XCTAssertTrue(controller.postponesQuitAfterLastWindowClosed())
+        controller.updateCycleDidFinish()
+        XCTAssertEqual(state.terminations, 1)
+    }
+
+    func testCycleEndingWithoutDeferredQuitDoesNotTerminate() {
+        let state = QuitTestEnvironment()
+        let controller = UpdateController(
+            bundle: Bundle(for: Self.self), sessionInProgress: { false },
+            hasVisibleWindows: { false }, terminate: { state.terminations += 1 }
+        )
+
+        XCTAssertFalse(controller.postponesQuitAfterLastWindowClosed())
+        controller.updateCycleDidFinish()
+        XCTAssertEqual(state.terminations, 0)
+    }
+
     func testSharedControllerIsInertInTheTestHost() {
         XCTAssertNil(Bundle.main.object(forInfoDictionaryKey: "SUFeedURL"))
         XCTAssertFalse(UpdateController.shared.canCheckForUpdates)
@@ -54,4 +105,11 @@ final class UpdateControllerTests: XCTestCase {
         XCTAssertEqual(manifest["SUAutomaticallyUpdate"] as? Bool, false)
         XCTAssertEqual(manifest["SUEnableSystemProfiling"] as? Bool, false)
     }
+}
+
+@MainActor
+private final class QuitTestEnvironment {
+    var active = false
+    var visible = false
+    var terminations = 0
 }

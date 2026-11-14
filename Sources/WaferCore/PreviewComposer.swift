@@ -23,7 +23,10 @@ public struct PreviewComposer {
     public static let sourceByteLimit = 2 * 1024 * 1024
     public static let attachmentByteLimit = 10 * 1024 * 1024
 
-    public init() {}
+    private let allowsLocalImages: Bool
+
+    /// Finder's sandbox grants the requested file, not general access to its siblings.
+    public init(allowsLocalImages: Bool = true) { self.allowsLocalImages = allowsLocalImages }
 
     public func compose(fileURL: URL, isDark: Bool, cancellation: WorkCancellation? = nil) throws -> PreviewComposition {
         let prefix = try BoundedFileReader.prefix(from: fileURL, maximumByteCount: Self.sourceByteLimit)
@@ -36,7 +39,7 @@ public struct PreviewComposer {
         let document = MarkdownParser().parse(source: preparedSource.source, baseURL: fileURL)
         let palette: ReaderThemePalette = isDark ? .dark : .light
         if cancellation?.isCancelled == true { throw CancellationError() }
-        let renderOutput = WebKitHTMLRenderer(palette: palette, target: .preview).render(document: document)
+        let renderOutput = WebKitHTMLRenderer(palette: palette, target: .preview, allowsPreviewLocalImages: allowsLocalImages).render(document: document)
         let title = DocumentSidebarDataBuilder.documentDisplayTitle(for: document, fallbackURL: fileURL)
 
         let attachments = Self.attachmentsWithinPreviewBudget(renderOutput.previewAttachments)
@@ -61,8 +64,18 @@ public struct PreviewComposer {
             guard let range = Range(match.range, in: html), let keyRange = Range(match.range(at: 1), in: html) else { continue }
             result += html[cursor..<range.lowerBound]
             let key = String(html[keyRange])
-            if let url = composition.attachments[key],
-               let data = try? BoundedFileReader.read(from: url, maximumByteCount: remaining) {
+            let data: Data?
+            if let url = composition.attachments[key] {
+                do {
+                    data = try BoundedFileReader.read(from: url, maximumByteCount: remaining)
+                } catch {
+                    WaferLog.rendering.info("Preview omitted image \(url.path, privacy: .private): \(error.localizedDescription, privacy: .public)")
+                    data = nil
+                }
+            } else {
+                data = nil
+            }
+            if let url = composition.attachments[key], let data {
                 remaining -= data.count
                 let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
                 let image = String(html[range]).replacingOccurrences(of: "cid:" + key, with: "data:\(mime);base64,\(data.base64EncodedString())")

@@ -65,9 +65,11 @@ final class SidebarBacklinkRowView: NSView, ThemeApplying {
 
     var onActivate: (() -> Void)?
 
+    #if DEBUG
     var titleForTesting: String {
         titleLabel.stringValue
     }
+    #endif
 
     init(backlink: Backlink) {
         titleLabel = NSTextField(labelWithString: backlink.sourceTitle)

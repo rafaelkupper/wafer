@@ -88,7 +88,8 @@ public struct MarkdownTextFormat: Equatable, Sendable {
     }
 
     /// Encodes LF-normalized text in this format.
-    public func encode(_ normalizedText: String) -> Data {
+    public func encode(_ input: String) -> Data {
+        let normalizedText = Self.normalizingLineEndings(input)
         let text = lineEnding == .lf
             ? normalizedText
             : normalizedText.replacingOccurrences(of: "\n", with: lineEnding.rawValue)

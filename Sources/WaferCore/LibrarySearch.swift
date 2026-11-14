@@ -49,7 +49,7 @@ public enum LibrarySearch {
             return FileMatch(
                 file: file,
                 matchedAnchorID: headingMatch?.item.anchorID,
-                snippet: includesSnippets ? snippet(for: tokens, in: searchableFields.plainText) : "",
+                snippet: includesSnippets ? snippet(for: tokens, in: file.plainText) : "",
                 score: score
             )
         }
@@ -96,7 +96,7 @@ public enum LibrarySearch {
     }
 
     public static func snippet(query: String, in file: LibraryFile) -> String {
-        snippet(for: query.searchTokens, in: file.searchFields.plainText)
+        snippet(for: query.searchTokens, in: file.plainText)
     }
 
     private static func snippet(for tokens: [String], in plainText: String) -> String {
@@ -174,7 +174,7 @@ public enum LibrarySearch {
     static func quickOpenCharacters(for candidate: String) -> [QuickOpenCharacter] {
         candidate.compactMap { original -> QuickOpenCharacter? in
             let folded = String(original)
-                .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+                .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
                 .lowercased()
             guard let foldedCharacter = folded.first, !foldedCharacter.isWhitespace else {
                 return nil
@@ -220,31 +220,23 @@ struct LibrarySearchFields: Equatable, Sendable {
     let relativePath: String
     let title: String
     let body: String
-    let plainText: String
     let headings: [String]
     let quickPath: [QuickOpenCharacter]
     let quickName: [QuickOpenCharacter]
-    private let bodyWordCounts: [String: Int]
 
-    init(fileURL: URL, relativePath: String, title: String, headings: [DocumentOutlineItem], plainText: String, body: String) {
+    init(fileURL: URL, relativePath: String, title: String, headings: [DocumentOutlineItem], body: String) {
         let filename = fileURL.deletingPathExtension().lastPathComponent
         self.filename = filename.libraryFoldedSearchText
         self.relativePath = relativePath.libraryFoldedSearchText
         self.title = title.libraryFoldedSearchText
         self.body = body
-        self.plainText = plainText.collapsingWhitespace
         self.headings = headings.map { $0.title.libraryFoldedSearchText }
         self.quickPath = LibrarySearch.quickOpenCharacters(for: relativePath)
         self.quickName = LibrarySearch.quickOpenCharacters(for: filename)
-        var counts: [String: Int] = [:]
-        for word in body.split(separator: " ") { counts[String(word), default: 0] += 1 }
-        self.bodyWordCounts = counts
     }
 
     func bodyMatchCount(tokens: [String]) -> Int {
-        tokens.reduce(0) { total, token in
-            total + bodyWordCounts.reduce(0) { $0 + $1.key.matchCount(of: token) * $1.value }
-        }
+        tokens.reduce(0) { $0 + body.matchCount(of: $1) }
     }
 
     func contains(_ token: String) -> Bool {

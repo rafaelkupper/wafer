@@ -10,8 +10,19 @@ final class UpdateController: NSObject, NSMenuItemValidation, SPUUpdaterDelegate
 
     private var controller: SPUStandardUpdaterController?
     private var quitsWhenSessionEnds = false
+    private let sessionInProgress: (@MainActor () -> Bool)?
+    private let hasVisibleWindows: @MainActor () -> Bool
+    private let terminate: @MainActor () -> Void
 
-    init(bundle: Bundle = .main) {
+    init(
+        bundle: Bundle = .main,
+        sessionInProgress: (@MainActor () -> Bool)? = nil,
+        hasVisibleWindows: @escaping @MainActor () -> Bool = { NSApp.windows.contains(where: \.isVisible) },
+        terminate: @escaping @MainActor () -> Void = { NSApp.terminate(nil) }
+    ) {
+        self.sessionInProgress = sessionInProgress
+        self.hasVisibleWindows = hasVisibleWindows
+        self.terminate = terminate
         super.init()
         guard bundle.object(forInfoDictionaryKey: "SUFeedURL") != nil else {
             return
@@ -62,7 +73,7 @@ final class UpdateController: NSObject, NSMenuItemValidation, SPUUpdaterDelegate
     /// it closes the update prompt before it opens the download progress.
     /// Quitting there would drop the update, so the quit waits for the session.
     func postponesQuitAfterLastWindowClosed() -> Bool {
-        guard controller?.updater.sessionInProgress == true else {
+        guard (sessionInProgress?() ?? controller?.updater.sessionInProgress) == true else {
             return false
         }
 
@@ -71,13 +82,17 @@ final class UpdateController: NSObject, NSMenuItemValidation, SPUUpdaterDelegate
     }
 
     func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: (any Error)?) {
+        updateCycleDidFinish()
+    }
+
+    func updateCycleDidFinish() {
         guard quitsWhenSessionEnds else {
             return
         }
 
         quitsWhenSessionEnds = false
-        if !NSApp.windows.contains(where: \.isVisible) {
-            NSApp.terminate(nil)
+        if !hasVisibleWindows() {
+            terminate()
         }
     }
 }

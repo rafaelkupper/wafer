@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
 @testable import WaferApp
+@testable import WaferCore
 
 @MainActor
 final class ThemeLibraryTests: XCTestCase {
@@ -18,7 +19,8 @@ final class ThemeLibraryTests: XCTestCase {
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: themesURL.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: themesURL.appendingPathComponent("Example.json").path))
-        XCTAssertTrue(result.diagnostics.isEmpty)
+        XCTAssertEqual(result.diagnostics.map(\.fileName), ["Themes"])
+        XCTAssertTrue(result.diagnostics[0].message.contains("packaging defect"))
         XCTAssertEqual(result.palettes.map(\.name), [], "Example.json is a template and must not be listed")
     }
 
@@ -38,8 +40,8 @@ final class ThemeLibraryTests: XCTestCase {
         let result = library.loadThemes()
 
         XCTAssertEqual(result.palettes.map(\.name), ["Ocean"])
-        XCTAssertEqual(result.diagnostics.map(\.fileName), ["Broken.json"])
-        XCTAssertTrue(result.diagnostics[0].message.contains("invalid"))
+        XCTAssertEqual(result.diagnostics.map(\.fileName), ["Themes", "Broken.json"])
+        XCTAssertTrue(result.diagnostics[1].message.contains("invalid"))
     }
 
     func testLoadThemesIncludesBundledThemes() throws {
@@ -52,6 +54,7 @@ final class ThemeLibraryTests: XCTestCase {
         let library = ThemeLibrary(
             themesDirectoryURL: themesURL,
             bundledThemesDirectoryURL: bundledURL,
+            expectedBundledFileNames: ["Ocean.json"],
             revealHandler: { _ in }
         )
 
@@ -75,6 +78,7 @@ final class ThemeLibraryTests: XCTestCase {
         let library = ThemeLibrary(
             themesDirectoryURL: themesURL,
             bundledThemesDirectoryURL: bundledURL,
+            expectedBundledFileNames: ["Ocean.json"],
             revealHandler: { _ in }
         )
 
@@ -105,6 +109,58 @@ final class ThemeLibraryTests: XCTestCase {
             XCTAssertNotNil(palette, "missing bundled theme '\(name)'")
             XCTAssertNotNil(palette?.tab, "bundled theme '\(name)' must carry explicit tab tokens")
         }
+    }
+
+    func testMissingBundledFileIsDiagnosedWhileOtherThemesRemainAvailable() throws {
+        defer { ReaderTheme.resetToDefaultForTesting() }
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let bundledURL = directory.url.appendingPathComponent("Bundled", isDirectory: true)
+        try FileManager.default.createDirectory(at: bundledURL, withIntermediateDirectories: true)
+        try themeData(named: "Ocean").write(to: bundledURL.appendingPathComponent("Ocean.json"))
+        try Data("{".utf8).write(to: bundledURL.appendingPathComponent("Broken.json"))
+        let library = ThemeLibrary(
+            themesDirectoryURL: directory.url.appendingPathComponent("User"),
+            bundledThemesDirectoryURL: bundledURL,
+            expectedBundledFileNames: ["Ocean.json", "Missing.json", "Broken.json"]
+        )
+
+        let result = library.loadThemes()
+
+        XCTAssertEqual(result.palettes.map(\.name), ["Ocean"])
+        XCTAssertEqual(result.diagnostics.map(\.fileName), ["Missing.json", "Broken.json"])
+        let store = AppearancePreferenceStore(
+            defaults: UserDefaults(suiteName: UUID().uuidString)!, themeLibrary: library,
+            missingCustomThemeNotifier: { _ in }, systemIsDark: { false }
+        )
+        store.appearanceSelection = .custom("Missing")
+        XCTAssertEqual(store.resolvedPalette(), .dark)
+        store.appearanceSelection = .light
+        XCTAssertEqual(store.resolvedPalette(), .light)
+    }
+
+    func testAbsentResourceBundleDoesNotTrap() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        XCTAssertNil(ThemeLibrary.bundledThemesDirectoryURL(in: [directory.url.appendingPathComponent("Absent.bundle")]))
+    }
+
+    func testUnreadableBundledDirectoryIsDiagnosedAndUserThemesStillLoad() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let userURL = directory.url.appendingPathComponent("User")
+        try FileManager.default.createDirectory(at: userURL, withIntermediateDirectories: true)
+        try themeData(named: "Ocean").write(to: userURL.appendingPathComponent("Ocean.json"))
+        let library = ThemeLibrary(
+            themesDirectoryURL: userURL,
+            bundledThemesDirectoryURL: directory.url.appendingPathComponent("Absent")
+        )
+
+        let result = library.loadThemes()
+
+        XCTAssertEqual(result.palettes.map(\.name), ["Ocean"])
+        XCTAssertEqual(result.diagnostics.map(\.fileName), ["Themes"])
+        XCTAssertTrue(result.diagnostics[0].message.contains("unreadable"))
     }
 
     func testThemesDirectoryURLResolvesWithoutCreatingFolder() throws {

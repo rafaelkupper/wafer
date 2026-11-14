@@ -6,7 +6,6 @@ import WebKit
 @MainActor
 class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMessageHandler, NSUserInterfaceValidations, NSSearchFieldDelegate, ThemeApplying {
     private static let headingScrollOffset: Int = 28
-    private static let activeHeadingThreshold: Int = 32
     private static let readerContentWorld = WKContentWorld.world(name: "dev.wafer.reader")
 
     private enum FindDirection {
@@ -27,14 +26,11 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
     private let remoteImageSchemeHandler: RemoteImageSchemeHandler
     private let rootView = NSView()
     private let webView: WKWebView
-    private let findBarView = NSView()
-    private let findSearchField = NSSearchField()
-    private let findStatusLabel = NSTextField(labelWithString: "")
-    private let findPreviousButton = NSButton()
-    private let findNextButton = NSButton()
-    private let findCloseButton = NSButton()
+    private let findBarView = ReaderFindBarView()
+    #if DEBUG
     private var suppressFindExecutionForTesting = false
     private var suppressedFindMatchResultForTesting: Bool?
+    #endif
     private var pendingRestoreFraction: Double?
     private var hasRenderableContent = false
     private var displayedLoadingFileName: String?
@@ -55,12 +51,16 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
     private var scrollSyncInFlight = false
     private var pendingScrollSync: EditorScrollPosition?
     private var lastSyncedMetrics: EditorScrollPosition?
+    #if DEBUG
     private(set) var livePatchCountForTesting = 0
     private(set) var liveFullReloadCountForTesting = 0
+    #endif
     private(set) var currentActiveHeadingID: String?
+    #if DEBUG
     private(set) var lastFindQueryForTesting: String?
     private(set) var lastFindDirectionForTesting: String?
     private(set) var lastFindMatchFoundForTesting: Bool?
+    #endif
 
     var onOpenLink: ((URL) -> Void)?
     var onOpenLinkInNewTab: ((URL) -> Void)?
@@ -96,7 +96,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         webView.navigationDelegate = self
         webView.wantsLayer = true
         webView.layer?.masksToBounds = true
-        webView.setValue(false, forKey: "drawsBackground")
+        webView.underPageBackgroundColor = .clear
         webView.allowsMagnification = false
         webView.allowsBackForwardNavigationGestures = false
         configureScrollBehavior()
@@ -113,6 +113,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         lastKnownScrollFraction
     }
 
+    #if DEBUG
     var horizontalScrollElasticityForTesting: NSScrollView.Elasticity? {
         webContentScrollView()?.horizontalScrollElasticity
     }
@@ -126,16 +127,17 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
     }
 
     var findStatusTextForTesting: String {
-        findStatusLabel.stringValue
+        findBarView.statusLabel.stringValue
     }
 
     var findQueryForTesting: String {
-        findSearchField.stringValue
+        findBarView.searchField.stringValue
     }
 
     var isAwaitingContentReadyForTesting: Bool {
         awaitingContentReady
     }
+    #endif
 
     var isContentReadyForExport: Bool {
         hasRenderableContent && didCompleteCurrentNavigation && !awaitingContentReady && themeUpdateID == nil
@@ -149,25 +151,31 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         isContentReadyForExport ? localAssetSchemeHandler.allowedRootDirectories : []
     }
 
+    #if DEBUG
     func setSuppressFindExecutionForTesting(_ isSuppressed: Bool) {
         suppressFindExecutionForTesting = isSuppressed
     }
+    #endif
 
+    #if DEBUG
     func setSuppressedFindMatchResultForTesting(_ matchFound: Bool?) {
         suppressedFindMatchResultForTesting = matchFound
     }
+    #endif
 
+    #if DEBUG
     func setFindQueryForTesting(_ query: String) {
-        findSearchField.stringValue = query
+        findBarView.searchField.stringValue = query
     }
 
     func triggerFindQueryChangeForTesting() {
-        controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: findSearchField))
+        controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: findBarView.searchField))
     }
 
     static var scrollScriptSourceForTesting: String {
         scrollScript
     }
+    #endif
 
     override func loadView() {
         rootView.frame = NSRect(x: 0, y: 0, width: 920, height: 760)
@@ -182,13 +190,11 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         super.viewDidAppear()
         rootView.window?.appearance = ReaderTheme.windowAppearance
         configureScrollBehavior()
-        suppressWindowChromeArtifacts()
     }
 
     override func viewDidLayout() {
         super.viewDidLayout()
         configureScrollBehavior()
-        suppressWindowChromeArtifacts()
     }
 
     func applyCurrentTheme() {
@@ -196,8 +202,8 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         rootView.layer?.backgroundColor = ReaderTheme.backgroundColor.cgColor
         findBarView.layer?.backgroundColor = ReaderTheme.findBarBackgroundColor.cgColor
         findBarView.layer?.borderColor = ReaderTheme.findBarBorderColor.cgColor
-        findStatusLabel.textColor = ReaderTheme.sidebarSecondaryTextColor
-        for button in [findPreviousButton, findNextButton, findCloseButton] {
+        findBarView.statusLabel.textColor = ReaderTheme.sidebarSecondaryTextColor
+        for button in [findBarView.previousButton, findBarView.nextButton, findBarView.closeButton] {
             button.contentTintColor = ReaderTheme.sidebarPrimaryTextColor
         }
         view.window?.appearance = ReaderTheme.windowAppearance
@@ -205,8 +211,8 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
 
     @objc func showFindInterface(_ sender: Any?) {
         ensureFindBarVisible()
-        view.window?.makeFirstResponder(findSearchField)
-        findSearchField.selectText(nil)
+        view.window?.makeFirstResponder(findBarView.searchField)
+        findBarView.searchField.selectText(nil)
     }
 
     @objc func findNextMatch(_ sender: Any?) {
@@ -303,6 +309,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
             }
     }
 
+    #if DEBUG
     func loadHTMLForTesting(_ html: String, baseURL: URL? = nil, initialScrollFraction: Double? = nil) {
         displayedLoadingFileName = nil
         resetNavigationCompletionState(awaitsContentReady: false)
@@ -313,13 +320,16 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         localAssetSchemeHandler.documentRootDirectory = baseURL
         currentNavigation = webView.loadHTMLString(html, baseURL: baseURL)
     }
+    #endif
 
+    #if DEBUG
     func evaluateJavaScriptForTesting(
         _ script: String,
         completionHandler: (@Sendable (Any?, Error?) -> Void)? = nil
     ) {
         webView.evaluateJavaScript(script, completionHandler: completionHandler)
     }
+    #endif
 
     func exportDOMSnapshot(completion: @escaping @MainActor (Result<String, Error>) -> Void) {
         guard isContentReadyForExport else {
@@ -351,6 +361,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         }
     }
 
+    #if DEBUG
     func evaluateReaderContentJavaScriptForTesting(
         _ script: String,
         completionHandler: (@Sendable (Any?, Error?) -> Void)? = nil
@@ -364,10 +375,13 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
             }
         }
     }
+    #endif
 
+    #if DEBUG
     func invalidateForTesting() {
         shutdown()
     }
+    #endif
 
     func shutdown() {
         invalidateWebViewCallbacks()
@@ -392,7 +406,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
 
     /// True when the current page can be patched in place and scroll-synced.
     var supportsLivePreview: Bool {
-        liveBodyHTML != nil && isContentReadyForExport
+        !ReaderLivePreviewScript.installer.isEmpty && liveBodyHTML != nil && isContentReadyForExport
     }
 
     /// Patches the current page in place with a new render of the same
@@ -433,7 +447,9 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
                 self.liveBodyHTML = body
                 self.liveHelpersInstalled = true
                 self.livePatchStateReady = true
+                #if DEBUG
                 self.livePatchCountForTesting += 1
+                #endif
                 completion?(true)
             } else {
                 self.applyLiveFullReload(renderOutput)
@@ -536,7 +552,9 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
     }
 
     private func applyLiveFullReload(_ renderOutput: WebKitRenderOutput) {
+        #if DEBUG
         liveFullReloadCountForTesting += 1
+        #endif
         let fraction = lastKnownScrollFraction
         apply(renderOutput: renderOutput, initialScrollFraction: fraction >= 0.98 ? 1 : fraction)
     }
@@ -551,21 +569,29 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         lastSyncedMetrics = nil
     }
 
+    #if DEBUG
     func markNavigationFinishedForTesting() {
         handleNavigationFinished()
     }
+    #endif
 
+    #if DEBUG
     func handleContentReadyForTesting() {
         handleContentReady()
     }
+    #endif
 
     static func scrollToHeadingScript(for id: String) -> String {
-        let escapedID = id
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
+        // JSON encodes control characters and quotes; escaping '<' also keeps
+        // the value safe if this script is ever embedded in an HTML element.
+        let json = try! JSONSerialization.data(withJSONObject: id, options: [.fragmentsAllowed])
+        let encodedID = String(decoding: json, as: UTF8.self)
+            .replacingOccurrences(of: "<", with: "\\u003c")
+            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
+            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
         return """
         (function() {
-          const target = document.getElementById("\(escapedID)");
+          const target = document.getElementById(\(encodedID));
           if (!target) {
             return false;
           }
@@ -615,7 +641,6 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
 
     private func handleNavigationFinished() {
         configureScrollBehavior()
-        suppressWindowChromeArtifacts()
         didFinishCurrentNavigation = true
         completeNavigationIfReady()
     }
@@ -657,23 +682,31 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         (onOpenLinkInNewTab ?? onOpenLink)?(url)
     }
 
+    #if DEBUG
     /// Test seam; nil writes to the general pasteboard.
     var pasteboardForCopyCodeForTesting: NSPasteboard?
+    #endif
 
     func handleCopyCode(_ text: String) {
+        #if DEBUG
         let pasteboard = pasteboardForCopyCodeForTesting ?? NSPasteboard.general
+        #else
+        let pasteboard = NSPasteboard.general
+        #endif
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
     }
 
     func controlTextDidChange(_ obj: Notification) {
-        guard obj.object as? NSTextField === findSearchField else {
+        guard obj.object as? NSTextField === findBarView.searchField else {
             return
         }
 
         if normalizedFindQuery().isEmpty {
+            #if DEBUG
             lastFindQueryForTesting = nil
             lastFindMatchFoundForTesting = nil
+            #endif
             updateFindStatus(nil)
             clearBrowserSelection()
             return
@@ -683,7 +716,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-        guard control === findSearchField else {
+        guard control === findBarView.searchField else {
             return false
         }
 
@@ -725,10 +758,10 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         (function() {
           const root = document.scrollingElement || document.documentElement;
           const maxOffset = Math.max(root.scrollHeight - window.innerHeight, 0);
-          window.scrollTo(0, maxOffset * \(clamped));
+          window.scrollTo(0, maxOffset * fraction);
         })();
         """
-        webView.evaluateJavaScript(script)
+        webView.callAsyncJavaScript(script, arguments: ["fraction": clamped], in: nil, in: .page) { _ in }
         lastKnownScrollFraction = clamped
     }
 
@@ -763,7 +796,6 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         }
 
         configureScrollBehavior()
-        suppressWindowChromeArtifacts()
         awaitingContentReady = false
         completeNavigationIfReady()
     }
@@ -852,69 +884,8 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
     }
 
     private func configureFindUI() {
-        findBarView.wantsLayer = true
-        findBarView.layer?.cornerRadius = 10
-        findBarView.layer?.borderWidth = 1
-        findBarView.isHidden = true
-
-        findSearchField.translatesAutoresizingMaskIntoConstraints = false
-        findSearchField.delegate = self
-        findSearchField.placeholderString = "Find in Document"
-        findSearchField.focusRingType = .none
-
-        findStatusLabel.translatesAutoresizingMaskIntoConstraints = false
-        findStatusLabel.font = NSFont.systemFont(ofSize: 11, weight: .medium)
-        findStatusLabel.lineBreakMode = .byTruncatingTail
-
-        configureFindButton(
-            findPreviousButton,
-            symbolName: "chevron.up",
-            action: #selector(findPreviousMatch(_:))
-        )
-        configureFindButton(
-            findNextButton,
-            symbolName: "chevron.down",
-            action: #selector(findNextMatch(_:))
-        )
-        configureFindButton(
-            findCloseButton,
-            symbolName: "xmark",
-            action: #selector(hideFindInterface(_:))
-        )
-
-        let buttonStack = NSStackView(views: [findPreviousButton, findNextButton, findCloseButton])
-        buttonStack.translatesAutoresizingMaskIntoConstraints = false
-        buttonStack.orientation = .horizontal
-        buttonStack.spacing = 6
-        buttonStack.alignment = .centerY
-
-        let contentStack = NSStackView(views: [findSearchField, findStatusLabel, buttonStack])
-        contentStack.translatesAutoresizingMaskIntoConstraints = false
-        contentStack.orientation = .horizontal
-        contentStack.alignment = .centerY
-        contentStack.spacing = 8
-        contentStack.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
-        findBarView.addSubview(contentStack)
-
-        NSLayoutConstraint.activate([
-            contentStack.leadingAnchor.constraint(equalTo: findBarView.leadingAnchor),
-            contentStack.trailingAnchor.constraint(equalTo: findBarView.trailingAnchor),
-            contentStack.topAnchor.constraint(equalTo: findBarView.topAnchor),
-            contentStack.bottomAnchor.constraint(equalTo: findBarView.bottomAnchor),
-            findSearchField.widthAnchor.constraint(equalToConstant: 220),
-            findStatusLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 72),
-        ])
-
+        findBarView.configure(target: self, delegate: self)
         updateFindStatus(nil)
-    }
-
-    private func configureFindButton(_ button: NSButton, symbolName: String, action: Selector) {
-        button.translatesAutoresizingMaskIntoConstraints = false
-        button.target = self
-        button.action = action
-        button.bezelStyle = .texturedRounded
-        button.isBordered = false
-        button.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
     }
 
     private func webContentScrollView() -> NSScrollView? {
@@ -930,20 +901,12 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         return localScrollViews + view.subviews.flatMap(findScrollViews(in:))
     }
 
-    private func suppressWindowChromeArtifacts() {
-        guard let window = view.window else {
-            return
-        }
-
-        WindowChromeSuppression.suppress(in: window)
-    }
-
     private func ensureFindBarVisible() {
         findBarView.isHidden = false
     }
 
     private func normalizedFindQuery() -> String {
-        findSearchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        findBarView.searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func performFind(direction: FindDirection) {
@@ -953,15 +916,22 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
             return
         }
 
+        #if DEBUG
         lastFindQueryForTesting = query
         lastFindDirectionForTesting = direction == .previous ? "previous" : "next"
+        #endif
 
+        #if DEBUG
         if suppressFindExecutionForTesting {
             let matchFound = suppressedFindMatchResultForTesting ?? true
+            #if DEBUG
             lastFindMatchFoundForTesting = matchFound
+            #endif
             updateFindStatus(matchFound ? nil : "No matches")
             return
         }
+
+        #endif
 
         let configuration = WKFindConfiguration()
         configuration.backwards = direction == .previous
@@ -972,14 +942,16 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
                 return
             }
 
+            #if DEBUG
             self.lastFindMatchFoundForTesting = result.matchFound
+            #endif
             self.updateFindStatus(result.matchFound ? nil : "No matches")
         }
     }
 
     private func updateFindStatus(_ text: String?) {
-        findStatusLabel.stringValue = text ?? ""
-        findStatusLabel.isHidden = text == nil || text?.isEmpty == true
+        findBarView.statusLabel.stringValue = text ?? ""
+        findBarView.statusLabel.isHidden = text == nil || text?.isEmpty == true
     }
 
     private func clearBrowserSelection() {
@@ -994,207 +966,8 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         """)
     }
 
-    private static var scrollScript: String {
-        """
-        (function() {
-          if (window.waferReaderScrollInstalled) {
-            return;
-          }
-          window.waferReaderScrollInstalled = true;
+    private static let scrollScript = ReaderScriptResource.load("reader-scroll")
 
-          function clampHorizontalScroll() {
-            if (window.scrollX !== 0) {
-              window.scrollTo(0, window.scrollY);
-            }
-          }
-
-          function currentFraction() {
-            const root = document.scrollingElement || document.documentElement;
-            const maxOffset = Math.max(root.scrollHeight - window.innerHeight, 0);
-            if (maxOffset <= 0) {
-              return 0;
-            }
-            return Math.max(0, Math.min(1, window.scrollY / maxOffset));
-          }
-
-          var pending = false;
-          var pendingClamp = false;
-          function report() {
-            if (!pending) { return; }
-            pending = false;
-            clampHorizontalScroll();
-            window.webkit.messageHandlers.waferScroll.postMessage(currentFraction());
-            window.webkit.messageHandlers.waferActiveHeading.postMessage(currentHeadingID());
-          }
-
-          function performClamp() {
-            if (!pendingClamp) { return; }
-            pendingClamp = false;
-            clampHorizontalScroll();
-          }
-
-          var headingOffsets = [];
-          var headingsDirty = true;
-          function invalidateHeadings() {
-            headingsDirty = true;
-            scheduleReport();
-          }
-          function currentHeadingID() {
-            if (headingsDirty) {
-              headingOffsets = Array.from(document.querySelectorAll('#write h1[id], #write h2[id], #write h3[id], #write h4[id], #write h5[id], #write h6[id]'))
-                .filter(function(heading) { return heading.getClientRects().length > 0; })
-                .map(function(heading) { return { id: heading.id, top: window.scrollY + heading.getBoundingClientRect().top }; });
-              headingsDirty = false;
-            }
-            if (!headingOffsets.length) { return null; }
-            const threshold = window.scrollY + \(activeHeadingThreshold);
-            let low = 0, high = headingOffsets.length;
-            while (low < high) {
-              const middle = (low + high) >>> 1;
-              if (headingOffsets[middle].top <= threshold) { low = middle + 1; }
-              else { high = middle; }
-            }
-            return headingOffsets[Math.max(0, low - 1)].id;
-          }
-          const writeRoot = document.getElementById('write');
-          if (writeRoot) {
-            new ResizeObserver(invalidateHeadings).observe(writeRoot);
-            new MutationObserver(invalidateHeadings).observe(writeRoot, { childList: true, subtree: true, attributes: true, characterData: true });
-          }
-          document.addEventListener('load', invalidateHeadings, true);
-          document.addEventListener('toggle', invalidateHeadings, true);
-          if (document.fonts) { document.fonts.ready.then(invalidateHeadings); }
-
-          function scheduleReport() {
-            if (pending) {
-              return;
-            }
-            pending = true;
-            if (typeof requestAnimationFrame === 'function') {
-              requestAnimationFrame(report);
-            }
-            setTimeout(function() {
-              if (pending) {
-                report();
-              }
-            }, 0);
-          }
-
-          function scheduleClamp() {
-            if (pendingClamp) {
-              return;
-            }
-            pendingClamp = true;
-            if (typeof requestAnimationFrame === 'function') {
-              requestAnimationFrame(performClamp);
-            }
-            setTimeout(function() {
-              if (pendingClamp) {
-                performClamp();
-              }
-            }, 0);
-          }
-
-          function isHorizontallyScrollable(element) {
-            if (!element || element === document.body || element === document.documentElement) {
-              return false;
-            }
-            if (element.scrollWidth > element.clientWidth + 1) {
-              var overflowX = window.getComputedStyle(element).overflowX;
-              return overflowX === 'auto' || overflowX === 'scroll';
-            }
-            return false;
-          }
-
-          window.addEventListener('scroll', function() {
-            scheduleClamp();
-            scheduleReport();
-          }, { passive: true });
-          window.addEventListener('load', function() {
-            scheduleClamp();
-            scheduleReport();
-          }, { once: true });
-          window.addEventListener('resize', function() {
-            invalidateHeadings();
-            scheduleClamp();
-            scheduleReport();
-          });
-          // GitHub-style copy button on fenced code blocks; copying goes
-          // through the native pasteboard so no clipboard permission applies.
-          function installCopyButtons() {
-            var fences = document.querySelectorAll('#write pre.md-fences');
-            for (var i = 0; i < fences.length; i++) {
-              (function(fence) {
-                if (fence.querySelector('.md-copy-button')) {
-                  return;
-                }
-                var button = document.createElement('button');
-                button.className = 'md-copy-button';
-                button.setAttribute('data-wafer-chrome', 'true');
-                button.type = 'button';
-                button.textContent = 'Copy';
-                button.setAttribute('aria-label', 'Copy code block');
-                button.addEventListener('click', function(event) {
-                  event.preventDefault();
-                  var codeNode = fence.querySelector('code');
-                  var text = codeNode ? codeNode.innerText : '';
-                  window.webkit.messageHandlers.waferCopyCode.postMessage(text);
-                  button.textContent = 'Copied';
-                  button.classList.add('is-copied');
-                  setTimeout(function() {
-                    button.textContent = 'Copy';
-                    button.classList.remove('is-copied');
-                  }, 1400);
-                });
-                fence.appendChild(button);
-              })(fences[i]);
-            }
-          }
-          installCopyButtons();
-          // Edit mode patches #write in place; give new code blocks buttons too.
-          if (writeRoot) {
-            var copyButtonsPending = false;
-            new MutationObserver(function() {
-              if (copyButtonsPending) { return; }
-              copyButtonsPending = true;
-              setTimeout(function() { copyButtonsPending = false; installCopyButtons(); }, 0);
-            }).observe(writeRoot, { childList: true });
-          }
-
-          // Middle-clicks never reach the navigation policy delegate, so
-          // report them from the page for open-in-new-tab handling.
-          document.addEventListener('auxclick', function(event) {
-            if (event.button !== 1) {
-              return;
-            }
-            var anchor = event.target instanceof Element ? event.target.closest('a[href]') : null;
-            if (!anchor) {
-              return;
-            }
-            event.preventDefault();
-            event.stopPropagation();
-            window.webkit.messageHandlers.waferOpenLinkInNewTab.postMessage(anchor.href);
-          }, true);
-
-          window.addEventListener('wheel', function(event) {
-            if (Math.abs(event.deltaX) > 0) {
-              var node = event.target instanceof Element ? event.target : null;
-              while (node && node !== document.body) {
-                if (isHorizontallyScrollable(node)) {
-                  return;
-                }
-                node = node.parentElement;
-              }
-              event.preventDefault();
-              scheduleClamp();
-            }
-          }, { passive: false });
-
-          scheduleClamp();
-          scheduleReport();
-        })();
-        """
-    }
 }
 
 @MainActor
@@ -1205,119 +978,5 @@ private final class WeakReaderMessageHandler: NSObject, WKScriptMessageHandler {
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         reader?.userContentController(userContentController, didReceive: message)
-    }
-}
-
-@MainActor
-private final class WebKitLocalAssetSchemeHandler: NSObject, WKURLSchemeHandler {
-    var documentRootDirectory: URL?
-
-    private let coreResourceRootDirectory = ReaderTheme.resourceURL(named: "mermaid.min.js")?.deletingLastPathComponent()
-    private var activeTasks = Set<ObjectIdentifier>()
-
-    var allowedRootDirectories: [URL] {
-        [documentRootDirectory, coreResourceRootDirectory].compactMap { $0 }
-    }
-
-    nonisolated func webView(_ webView: WKWebView, start urlSchemeTask: any WKURLSchemeTask) {
-        let taskBox = LocalAssetSchemeTaskBox(task: urlSchemeTask)
-        MainActor.assumeIsolated {
-            start(taskBox)
-        }
-    }
-
-    nonisolated func webView(_ webView: WKWebView, stop urlSchemeTask: any WKURLSchemeTask) {
-        let taskBox = LocalAssetSchemeTaskBox(task: urlSchemeTask)
-        MainActor.assumeIsolated {
-            _ = activeTasks.remove(taskBox.identifier)
-        }
-    }
-
-    private func start(_ taskBox: LocalAssetSchemeTaskBox) {
-        let urlSchemeTask = taskBox.task
-        let taskID = taskBox.identifier
-        activeTasks.insert(taskID)
-
-        do {
-            guard let url = urlSchemeTask.request.url else {
-                throw NSError(
-                    domain: "WebKitLocalAssetSchemeHandler",
-                    code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "Missing local asset URL."]
-                )
-            }
-            let fileURL = try LocalAssetLoader.fileURL(for: url, allowedRootDirectories: allowedRootDirectories)
-            let mimeType = LocalAssetLoader.mimeType(for: fileURL)
-            let completionBox = LocalAssetCompletionBox { [weak self] result in
-                self?.complete(
-                    taskBox: taskBox,
-                    taskID: taskID,
-                    requestURL: url,
-                    mimeType: mimeType,
-                    result: result
-                )
-            }
-
-            DispatchQueue.global(qos: .userInitiated).async {
-                let result = Result { try Data(contentsOf: fileURL) }
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated {
-                        completionBox.completion(result)
-                    }
-                }
-            }
-        } catch {
-            fail(urlSchemeTask, taskID: taskID, error: error)
-        }
-    }
-
-    private func complete(
-        taskBox: LocalAssetSchemeTaskBox,
-        taskID: ObjectIdentifier,
-        requestURL: URL,
-        mimeType: String,
-        result: Result<Data, Error>
-    ) {
-        guard activeTasks.remove(taskID) != nil else {
-            return
-        }
-
-        switch result {
-        case let .success(data):
-            let response = URLResponse(
-                url: requestURL,
-                mimeType: mimeType,
-                expectedContentLength: data.count,
-                textEncodingName: nil
-            )
-            taskBox.task.didReceive(response)
-            taskBox.task.didReceive(data)
-            taskBox.task.didFinish()
-        case let .failure(error):
-            taskBox.task.didFailWithError(error)
-        }
-    }
-
-    private func fail(_ urlSchemeTask: any WKURLSchemeTask, taskID: ObjectIdentifier, error: Error) {
-        activeTasks.remove(taskID)
-        urlSchemeTask.didFailWithError(error)
-    }
-}
-
-private final class LocalAssetSchemeTaskBox: @unchecked Sendable {
-    let task: any WKURLSchemeTask
-    let identifier: ObjectIdentifier
-
-    init(task: any WKURLSchemeTask) {
-        self.task = task
-        self.identifier = ObjectIdentifier(task)
-    }
-}
-
-private final class LocalAssetCompletionBox: @unchecked Sendable {
-    let completion: @MainActor (Result<Data, Error>) -> Void
-
-    init(completion: @escaping @MainActor (Result<Data, Error>) -> Void) {
-        self.completion = completion
     }
 }

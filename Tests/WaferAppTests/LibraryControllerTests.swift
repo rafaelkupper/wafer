@@ -138,6 +138,37 @@ final class LibraryControllerTests: XCTestCase {
         XCTAssertEqual(scanner.count, 2)
     }
 
+    func testContinuousMonitorChangesStartRescanWithinMaximumWait() async throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let clock = ManualLibraryRescanClock()
+        var monitor: FakeDirectoryMonitor?
+        let controller = LibraryController(
+            preferenceStore: LibraryPreferenceStore(defaults: UserDefaults(suiteName: UUID().uuidString)!),
+            scanner: { _ in LibraryScanner.Result(files: [], truncated: false) },
+            monitorFactory: { rootURL, onChange in
+                let fake = FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange)
+                monitor = fake
+                return fake
+            },
+            rescanScheduler: clock.scheduler
+        )
+        defer { controller.closeLibrary() }
+        let initialScan = expectation(description: "initial scan complete")
+        try controller.openLibrary(at: directory.url) { _ in initialScan.fulfill() }
+        await fulfillment(of: [initialScan], timeout: 2)
+
+        monitor?.fire()
+        // Keep writing more often than the 0.5 s quiet period, through the 2 s deadline.
+        for _ in 0..<7 {
+            clock.advance(by: 0.25)
+            monitor?.fire()
+            XCTAssertFalse(controller.isScanning)
+        }
+        clock.advance(by: 0.25)
+        XCTAssertTrue(controller.isScanning, "continuous writes must start a rescan by 2 seconds")
+    }
+
     func testOpenLibraryRunsScannerOffMainThread() throws {
         let tempDirectory = try TemporaryTestDirectory()
         defer { tempDirectory.remove() }
@@ -249,6 +280,48 @@ final class LibraryControllerTests: XCTestCase {
 
         XCTAssertTrue(firstCompletions.isEmpty)
         XCTAssertEqual(secondCompletions, [[secondFile]])
+    }
+
+    func testLibraryNotificationsExposeTypedScanAndClosePayloads() async throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        _ = try directory.createTextFile(named: "Guide.md", contents: "# Guide")
+        let center = NotificationCenter()
+        let controller = LibraryController(
+            preferenceStore: LibraryPreferenceStore(defaults: UserDefaults(suiteName: UUID().uuidString)!),
+            notificationCenter: center,
+            monitorFactory: { rootURL, onChange in FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange) }
+        )
+        let scanned = expectation(description: "typed content notification")
+        let closed = expectation(description: "typed close notification")
+        let token = center.addObserver(forName: .libraryDidChange, object: nil, queue: nil) { notification in
+            guard let change = LibraryChange.value(from: notification) else {
+                XCTFail("library notification must carry its typed payload")
+                return
+            }
+            XCTAssertFalse(change.truncated)
+            XCTAssertFalse(change.availabilityChanged)
+            XCTAssertEqual(notification.userInfo?["contentChanged"] as? Bool, change.contentChanged)
+            XCTAssertEqual(notification.userInfo?["availabilityChanged"] as? Bool, change.availabilityChanged)
+            if change.rootURL == nil {
+                XCTAssertTrue(change.files.isEmpty)
+                XCTAssertFalse(change.isScanning)
+                XCTAssertTrue(change.contentChanged)
+                XCTAssertNil(change.diff)
+                closed.fulfill()
+            } else if !change.isScanning, !change.files.isEmpty {
+                XCTAssertEqual(change.rootURL, FileIdentity.normalized(directory.url))
+                XCTAssertEqual(change.files.map(\.displayTitle), ["Guide"])
+                XCTAssertTrue(change.contentChanged)
+                XCTAssertEqual(change.diff?.added.count, 1)
+                scanned.fulfill()
+            }
+        }
+        defer { center.removeObserver(token) }
+        try controller.openLibrary(at: directory.url)
+        await fulfillment(of: [scanned], timeout: 2)
+        controller.closeLibrary()
+        await fulfillment(of: [closed], timeout: 2)
     }
 
     func testOpeningNonDirectoryThrows() {
@@ -420,5 +493,26 @@ private final class SupersedingLibraryScanner: @unchecked Sendable {
 
     func releaseFirstScan() {
         releaseFirst.signal()
+    }
+}
+
+@MainActor
+private final class ManualLibraryRescanClock {
+    private var now: TimeInterval = 0
+    private var scheduled: [(deadline: TimeInterval, work: DispatchWorkItem)] = []
+
+    var scheduler: LibraryRescanScheduler {
+        LibraryRescanScheduler(now: { self.now }, schedule: { delay, action in
+            let work = DispatchWorkItem { MainActor.assumeIsolated { action() } }
+            self.scheduled.append((self.now + delay, work))
+            return work
+        })
+    }
+
+    func advance(by interval: TimeInterval) {
+        now += interval
+        let due = scheduled.filter { $0.deadline <= now }
+        scheduled.removeAll { $0.deadline <= now }
+        for item in due where !item.work.isCancelled { item.work.perform() }
     }
 }

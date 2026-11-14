@@ -23,31 +23,20 @@ public final class AssetResolver {
         }
 
         if trimmed.hasPrefix("#"), let baseURL {
-            var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
-            components?.fragment = String(trimmed.dropFirst())
+            var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: true)
+            components?.fragment = String(trimmed.dropFirst()).removingPercentEncoding ?? String(trimmed.dropFirst())
             return components?.url
         }
 
-        if trimmed.hasPrefix("/") {
-            return URL(fileURLWithPath: trimmed).standardizedFileURL
-        }
-
-        guard let baseURL else {
-            return URL(fileURLWithPath: trimmed).standardizedFileURL
-        }
-
-        guard baseURL.isFileURL else {
+        if let baseURL, !baseURL.isFileURL, !trimmed.hasPrefix("/") {
             return URL(string: trimmed, relativeTo: baseURL)?.absoluteURL
         }
 
-        let directoryURL = baseURL.hasDirectoryPath ? baseURL : baseURL.deletingLastPathComponent()
-        let pieces = trimmed.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
-        let pathPart = String(pieces.first ?? "")
-        let fragment = pieces.count > 1 ? String(pieces[1]) : nil
-
-        var resolvedURL = URL(fileURLWithPath: pathPart, relativeTo: directoryURL).standardizedFileURL
-        if let fragment {
-            var components = URLComponents(url: resolvedURL, resolvingAgainstBaseURL: false)
+        guard let destination = URLComponents(string: trimmed) else { return nil }
+        let directoryURL = baseURL.map { $0.hasDirectoryPath ? $0 : $0.deletingLastPathComponent() }
+        var resolvedURL = URL(fileURLWithPath: destination.path, relativeTo: directoryURL).standardizedFileURL
+        if let fragment = destination.fragment {
+            var components = URLComponents(url: resolvedURL, resolvingAgainstBaseURL: true)
             components?.fragment = fragment
             resolvedURL = components?.url ?? resolvedURL
         }
@@ -80,7 +69,7 @@ public final class AssetResolver {
     }
 
     public func classify(_ url: URL) -> LinkTarget {
-        if let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+        if let scheme = url.scheme?.lowercased(), LinkURLPolicy.externalSchemes.contains(scheme) {
             return .external(url)
         }
 
@@ -92,6 +81,6 @@ public final class AssetResolver {
             return .otherFile(url.standardizedFileURLPreservingFragment())
         }
 
-        return .external(url)
+        return .unresolved(url.absoluteString)
     }
 }

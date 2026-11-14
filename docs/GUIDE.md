@@ -24,6 +24,7 @@ This guide describes Wafer's behavior in detail. For an overview and screenshots
 - Off-main-thread parsing
 - Live reload when the open file changes on disk, enabled by default through File > Automatically Reload
 - Manual reload through File > Reload or Cmd-R refreshes the reader and its assets even when the Markdown is unchanged or automatic reload is disabled
+- If an open file is deleted, Wafer checks for its return less often, up to once every five seconds; automatic reload resumes when it returns.
 - Same-document anchors that scroll in place and cross-document anchors that open at the target section
 - GitHub-authored heading links keep working through invisible anchor aliases while Wafer's outline IDs stay stable
 - Bare `http://`, `https://`, `www.`, and email addresses autolink during rendering without double-linking code or existing links
@@ -38,10 +39,12 @@ This guide describes Wafer's behavior in detail. For an overview and screenshots
 - Offline Mermaid rendering for `mermaid` and `mmd` fenced blocks using bundled Mermaid 11.14.0, with dark-reader styling, an explicit diagram inspector, and invalid diagrams showing an inline error and source fallback
 - Offline KaTeX rendering for `math` fenced blocks using bundled KaTeX 0.17.0, with local CSS/font resources loaded only when math is present
 - Syntax-highlighted fenced code blocks for common languages including Swift, shell, JSON, YAML, Markdown, Go, Ruby, Python, Elixir, JavaScript, TypeScript, PHP, C, C++, Rust, Zig, Haskell, Java, HTML/XML, CSS/SCSS, TOML, Diff, Dockerfile, SQL, Kotlin, C#, Objective-C, Lua, Makefile, INI/conf/properties, GraphQL, HCL/Terraform, and protobuf
-- External links open in the default browser
+- External links open in the default browser or mail app. Only `http`, `https`, and `mailto` links open; links with other schemes (for example `javascript:` or app URL schemes) render as plain text and do nothing.
+- Links to known passive files (images, PDF, plain text, RTF, macro-free Office documents, audio, and movies) open directly. Other files, folders, and packages ask first and offer Show in Finder, Open, or Cancel. This includes HTML, apps, scripts, executables, disk images, projects, shortcuts, configuration profiles, notebooks, and unknown file types. Local Markdown files keep opening in Wafer.
+- Files must be UTF-8, or UTF-16 with a byte-order mark; other encodings show an error instead of garbled text. Files over 32 MB are refused rather than shown in part.
 - Local markdown links reuse open windows by file identity and cascade new windows when needed
 - Local images load through a custom local asset scheme in WebKit
-- Remote images load only from `https` URLs through a custom remote-image scheme in WebKit; disable them with File > Load Remote Images when privacy matters, then reload with Cmd-R
+- Remote images load only from `https` URLs through a custom remote-image scheme in WebKit. Loading is on by default. Private, loopback, link-local, CGNAT, unspecified, and multicast destinations are blocked, including redirect targets. Disable them with File > Load Remote Images when privacy matters, then reload with Cmd-R
 - Scroll position is remembered per file fingerprint and preserved across live reloads, with bottom-of-document reloads staying pinned to the bottom
 
 ## Edit Mode
@@ -50,12 +53,12 @@ Edit mode puts the Markdown source next to the rendered document. It is off by d
 
 - Opening edit mode widens the window to the left by the reader's width, so the reader keeps its size and its place on screen while the editor slides out beside it. Closing takes that width back. When the screen has no room to double the window, it grows as far as it can (moving right only if the left edge runs out) and the two panes share the result equally; in full screen they split the screen. With Reduce Motion on, the change is immediate. Drag the line between the panes to resize them, or double-click it to make them equal.
 - The left pane is a plain-text editor with Markdown coloring that follows the current theme: headings, emphasis, links, wiki links, lists and tasks, quotes, tables, front matter, and fenced code (code inside fences uses the reader's syntax colors).
-- The right pane is the normal reader. It re-renders at most every 100 ms while you type and replaces only the blocks that changed, so images, rendered Mermaid diagrams, and math stay in place. The first diagram or math block on a page triggers one full refresh.
+- The right pane is the normal reader. It requests updates every 100 ms while you type. A render already in progress finishes before the newest pending text is rendered. Only changed blocks are replaced, so images, rendered Mermaid diagrams, and math stay in place. The first diagram or math block on a page triggers one full refresh.
 - The reader is not reloaded when edit mode opens or closes, so it does not flash or lose its place.
 - The two panes scroll together, whichever one you scroll: the same source line stays at the top of both. They reach the top and the bottom together; the adjustment that needs is spread over about a screen of lines at each end, so neither pane jumps. Opening edit mode puts the editor at the place you were reading, and outline headings and anchor links move both panes.
 - Edits save automatically about a second after you stop typing, and also when you switch documents, close the tab or window, switch to another app, leave edit mode, or quit. File > Save (`Cmd-S`) saves immediately. File > Revert Edits restores the text from when the file was opened in the editor; it is an ordinary edit, so Undo brings your changes back.
 - Saving keeps the file's encoding (UTF-8 or UTF-16), byte-order mark, line endings, and permissions. If you never change anything, the file is never rewritten.
-- If the file changes on disk while you have no unsaved edits, the editor takes the new version. If both changed, Wafer asks whether to keep your edits, use the disk version, or save your version as a copy. It never overwrites an external change without asking.
+- If the file changes on disk while you have no unsaved edits, the editor takes the new version. If both changed, Wafer asks whether to keep your edits, use the disk version, or save your version as a copy. It never overwrites an external change without asking. A disk version that grows beyond the 32 MB opening limit also triggers this conflict check.
 - Undo and redo are per editor and reset when another file is loaded into it.
 - Read-only files cannot be opened in edit mode.
 
@@ -63,7 +66,9 @@ Limits: the panes are aligned by their top line, so a tall diagram or image can 
 
 ## Folder Library
 
-Open a folder with File > Open Folder... or by dropping a folder on the app. Wafer indexes markdown files with extensions `.md`, `.markdown`, `.mdown`, and `.mkd`, skips hidden files plus `.git`, `.build`, `build`, `dist`, and `node_modules`, and caps the visible library at 2,000 markdown files. If the cap is reached, the Library sidebar shows a quiet truncation footer.
+Open a folder with File > Open Folder... or by dropping a folder on the app. Wafer indexes markdown files with extensions `.md`, `.markdown`, `.mdown`, and `.mkd`, skips hidden files plus `.git`, `.build`, `build`, `dist`, and `node_modules`, and caps the visible library at 2,000 markdown files. If the cap is reached, the Library sidebar shows a quiet truncation footer. Files that cannot be read, or that exceed the indexing budget (2 MiB per file, 128 MiB for the whole library), are left out of the index and counted in a footer such as "3 files skipped (unreadable or too large)". One unreadable file never empties the library; a file that becomes unreadable keeps its last indexed entry.
+
+Folder changes refresh the library after 500 ms without another change. If another app keeps writing, Wafer requests a rescan within two seconds rather than waiting for the writing to stop. Any cancelled scan finishes before the next scan starts.
 
 When a folder is opened without an existing reader window, Wafer opens the first markdown file from the completed background scan as the visible entry point for the library.
 
@@ -121,9 +126,11 @@ theme. Dark and custom themes are exported as dark/custom output rather than bei
   Wafer app-only chrome are stripped, and local images are inlined as `data:` URIs. KaTeX fonts are
   not inlined, so exported math can fall back to system italic fonts when opened outside Wafer.
 
+File > Load Remote Images remains a checkable toggle in the top menu and is on by default. Its checkmark shows your saved choice. Turning it off blocks subsequent remote image requests; reload with Cmd-R to apply your choice to the current document.
+
 Remote image export follows File > Load Remote Images. When remote images are disabled, HTML export
 does not fetch remote URLs and removes those images from the standalone file. When enabled, export
-fetches `https` images with the same privacy posture as the reader; failed remote images are dropped
+fetches `https` images with the same destination checks as the reader, including every redirect; failed remote images are dropped
 without failing the whole export. HTML export has a 20 MB total inlined-image budget and reports an
 error if the document would exceed it.
 
@@ -134,10 +141,9 @@ Wafer ships a Quick Look preview extension for Finder space-bar previews of mark
 Quick Look previews are intentionally static:
 
 - Mermaid and math fences render as highlighted source code because Finder previews do not emit or execute bundled JavaScript.
-- Local images are inlined as `data:` URLs so they can render without Wafer's custom WebKit schemes.
+- Local images are omitted. The sandboxed extension is not allowed to read files next to the previewed document.
 - Remote images render as placeholders and are never fetched from Finder previews.
 - Markdown source larger than 2 MB is truncated at a newline and ends with a truncation note.
-- Local image attachments are capped at 10 MB total for the preview.
 - The preview follows the current system light/dark appearance. App-selected custom themes are deferred to the main app.
 
 ## Appearance Themes
@@ -162,6 +168,8 @@ to a new file, change its `name`, and edit the colors. It is the safest starting
 custom themes must provide a complete palette; missing keys, invalid hex colors, or alpha values
 outside `0...1` make the file invalid. Invalid files are skipped when themes reload, and valid
 files remain available.
+
+If a bundled theme is missing or unreadable, Wafer logs the packaging defect and keeps the remaining themes available. System, Light, and Dark still work, and an unavailable selected theme falls back to Dark.
 
 Custom themes use one JSON file per palette. The top-level JSON mirrors `ReaderThemePalette`:
 

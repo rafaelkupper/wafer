@@ -21,7 +21,7 @@ public struct LibraryFile: Equatable, Sendable {
     public let displayTitle: String
     public let outlineItems: [DocumentOutlineItem]
     public let plainText: String
-    public let searchableText: String
+    public var searchableText: String { searchFields.body }
     public let contentFingerprint: LibraryFileFingerprint
     public let outgoingReferences: [OutgoingReference]
 
@@ -39,14 +39,13 @@ public struct LibraryFile: Equatable, Sendable {
         self.relativePath = relativePathComponents.joined(separator: "/")
         self.searchFields = LibrarySearchFields(
             fileURL: fileURL, relativePath: relativePathComponents.joined(separator: "/"),
-            title: displayTitle, headings: outlineItems, plainText: plainText, body: searchableText
+            title: displayTitle, headings: outlineItems, body: searchableText
         )
         self.fileURL = fileURL
         self.relativePathComponents = relativePathComponents
         self.displayTitle = displayTitle
         self.outlineItems = outlineItems
-        self.plainText = plainText
-        self.searchableText = searchableText
+        self.plainText = plainText.collapsingWhitespace
         self.contentFingerprint = contentFingerprint
         self.outgoingReferences = outgoingReferences
     }
@@ -67,11 +66,13 @@ public enum LibraryScanner {
         public let files: [LibraryFile]
         public let truncated: Bool
         public let failure: Failure?
+        public let skippedItemCount: Int
 
-        public init(files: [LibraryFile], truncated: Bool, failure: Failure? = nil) {
+        public init(files: [LibraryFile], truncated: Bool, failure: Failure? = nil, skippedItemCount: Int = 0) {
             self.files = files
             self.truncated = truncated
             self.failure = failure
+            self.skippedItemCount = skippedItemCount
         }
     }
 
@@ -85,7 +86,8 @@ public enum LibraryScanner {
 
     public static func scan(
         rootURL: URL, fileLimit: Int = 2_000, existingFiles: [LibraryFile] = [],
-        changedPaths: Set<String>? = [], cancellation: WorkCancellation? = nil
+        changedPaths: Set<String>? = [], cancellation: WorkCancellation? = nil,
+        maximumFileByteCount: Int = 2 * 1024 * 1024, maximumLibraryByteCount: Int = 128 * 1024 * 1024
     ) -> Result {
         guard fileLimit > 0 else {
             var traversal = LibraryTraversal(rootURL: FileIdentity.normalized(rootURL), fileLimit: 1)
@@ -101,43 +103,54 @@ public enum LibraryScanner {
         }
         let parser = MarkdownParser()
         let existing = Dictionary(existingFiles.map { ($0.identity, $0) }, uniquingKeysWith: { first, _ in first })
-        var files: [LibraryFile] = []
+        var files: [LibraryFile] = existingFiles.filter { previous in
+            traversal.skippedURLs.contains { skipped in
+                let path = FileIdentity.identity(for: skipped)
+                return previous.fileURL.path == path || previous.fileURL.path.hasPrefix(path + "/")
+            }
+        }
+        var skippedItemCount = traversal.skippedURLs.count
+        var remainingBytes = max(0, maximumLibraryByteCount) - files.reduce(0) { $0 + Int(clamping: $1.contentFingerprint.fileSize) }
         for url in fileURLs {
             if cancellation?.isCancelled == true { break }
             do {
                 let metadata = try fingerprint(for: url)
                 let identity = FileIdentity.identity(for: url)
+                guard FileManager.default.isReadableFile(atPath: url.path) else { throw CocoaError(.fileReadNoPermission) }
                 if let previous = existing[identity], let changedPaths,
                    !changedPaths.contains(identity),
                    previous.contentFingerprint.modificationDate == metadata.modificationDate,
                    previous.contentFingerprint.fileSize == metadata.fileSize {
+                    if previous.contentFingerprint.fileSize > UInt64(max(0, min(maximumFileByteCount, remainingBytes))) { skippedItemCount += 1 }
+                    remainingBytes -= Int(clamping: previous.contentFingerprint.fileSize)
                     files.append(previous)
                     continue
                 }
-                if let file = try autoreleasepool(invoking: { try makeLibraryFile(for: url, rootURL: normalizedRootURL, parser: parser) }) {
-                    files.append(file)
+                let data = try BoundedFileReader.read(from: url, maximumByteCount: max(0, min(maximumFileByteCount, remainingBytes)))
+                remainingBytes -= data.count
+                guard let source = MarkdownSourceDecoding.decode(data) else { throw CocoaError(.fileReadInapplicableStringEncoding) }
+                let file = try autoreleasepool {
+                    try makeLibraryFile(for: url, rootURL: normalizedRootURL, parser: parser, data: data, source: source, before: metadata)
                 }
+                files.append(file)
             } catch {
-                return Result(files: [], truncated: traversal.truncated,
-                    failure: Failure(url: url, message: error.localizedDescription))
+                skippedItemCount += 1
+                WaferLog.library.info("Skipped library item \(url.path, privacy: .private): \(error.localizedDescription, privacy: .public)")
+                if let previous = existing[FileIdentity.identity(for: url)] {
+                    remainingBytes -= Int(clamping: previous.contentFingerprint.fileSize)
+                    files.append(previous)
+                }
             }
         }
-        return Result(files: files, truncated: traversal.truncated)
+        files.sort { $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending }
+        return Result(files: files, truncated: traversal.truncated, skippedItemCount: skippedItemCount)
     }
 
-    private static func makeLibraryFile(for fileURL: URL, rootURL: URL, parser: MarkdownParser) throws -> LibraryFile? {
-        let before = try fingerprint(for: fileURL)
-        let data = try Data(contentsOf: fileURL)
-        guard let source = MarkdownSourceDecoding.decode(data) else {
-            return nil
-        }
-
+    private static func makeLibraryFile(for fileURL: URL, rootURL: URL, parser: MarkdownParser, data: Data, source: String, before: LibraryFileFingerprint) throws -> LibraryFile {
         let normalizedURL = FileIdentity.normalized(fileURL)
         let document = parser.parse(source: source, baseURL: normalizedURL)
         let plainText = RenderedTextDocumentStatistics.renderedText(from: document).collapsingWhitespace
         let after = try fingerprint(for: fileURL)
-        // A file changed while being read. Keep a deliberately stale metadata
-        // stamp so the next scan rereads it rather than caching a mixed version.
         let date = before == after ? after.modificationDate : .distantPast
 
         return LibraryFile(
@@ -174,6 +187,7 @@ public enum LibraryScanner {
         let cancellation: WorkCancellation?
         private(set) var truncated = false
         private(set) var failure: Failure?
+        private(set) var skippedURLs: [URL] = []
         private var files: [URL] = []
 
         init(rootURL: URL, fileLimit: Int, cancellation: WorkCancellation? = nil) {
@@ -204,7 +218,9 @@ public enum LibraryScanner {
                 children = try FileManager.default.contentsOfDirectory(
                     at: directoryURL, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles])
             } catch {
-                failure = Failure(url: directoryURL, message: error.localizedDescription)
+                if directoryURL == rootURL {
+                    failure = Failure(url: directoryURL, message: error.localizedDescription)
+                } else { skippedURLs.append(directoryURL) }
                 return
             }
 
@@ -219,13 +235,11 @@ public enum LibraryScanner {
                 do {
                     values = try childURL.resourceValues(forKeys: keys)
                 } catch {
-                    failure = Failure(url: childURL, message: error.localizedDescription)
-                    return
+                    skippedURLs.append(childURL)
+                    continue
                 }
+                if values.isSymbolicLink == true { continue }
                 if values.isDirectory == true {
-                    guard values.isSymbolicLink != true else {
-                        continue
-                    }
                     guard !LibraryScanner.skippedDirectoryNames.contains(childURL.lastPathComponent) else {
                         continue
                     }
@@ -252,7 +266,7 @@ public enum LibraryScanner {
 
 extension String {
     var libraryFoldedSearchText: String {
-        folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
             .lowercased()
             .collapsingWhitespace
     }

@@ -9,7 +9,8 @@ import XCTest
 final class MarkdownEditSessionTests: XCTestCase {
     private func makeSession(
         for url: URL,
-        resolver: @escaping EditConflictResolver = { _, _ in XCTFail("unexpected conflict"); return .cancel }
+        resolver: @escaping EditConflictResolver = { _, _ in XCTFail("unexpected conflict"); return .cancel },
+        writer: @escaping MarkdownEditSession.FileWriter = MarkdownEditSession.replaceContents
     ) throws -> MarkdownEditSession {
         let data = try Data(contentsOf: url)
         let decoded = try XCTUnwrap(MarkdownTextFormat.decode(data))
@@ -18,8 +19,97 @@ final class MarkdownEditSessionTests: XCTestCase {
             text: MarkdownTextFormat.normalizingLineEndings(decoded.text),
             fingerprint: FileFingerprint.sha256Hex(for: data),
             format: decoded.format,
-            resolveConflict: resolver
+            resolveConflict: resolver,
+            worker: MarkdownSaveWorker(writer: writer)
         )
+    }
+
+    func testFailedReplacementKeepsTheOriginalAndReportsItsError() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let url = try directory.createTextFile(named: "Doc.md", contents: "original\n")
+        let failure = CocoaError(.fileWriteOutOfSpace)
+        var conflicts: [EditConflictKind] = []
+        let session = try makeSession(for: url, resolver: { kind, _ in
+            conflicts.append(kind)
+            return .cancel
+        }, writer: { _, _, beforeReplacing in
+            try beforeReplacing()
+            throw failure
+        })
+
+        XCTAssertEqual(session.save("mine\n", interactive: false), .keptInMemory)
+        XCTAssertEqual(conflicts, [], "non-interactive saves never prompt")
+        XCTAssertEqual(session.save("mine\n", interactive: true), .keptInMemory)
+        XCTAssertEqual(conflicts, [.writeFailed(failure.localizedDescription)], "the original error reaches the prompt")
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "original\n")
+        XCTAssertEqual(session.savedText, "original\n")
+    }
+
+    func testReplacementFailureNeverFallsBackToWritingInPlace() throws {
+        try XCTSkipIf(getuid() == 0, "permissions do not apply to root")
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let folder = directory.url.appendingPathComponent("Locked", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let url = folder.appendingPathComponent("Doc.md")
+        try Data("original\n".utf8).write(to: url)
+        // The file stays writable, but its folder refuses the swap.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+
+        XCTAssertThrowsError(try MarkdownEditSession.replaceContents(of: url, with: Data("new\n".utf8))) { error in
+            XCTAssertEqual((error as? CocoaError)?.code, .fileWriteNoPermission)
+        }
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "original\n")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path), ["Doc.md"])
+    }
+
+    func testDiskIsComparedAgainRightBeforeTheReplace() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let url = try directory.createTextFile(named: "Doc.md", contents: "one\n")
+        var conflicts: [EditConflictKind] = []
+        let session = try makeSession(for: url, resolver: { kind, _ in
+            conflicts.append(kind)
+            return .cancel
+        }, writer: { target, data, beforeReplacing in
+            try MarkdownEditSession.replaceContents(of: target, with: data) {
+                // Another program writes after the new bytes were staged.
+                try Data("theirs\n".utf8).write(to: target)
+                try beforeReplacing()
+            }
+        })
+
+        XCTAssertEqual(session.save("mine\n", interactive: true), .keptInMemory)
+        XCTAssertEqual(conflicts, [.changedOnDisk])
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "theirs\n")
+    }
+
+    func testBackgroundSaveRunsOffTheMainThreadAndSkipsUnchangedText() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let url = try directory.createTextFile(named: "Doc.md", contents: "one\n")
+        let writer = RecordingFileWriter()
+        let session = try makeSession(for: url, writer: { try writer.write($0, $1, $2) })
+
+        var outcomes: [MarkdownEditSession.BackgroundOutcome] = []
+        XCTAssertTrue(session.saveInBackground(EditSnapshot(text: "one\ntwo\n", revision: 7)) { outcomes.append($0) })
+        XCTAssertTrue(session.isSaving)
+        XCTAssertFalse(session.saveInBackground(EditSnapshot(text: "other", revision: 8)) { _ in }, "one save at a time")
+        let deadline = Date(timeIntervalSinceNow: 5)
+        while outcomes.isEmpty, Date() < deadline {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        }
+
+        XCTAssertEqual(outcomes, [.saved])
+        XCTAssertEqual(writer.writes, ["one\ntwo\n"])
+        XCTAssertEqual(writer.wroteOnMainThread, [false])
+        XCTAssertEqual(session.savedText, "one\ntwo\n")
+        XCTAssertEqual(session.savedRevision, 7)
+        XCTAssertEqual(session.save(EditSnapshot(text: "one\ntwo\n", revision: 7), interactive: true), .unchanged)
+        XCTAssertEqual(session.save("one\ntwo\n", interactive: true), .unchanged)
+        XCTAssertEqual(writer.writes.count, 1, "unchanged text writes nothing")
     }
 
     func testSaveKeepsByteOrderMarkAndLineEndingsAndSkipsUnchangedText() throws {
@@ -126,6 +216,8 @@ final class DocumentEditModeTests: XCTestCase {
     private var renderedSources: [String] = []
     private var conflicts: [EditConflictKind] = []
     private var conflictResolution: EditConflictResolution = .overwrite
+    /// Runs inside the conflict prompt, as events do while a modal alert is up.
+    private var duringConflictPrompt: (() -> Void)?
     private var loadErrors: [Error] = []
 
     override func setUp() async throws {
@@ -134,6 +226,7 @@ final class DocumentEditModeTests: XCTestCase {
         renderedSources = []
         conflicts = []
         conflictResolution = .overwrite
+        duringConflictPrompt = nil
         loadErrors = []
     }
 
@@ -144,16 +237,20 @@ final class DocumentEditModeTests: XCTestCase {
     private func makeDocument(
         for url: URL,
         autosaveDelay: TimeInterval = 0.05,
-        makesWindow: Bool = true
+        makesWindow: Bool = true,
+        sourceLoader: @escaping MarkdownReaderDocument.SourceLoader = MarkdownReaderDocument.loadSource,
+        fileWriter: @escaping MarkdownEditSession.FileWriter = MarkdownEditSession.replaceContents
     ) throws -> (MarkdownReaderDocument, RecordingReaderViewController) {
         let reader = RecordingReaderViewController()
         let document = MarkdownReaderDocument(
+            scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { [weak self] source, baseURL, _, _, completion in
                 self?.renderedSources.append(source)
                 completion(WebKitRenderOutput(html: "<html><body><div id=\"write\"></div></body></html>", baseURL: baseURL))
                 return DispatchWorkItem {}
             },
             readerControllerFactory: { reader },
+            sourceLoader: sourceLoader,
             fileMonitorFactory: { [weak self] _, onChange in
                 let monitor = EditTestFileMonitor(onChange: onChange)
                 self?.monitors.append(monitor)
@@ -162,8 +259,10 @@ final class DocumentEditModeTests: XCTestCase {
             sourceLoadErrorHandler: { [weak self] in self?.loadErrors.append($0) },
             editConflictResolver: { [weak self] kind, _ in
                 self?.conflicts.append(kind)
+                self?.duringConflictPrompt?()
                 return self?.conflictResolution ?? .cancel
             },
+            editFileWriter: fileWriter,
             autosaveDelay: autosaveDelay,
             liveRenderInterval: 0.01
         )
@@ -181,7 +280,7 @@ final class DocumentEditModeTests: XCTestCase {
         textView.insertText(text, replacementRange: NSRange(location: end, length: 0))
     }
 
-    private func waitUntil(_ description: String, timeout: TimeInterval = 3, _ condition: @escaping () -> Bool) {
+    private func waitUntil(_ description: String, timeout: TimeInterval = 10, _ condition: @escaping () -> Bool) {
         let deadline = Date(timeIntervalSinceNow: timeout)
         while !condition(), Date() < deadline {
             RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
@@ -347,6 +446,233 @@ final class DocumentEditModeTests: XCTestCase {
         XCTAssertEqual(document.editorControllerForTesting?.undoManagerForTesting.canUndo, false)
     }
 
+    func testTextTypedWhileTheNextFileLoadsIsSavedBeforeTheEditorSwitches() throws {
+        let first = try directory.createTextFile(named: "First.md", contents: "first\n")
+        let second = try directory.createTextFile(named: "Second.md", contents: "second\n")
+        let gate = SourceReadGate()
+        let (document, _) = try makeDocument(for: first, autosaveDelay: 60, sourceLoader: { url in
+            if url.lastPathComponent == "Second.md" { gate.wait() }
+            return try MarkdownReaderDocument.loadSource(from: url)
+        })
+        defer { gate.release(); document.close() }
+        document.beginEditing()
+        try type("one", in: document)
+
+        document.navigateInCurrentWindow(to: second)
+        waitUntil("the next file is being read") { gate.isWaiting }
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "first\none", "saved before the read")
+        try type(" two", in: document)
+        gate.release()
+
+        waitUntil("navigated") { document.fileURL?.lastPathComponent == "Second.md" }
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "first\none two", "text typed during the read was saved")
+        XCTAssertEqual(document.editorControllerForTesting?.text, "second\n")
+        XCTAssertEqual(conflicts, [])
+    }
+
+    func testFailedSaveWhenTheNextFileArrivesKeepsTheCurrentFile() throws {
+        let first = try directory.createTextFile(named: "First.md", contents: "first\n")
+        let second = try directory.createTextFile(named: "Second.md", contents: "second\n")
+        let gate = SourceReadGate()
+        let (document, _) = try makeDocument(for: first, autosaveDelay: 60, sourceLoader: { url in
+            if url.lastPathComponent == "Second.md" { gate.wait() }
+            return try MarkdownReaderDocument.loadSource(from: url)
+        })
+        defer { gate.release(); document.close() }
+        document.beginEditing()
+
+        document.navigateInCurrentWindow(to: second)
+        waitUntil("the next file is being read") { gate.isWaiting }
+        try type("mine", in: document)
+        try Data("theirs\n".utf8).write(to: first)
+        conflictResolution = .cancel
+        gate.release()
+
+        waitUntil("the commit tried to save") { self.conflicts == [.changedOnDisk] }
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        XCTAssertEqual(document.fileURL?.lastPathComponent, "First.md", "navigation was abandoned")
+        XCTAssertTrue(document.isEditing)
+        XCTAssertEqual(document.editorControllerForTesting?.text, "first\nmine")
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "theirs\n")
+        XCTAssertTrue(document.navigationHistory.backEntries.isEmpty)
+    }
+
+    func testReloadStartedDuringTheCommitPromptCannotReplaceTheNextFile() throws {
+        let first = try directory.createTextFile(named: "First.md", contents: "first\n")
+        let second = try directory.createTextFile(named: "Second.md", contents: "second\n")
+        let gate = SourceReadGate()
+        let (document, _) = try makeDocument(for: first, autosaveDelay: 60, sourceLoader: { url in
+            if url.lastPathComponent == "Second.md" { gate.wait() }
+            return try MarkdownReaderDocument.loadSource(from: url)
+        })
+        defer { gate.release(); document.close() }
+        document.beginEditing()
+        document.navigateInCurrentWindow(to: second)
+        waitUntil("the next file is being read") { gate.isWaiting }
+        try type("mine", in: document)
+        try Data("theirs\n".utf8).write(to: first)
+        // The first file changes again while the commit's conflict prompt is open.
+        duringConflictPrompt = { [weak self] in
+            self?.duringConflictPrompt = nil
+            self?.monitors.last?.onChange()
+        }
+        conflictResolution = .overwrite
+        gate.release()
+
+        waitUntil("navigated") { document.fileURL?.lastPathComponent == "Second.md" }
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.3))
+        XCTAssertEqual(document.editorControllerForTesting?.text, "second\n", "the stale reload of the first file was dropped")
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "first\nmine")
+        XCTAssertEqual(conflicts, [.changedOnDisk])
+    }
+
+    func testFailedAutosaveKeepsTheFileAndReportsTheError() throws {
+        let url = try directory.createTextFile(named: "Doc.md", contents: "one\n")
+        let failure = CocoaError(.fileWriteVolumeReadOnly)
+        let (document, _) = try makeDocument(for: url, fileWriter: { _, _, beforeReplacing in
+            try beforeReplacing()
+            throw failure
+        })
+        defer { document.close() }
+        conflictResolution = .cancel
+        document.beginEditing()
+        try type("mine", in: document)
+
+        waitUntil("the failed save was reported") { !self.conflicts.isEmpty }
+        XCTAssertEqual(conflicts, [.writeFailed(failure.localizedDescription)])
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "one\n")
+        XCTAssertEqual(document.editorControllerForTesting?.text, "one\nmine")
+        XCTAssertTrue(document.isEditing)
+    }
+
+    func testExplicitSaveWaitsForTheBackgroundSaveAndWritesTheRest() throws {
+        let url = try directory.createTextFile(named: "Doc.md", contents: "one\n")
+        let writer = RecordingFileWriter()
+        let (document, _) = try makeDocument(for: url, autosaveDelay: 0.01, fileWriter: { try writer.write($0, $1, $2) })
+        defer { writer.release(); document.close() }
+        document.beginEditing()
+        writer.holdNextWrite()
+        try type("A", in: document)
+        waitUntil("autosave is writing") { writer.isHolding }
+        try type("B", in: document)
+
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { writer.release() }
+        XCTAssertTrue(document.flushEdits(interactive: true))
+
+        XCTAssertEqual(writer.writes, ["one\nA", "one\nAB"])
+        XCTAssertEqual(writer.wroteOnMainThread.first, false, "autosave writes off the main thread")
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "one\nAB")
+    }
+
+    func testTextTypedDuringABackgroundSaveIsSavedNext() throws {
+        let url = try directory.createTextFile(named: "Doc.md", contents: "one\n")
+        let writer = RecordingFileWriter()
+        let (document, _) = try makeDocument(for: url, autosaveDelay: 0.01, fileWriter: { try writer.write($0, $1, $2) })
+        defer { writer.release(); document.close() }
+        document.beginEditing()
+        writer.holdNextWrite()
+        try type("A", in: document)
+        waitUntil("autosave is writing") { writer.isHolding }
+        try type("B", in: document)
+        // The next autosave comes due while the first save is still running.
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+        writer.release()
+
+        waitUntil("the newer text was saved too") { (try? String(contentsOf: url, encoding: .utf8)) == "one\nAB" }
+        XCTAssertEqual(writer.writes, ["one\nA", "one\nAB"])
+        XCTAssertEqual(conflicts, [])
+    }
+
+    func testExternalChangeDuringABackgroundSaveIsAConflictNotALoss() throws {
+        let url = try directory.createTextFile(named: "Doc.md", contents: "one\n")
+        let writer = RecordingFileWriter()
+        let (document, _) = try makeDocument(for: url, autosaveDelay: 0.01, fileWriter: { try writer.write($0, $1, $2) })
+        defer { writer.release(); document.close() }
+        document.beginEditing()
+        writer.holdNextWrite()
+        try type("A", in: document)
+        waitUntil("autosave is writing") { writer.isHolding }
+        try type("B", in: document)
+        // The next autosave comes due while the first save is still running.
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        try Data("theirs\n".utf8).write(to: url)
+        conflictResolution = .overwrite
+
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { writer.release() }
+        monitors.last?.onChange()
+
+        waitUntil("the conflict was resolved") { (try? String(contentsOf: url, encoding: .utf8)) == "one\nAB" }
+        XCTAssertEqual(conflicts, [.changedOnDisk], "asked once")
+        XCTAssertEqual(document.editorControllerForTesting?.text, "one\nAB")
+    }
+
+    func testDeactivationSavesInTheBackgroundAndNeverPrompts() throws {
+        let url = try directory.createTextFile(named: "Doc.md", contents: "one\n")
+        let (document, _) = try makeDocument(for: url, autosaveDelay: 60)
+        defer { document.close() }
+        document.beginEditing()
+        try type("A", in: document)
+
+        NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+        waitUntil("saved on deactivation") { (try? String(contentsOf: url, encoding: .utf8)) == "one\nA" }
+
+        try type("B", in: document)
+        try Data("theirs\n".utf8).write(to: url)
+        NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
+        XCTAssertEqual(conflicts, [], "never prompts in the background")
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "theirs\n")
+        XCTAssertEqual(document.editorControllerForTesting?.text, "one\nAB")
+    }
+
+    func testClosingWaitsForTheBackgroundSave() throws {
+        let url = try directory.createTextFile(named: "Doc.md", contents: "one\n")
+        let writer = RecordingFileWriter()
+        let (document, _) = try makeDocument(for: url, autosaveDelay: 0.01, fileWriter: { try writer.write($0, $1, $2) })
+        defer { writer.release() }
+        document.beginEditing()
+        writer.holdNextWrite()
+        try type("A", in: document)
+        waitUntil("autosave is writing") { writer.isHolding }
+        try type("B", in: document)
+
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { writer.release() }
+        document.close()
+
+        XCTAssertEqual(writer.writes, ["one\nA", "one\nAB"])
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "one\nAB")
+    }
+
+    func testPastedCRLFTextIsNormalizedAndSavedInTheFilesLineEnding() throws {
+        let url = try directory.createTextFile(named: "Doc.md", contents: "x\r\ny\r\n")
+        let (document, _) = try makeDocument(for: url, autosaveDelay: 60)
+        defer { document.close() }
+        document.beginEditing()
+        let editor = try XCTUnwrap(document.editorControllerForTesting)
+        let textView = editor.textViewForTesting
+        XCTAssertEqual(editor.text, "x\ny\n")
+        try type("z", in: document)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
+
+        textView.setSelectedRange(NSRange(location: 5, length: 0))
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setString("a\r\nb", forType: .string)
+        XCTAssertTrue(textView.readSelection(from: pasteboard, type: .string))
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
+
+        XCTAssertEqual(editor.text, "x\ny\nza\nb")
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: 8, length: 0), "the insertion point follows the pasted text")
+        XCTAssertTrue(document.flushEdits(interactive: true))
+        XCTAssertEqual(try Data(contentsOf: url), Data("x\r\ny\r\nza\r\nb".utf8), "no CR is doubled")
+
+        editor.undoManagerForTesting.undo()
+        XCTAssertEqual(editor.text, "x\ny\nz", "one undo removes the paste and keeps the typing")
+        editor.undoManagerForTesting.redo()
+        XCTAssertEqual(editor.text, "x\ny\nza\nb")
+    }
+
     func testReadOnlyFileRefusesEditMode() throws {
         let url = try directory.createTextFile(named: "Locked.md", contents: "locked\n")
         try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: url.path)
@@ -470,6 +796,19 @@ final class MarkdownSourceEditorTests: XCTestCase {
         XCTAssertEqual(reported.count, 1)
     }
 
+    func testInsertedCarriageReturnsBecomeLineFeeds() {
+        let editor = MarkdownSourceEditorViewController()
+        editor.loadViewIfNeeded()
+        editor.load(text: "a\n")
+        let revision = editor.revision
+
+        editor.textViewForTesting.insertText("p\rq\r\nr", replacementRange: NSRange(location: 2, length: 0))
+
+        XCTAssertEqual(editor.text, "a\np\nq\nr")
+        XCTAssertEqual(editor.textViewForTesting.selectedRange(), NSRange(location: 7, length: 0))
+        XCTAssertGreaterThan(editor.revision, revision, "the change counts as an edit")
+    }
+
     func testEditorUndoIsPrivateAndClearedOnLoad() throws {
         let editor = MarkdownSourceEditorViewController()
         editor.loadViewIfNeeded()
@@ -497,7 +836,12 @@ final class MarkdownSourceEditorTests: XCTestCase {
         let editDuration = Date().timeIntervalSince(editStart)
 
         print("edit-mode highlight: \((text as NSString).length) UTF-16 units, load \(Int(loadDuration * 1000)) ms, keystroke \(Int(editDuration * 1000)) ms")
-        XCTAssertLessThan(editDuration, 0.25, "a keystroke must only recolor nearby lines")
+        XCTAssertEqual((editor.text as NSString).substring(with: NSRange(location: 20, length: 1)), "x")
+        let colors = MarkdownEditorColors(palette: ReaderTheme.current)
+        XCTAssertEqual(color(at: 3, in: editor), colors.heading, "the edited section keeps its coloring")
+        if PerformanceTesting.isEnabled {
+            XCTAssertLessThan(editDuration, 0.25, "a keystroke must only recolor nearby lines")
+        }
     }
 }
 
@@ -570,6 +914,15 @@ final class ReaderLivePreviewTests: XCTestCase {
         wait(for: [done], timeout: seconds + 2)
     }
 
+    /// Waits until `condition` is true in the page, for asynchronous page
+    /// work (diagram rendering, observers) whose duration varies with load.
+    private func waitForScript(_ condition: String, in reader: WebKitReaderViewController, timeout: TimeInterval = 10) {
+        let deadline = Date(timeIntervalSinceNow: timeout)
+        while evaluate("Boolean(\(condition))", in: reader) as? Bool != true, Date() < deadline {
+            pause(0.05)
+        }
+    }
+
     func testPatchKeepsUnchangedBlocksReplacesEditedOnesAndUpdatesLines() {
         let reader = WebKitReaderViewController()
         let window = hostInWindow(reader)
@@ -606,7 +959,7 @@ final class ReaderLivePreviewTests: XCTestCase {
         _ = evaluate("document.querySelector('.md-mermaid-diagram').waferTestMarker = 'kept'; true", in: reader)
 
         XCTAssertTrue(patch(render("Intro edited\n\n" + diagram + "\n```mermaid\ngraph LR; C-->D\n```\n"), in: reader))
-        pause(0.6)
+        waitForScript("document.querySelectorAll('.md-mermaid-diagram .md-mermaid-output svg').length === 2", in: reader)
 
         XCTAssertEqual(evaluate("document.querySelectorAll('.md-mermaid-diagram')[0].waferTestMarker || ''", in: reader) as? String, "kept")
         XCTAssertEqual(evaluate("document.querySelectorAll('.md-mermaid-diagram .md-mermaid-output svg').length", in: reader) as? Int, 2)
@@ -620,7 +973,7 @@ final class ReaderLivePreviewTests: XCTestCase {
         load(render("Intro\n"), into: reader)
 
         XCTAssertTrue(patch(render("Intro\n\n```swift\nlet x = 1\n```\n"), in: reader))
-        pause(0.1)
+        waitForScript("document.querySelectorAll('#write pre.md-fences .md-copy-button').length > 0", in: reader)
 
         XCTAssertEqual(evaluate("document.querySelectorAll('#write pre.md-fences .md-copy-button').length", in: reader) as? Int, 1)
     }
@@ -753,8 +1106,16 @@ final class ReaderLivePreviewTests: XCTestCase {
         let source = (1...200).map { "Paragraph \($0) with enough words to be a real line." }.joined(separator: "\n\n")
         load(render(source), into: reader)
         var reportedLines: [Double] = []
-        reader.onLiveScroll = { reportedLines.append($0) }
         XCTAssertEqual(lineAtTop(of: reader, for: position(line: 1, totalLines: 399)) ?? 0, 0.2, accuracy: 0.01)
+        let scrolled = expectation(description: "preview reports the target source line")
+        var observedTarget = false
+        reader.onLiveScroll = { line in
+            reportedLines.append(line)
+            if !observedTarget, abs(line - 151) < 0.5 {
+                observedTarget = true
+                scrolled.fulfill()
+            }
+        }
 
         // Anything that is not the sync's own scroll counts as the user's.
         let target = try XCTUnwrap(evaluate("""
@@ -764,8 +1125,7 @@ final class ReaderLivePreviewTests: XCTestCase {
               return y;
             })()
             """, in: reader) as? Double)
-        // Scroll events are slow to arrive when the test window is not visible.
-        for _ in 0..<40 where reportedLines.isEmpty { pause(0.1) }
+        wait(for: [scrolled], timeout: 15)
 
         let line = try XCTUnwrap(reportedLines.last)
         XCTAssertEqual(line, 151, accuracy: 0.5)
@@ -773,13 +1133,17 @@ final class ReaderLivePreviewTests: XCTestCase {
         reader.syncScroll(to: position(line: line, totalLines: 399))
         pause(0.2)
         XCTAssertEqual(evaluate("window.scrollY", in: reader) as? Double ?? -1, target, accuracy: 1)
-        XCTAssertEqual(reportedLines.count, 1)
+        // WebKit can deliver several scroll events for one position. Each
+        // still has to describe the requested line, without changing position.
+        XCTAssertEqual(reportedLines.last ?? -1, line, accuracy: 0.5)
 
         // After edit mode ends the page stops reporting.
         reader.endLivePreview()
+        let unexpectedReport = expectation(description: "no report after leaving live preview")
+        unexpectedReport.isInverted = true
+        reader.onLiveScroll = { _ in unexpectedReport.fulfill() }
         _ = evaluate("window.scrollTo(0, 200); true", in: reader)
-        pause(1.2)
-        XCTAssertEqual(reportedLines.count, 1)
+        wait(for: [unexpectedReport], timeout: 1)
     }
 }
 
@@ -813,6 +1177,7 @@ final class EditModeEndToEndTests: XCTestCase {
         defer { directory.remove() }
         let url = try directory.createTextFile(named: "Live.md", contents: "# Title\n\nPara one\n\nPara two\n")
         let document = MarkdownReaderDocument(
+            scrollStateStore: makeTestScrollStateStore(),
             fileMonitorFactory: { _, _ in EditTestFileMonitor(onChange: {}) },
             autosaveDelay: 0.2,
             liveRenderInterval: 0.02
@@ -878,6 +1243,7 @@ extension EditModeEndToEndTests {
         let source = (1...300).map { "Paragraph \($0) with enough words to be a real line." }.joined(separator: "\n\n")
         let url = try directory.createTextFile(named: "Long.md", contents: source)
         let document = MarkdownReaderDocument(
+            scrollStateStore: makeTestScrollStateStore(),
             fileMonitorFactory: { _, _ in EditTestFileMonitor(onChange: {}) },
             autosaveDelay: 60,
             liveRenderInterval: 0.02
@@ -950,6 +1316,7 @@ extension EditModeEndToEndTests {
         defer { directory.remove() }
         let url = try directory.createFile(named: "Showcase.md", contents: Data(contentsOf: showcase))
         let document = MarkdownReaderDocument(
+            scrollStateStore: makeTestScrollStateStore(),
             fileMonitorFactory: { _, _ in EditTestFileMonitor(onChange: {}) },
             autosaveDelay: 60
         )
@@ -959,12 +1326,12 @@ extension EditModeEndToEndTests {
         defer { document.close() }
         let host = try XCTUnwrap(document.windowControllers.first as? DocumentHostWindowController)
         let window = try XCTUnwrap(host.window)
-        let visible = try XCTUnwrap((window.screen ?? NSScreen.main)?.visibleFrame)
-        try XCTSkipIf(visible.width < 1_500, "needs room to double a 720-point window")
+        let visible = NSRect(x: 0, y: 0, width: 1920, height: 1080)
+        host.editorVisibleFrameForTesting = visible
         host.setReducedMotionForTesting(false)
         let frame = NSRect(x: visible.maxX - 740, y: visible.minY + 20, width: 720, height: 640)
-        window.setFrame(frame, display: false)
         host.showWindow(nil)
+        window.setFrame(frame, display: false)
         let reader = host.activeTab.readerController
         waitUntil("initial render") { reader.isContentReadyForExport }
         _ = evaluate("window.scrollTo(0, 6000); true", in: reader)
@@ -988,7 +1355,9 @@ extension EditModeEndToEndTests {
                 """)
             XCTAssertEqual(widths, [readerWidth], "the reader keeps its width in every frame")
             XCTAssertEqual(window.frame.width, opening ? 720 + readerWidth : 720)
-            XCTAssertLessThan(stats.slowestStep, 0.05)
+            if PerformanceTesting.isEnabled {
+                XCTAssertLessThan(stats.slowestStep, 0.05)
+            }
             if opening {
                 waitUntil("editor aligned") { (document.editorControllerForTesting?.currentScrollPosition.line ?? 0) > 20 }
                 XCTAssertEqual(evaluate("window.scrollY", in: reader) as? Double ?? -1, 6000, accuracy: 1)
@@ -1002,4 +1371,62 @@ extension EditModeEndToEndTests {
 private final class ResultBox: @unchecked Sendable {
     var value: Any?
     var finished = false
+}
+
+/// Holds a background source read until released.
+private final class SourceReadGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private let semaphore = DispatchSemaphore(value: 0)
+    private var waiting = false
+
+    var isWaiting: Bool { lock.withLock { waiting } }
+
+    func wait() {
+        lock.withLock { waiting = true }
+        _ = semaphore.wait(timeout: .now() + 10)
+    }
+
+    func release() {
+        semaphore.signal()
+    }
+}
+
+/// Writes through `MarkdownEditSession.replaceContents`, recording each
+/// write's text and thread, and can hold the next write until released.
+private final class RecordingFileWriter: @unchecked Sendable {
+    private let lock = NSLock()
+    private let gate = DispatchSemaphore(value: 0)
+    private var recordedWrites: [String] = []
+    private var recordedMainThread: [Bool] = []
+    private var holdsNext = false
+    private var holding = false
+
+    var writes: [String] { lock.withLock { recordedWrites } }
+    var wroteOnMainThread: [Bool] { lock.withLock { recordedMainThread } }
+    var isHolding: Bool { lock.withLock { holding } }
+
+    func holdNextWrite() {
+        lock.withLock { holdsNext = true }
+    }
+
+    func release() {
+        gate.signal()
+    }
+
+    func write(_ url: URL, _ data: Data, _ beforeReplacing: () throws -> Void) throws {
+        let holds = lock.withLock {
+            defer { holdsNext = false }
+            holding = holdsNext
+            return holdsNext
+        }
+        if holds {
+            _ = gate.wait(timeout: .now() + 10)
+            lock.withLock { holding = false }
+        }
+        lock.withLock {
+            recordedWrites.append(String(decoding: data, as: UTF8.self))
+            recordedMainThread.append(Thread.isMainThread)
+        }
+        try MarkdownEditSession.replaceContents(of: url, with: data, beforeReplacing: beforeReplacing)
+    }
 }

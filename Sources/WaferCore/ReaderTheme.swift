@@ -2,123 +2,21 @@ import AppKit
 import Foundation
 
 public enum ReaderTheme {
-    @MainActor public private(set) static var current: ReaderThemePalette = .dark
-
-    @MainActor public static func setCurrent(_ palette: ReaderThemePalette) {
-        guard current != palette else {
-            return
-        }
-
-        current = palette
-        NotificationCenter.default.post(name: .readerThemeDidChange, object: palette)
-    }
-
-    @MainActor public static func resetToDefaultForTesting() {
-        current = .dark
-    }
-
-    @MainActor public static var backgroundHex: String { current.backgroundHex }
-    @MainActor public static var secondaryTextHex: String { current.secondaryTextHex }
     public static let bodyFontStack = "\"Helvetica Neue\", Helvetica, Arial, \"Segoe UI Emoji\", \"SF Pro\", sans-serif"
     public static let contentMaxWidth = 928
     public static let contentHorizontalPadding = 31
     public static let bodyLineHeight = "1.66rem"
 
-    @MainActor static var sidebarBackgroundHex: String { current.sidebarBackgroundHex }
-    @MainActor static var sidebarSelectionHex: String { current.sidebarSelectionHex }
-    @MainActor static var sidebarHoverAlpha: CGFloat { CGFloat(current.sidebarHover.alpha) }
-    @MainActor static var sidebarChromeFillAlpha: CGFloat { CGFloat(current.sidebarChromeFill.alpha) }
-    @MainActor static var sidebarChromeBorderAlpha: CGFloat { CGFloat(current.sidebarChromeBorder.alpha) }
-    @MainActor static var sidebarChromeSelectedFillAlpha: CGFloat { CGFloat(current.sidebarChromeSelectedFill.alpha) }
-    @MainActor static var sidebarChromeHoverFillAlpha: CGFloat { CGFloat(current.sidebarChromeHoverFill.alpha) }
+    public static func color(fromHex hex: String) -> NSColor { hex.readerColor }
 
-    @MainActor public static var backgroundColor: NSColor { current.backgroundHex.readerColor }
-    @MainActor public static var sidebarBackgroundColor: NSColor { current.sidebarBackgroundHex.readerColor }
-    @MainActor public static var sidebarSelectionColor: NSColor { current.sidebarSelectionHex.readerColor }
-    @MainActor public static var sidebarHoverColor: NSColor { current.sidebarHover.readerColor }
-    @MainActor public static var sidebarChromeFillColor: NSColor { current.sidebarChromeFill.readerColor }
-    @MainActor public static var sidebarChromeBorderColor: NSColor { current.sidebarChromeBorder.readerColor }
-    @MainActor public static var tabBarBackgroundColor: NSColor { current.resolvedTab.barBackground.readerColor }
-    @MainActor public static var tabBarBorderColor: NSColor { current.resolvedTab.barBorder.readerColor }
-    @MainActor public static var tabRestingFillColor: NSColor { current.resolvedTab.restingFill.readerColor }
-    @MainActor public static var tabHoverFillColor: NSColor { current.resolvedTab.hoverFill.readerColor }
-    @MainActor public static var tabSelectedFillColor: NSColor { current.resolvedTab.selectedFill.readerColor }
-    @MainActor public static var tabSelectedTextColor: NSColor { current.resolvedTab.selectedText.readerColor }
-    @MainActor public static var tabUnselectedTextColor: NSColor { current.resolvedTab.unselectedText.readerColor }
-    @MainActor public static var tabCloseIconColor: NSColor { current.resolvedTab.closeIcon.readerColor }
-    @MainActor public static var tabCloseHoverFillColor: NSColor { current.resolvedTab.closeHoverFill.readerColor }
-    @MainActor public static var tabInsertionIndicatorColor: NSColor { current.resolvedTab.insertionIndicator.readerColor }
-    @MainActor public static var sidebarChromeSelectedFillColor: NSColor { current.sidebarChromeSelectedFill.readerColor }
-    @MainActor public static var sidebarChromeHoverFillColor: NSColor { current.sidebarChromeHoverFill.readerColor }
-    @MainActor public static var sidebarPrimaryTextColor: NSColor { current.sidebarPrimaryText.readerColor }
-    @MainActor public static var sidebarSecondaryTextColor: NSColor { current.sidebarSecondaryText.readerColor }
-    @MainActor public static var titlebarPrimaryTextColor: NSColor { current.titlebarPrimaryText.readerColor }
-    @MainActor public static var findBarBackgroundColor: NSColor { current.findBarBackground.readerColor }
-    @MainActor public static var findBarBorderColor: NSColor { current.findBarBorder.readerColor }
-    @MainActor public static var statisticsLabelColor: NSColor { current.statisticsLabel.readerColor }
-    @MainActor public static var statisticsIconColor: NSColor { current.statisticsIcon.readerColor }
-    @MainActor public static var statisticsIconButtonColor: NSColor { current.statisticsIconButton.readerColor }
-    @MainActor public static var statisticsPillRestingBackgroundColor: NSColor {
-        current.statisticsPillRestingBackground.readerColor
-    }
-    @MainActor public static var statisticsPillHoverBackgroundColor: NSColor {
-        current.statisticsPillHoverBackground.readerColor
-    }
-    @MainActor public static var statisticsPillHoverBorderColor: NSColor {
-        current.statisticsPillHoverBorder.readerColor
-    }
-    @MainActor public static var statisticsIconButtonRestingBackgroundColor: NSColor {
-        current.statisticsIconButtonRestingBackground.readerColor
-    }
-    @MainActor public static var statisticsIconButtonHoverBackgroundColor: NSColor {
-        current.statisticsIconButtonHoverBackground.readerColor
-    }
-    @MainActor public static var statisticsIconButtonActiveBackgroundColor: NSColor {
-        current.statisticsIconButtonActiveBackground.readerColor
-    }
-    @MainActor public static var statisticsIconButtonHoverBorderColor: NSColor {
-        current.statisticsIconButtonHoverBorder.readerColor
-    }
-    @MainActor public static var windowAppearance: NSAppearance? {
-        NSAppearance(named: current.appearanceIsDark ? .darkAqua : .aqua)
-    }
-
-    @MainActor public static var styleSheet: String {
-        styleSheet(for: current)
-    }
+    public static func color(_ color: ReaderThemeColor) -> NSColor { color.readerColor }
 
     public static func styleSheet(for palette: ReaderThemePalette) -> String {
         "\(generatedRootBlock(for: palette))\n\n\(styleSheetBody)"
     }
 
     public static func resourceURL(named resourceFileName: String) -> URL? {
-        let candidateFileNames: [String]
-        let lastPathComponent = (resourceFileName as NSString).lastPathComponent
-        if lastPathComponent != resourceFileName {
-            candidateFileNames = [resourceFileName, lastPathComponent]
-        } else {
-            candidateFileNames = [resourceFileName]
-        }
-
-        for candidateFileName in candidateFileNames {
-            if let resourceURL = resourceURL(forCandidateFileName: candidateFileName) {
-                return resourceURL
-            }
-        }
-        return nil
-    }
-
-    private static func resourceURL(forCandidateFileName resourceFileName: String) -> URL? {
-        let name = (resourceFileName as NSString).deletingPathExtension
-        let ext = (resourceFileName as NSString).pathExtension
-        let resourceExtension = ext.isEmpty ? nil : ext
-        return packagedResourceBundle.flatMap {
-            resourceURL(named: resourceFileName, name: name, resourceExtension: resourceExtension, in: $0)
-        } ?? swiftPMResourceURL(
-            named: resourceFileName,
-            name: name,
-            resourceExtension: resourceExtension
-        )
+        BundledResources.resourceURL(named: resourceFileName, bundleName: "Wafer_WaferCore")
     }
 
     public static func generatedRootBlock(for palette: ReaderThemePalette) -> String {
@@ -132,16 +30,17 @@ public enum ReaderTheme {
         """
     }
 
-    private static let styleSheetBody = loadStyleSheetBody()
+    private static let styleSheetBody = loadStyleSheetBody(from: resourceURL(named: "reader-theme.css"))
 
-    private static func loadStyleSheetBody() -> String {
+    static func loadStyleSheetBody(from styleSheetURL: URL?) -> String {
         if
-            let styleSheetURL = resourceURL(named: "reader-theme.css"),
+            let styleSheetURL,
             let styleSheet = try? String(contentsOf: styleSheetURL, encoding: .utf8)
         {
             return inlineStyleSheetBody(from: styleSheet)
         }
 
+        WaferLog.resources.fault("reader-theme.css is missing or unreadable; using the built-in fallback style sheet.")
         return fallbackStyleSheetBody
     }
 
@@ -254,50 +153,6 @@ public enum ReaderTheme {
         let components = color.hex.rgbComponents
         return "rgba(\(components.red), \(components.green), \(components.blue), \(color.alpha.cssAlphaString))"
     }
-
-    private static var packagedResourceBundle: Bundle? {
-        guard let resourceURL = Bundle.main.resourceURL else {
-            return nil
-        }
-
-        return Bundle(
-            url: resourceURL.appendingPathComponent("Wafer_WaferCore.bundle", isDirectory: true)
-        )
-    }
-
-    private static func resourceURL(
-        named resourceFileName: String,
-        name: String,
-        resourceExtension: String?,
-        in bundle: Bundle
-    ) -> URL? {
-        if let url = bundle.url(forResource: name, withExtension: resourceExtension) {
-            return url
-        }
-
-        let directURL = bundle.resourceURL?.appendingPathComponent(resourceFileName)
-        guard let directURL, FileManager.default.fileExists(atPath: directURL.path) else {
-            return nil
-        }
-        return directURL
-    }
-
-    private static func swiftPMResourceURL(
-        named resourceFileName: String,
-        name: String,
-        resourceExtension: String?
-    ) -> URL? {
-        #if DEBUG
-        resourceURL(
-            named: resourceFileName,
-            name: name,
-            resourceExtension: resourceExtension,
-            in: Bundle.module
-        )
-        #else
-        nil
-        #endif
-    }
 }
 
 let fallbackStyleSheet = "\(ReaderTheme.generatedRootBlock(for: .dark))\n\n\(fallbackStyleSheetBody)"
@@ -342,7 +197,7 @@ public extension Notification.Name {
 }
 
 extension ReaderThemeColor {
-    var readerColor: NSColor {
+    public var readerColor: NSColor {
         hex.readerColor.withAlphaComponent(CGFloat(alpha))
     }
 }

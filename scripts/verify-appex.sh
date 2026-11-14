@@ -1,5 +1,6 @@
 #!/bin/zsh
 set -euo pipefail
+setopt NULL_GLOB
 
 ROOT_DIR=${0:A:h:h}
 # Bundle name only; the Quick Look appex keeps its SwiftPM product name.
@@ -31,16 +32,26 @@ require_plist_value() {
 }
 
 [[ -d "$APP_BUNDLE" ]] || fail "app bundle not found: $APP_BUNDLE"
+expected_bundles=(
+  Contents/Resources/Wafer_WaferCore.bundle
+  Contents/Resources/Wafer_WaferApp.bundle
+  Contents/PlugIns/WaferQuickLook.appex/Contents/Resources/Wafer_WaferCore.bundle
+)
+for bundle in "${expected_bundles[@]}"; do
+  [[ -d "$APP_BUNDLE/$bundle" ]] || fail "missing required resource bundle: $bundle"
+done
+while IFS= read -r -d '' bundle; do
+  relative=${bundle#"$APP_BUNDLE/"}
+  (( ${expected_bundles[(Ie)$relative]} )) || fail "unexpected resource bundle: $relative"
+done < <(find "$APP_BUNDLE" -name '*.bundle' -print0)
 [[ -d "$QUICKLOOK_APPEX" ]] || fail "Quick Look extension bundle not found: $QUICKLOOK_APPEX"
 [[ -f "$INFO_PLIST" ]] || fail "Quick Look Info.plist not found: $INFO_PLIST"
 [[ -x "$EXECUTABLE" ]] || fail "Quick Look executable not found or not executable: $EXECUTABLE"
 [[ -f "$CORE_RESOURCE_BUNDLE/reader-theme.css" ]] || fail "Quick Look extension is missing WaferCore resources: $CORE_RESOURCE_BUNDLE"
 [[ -f "$CORE_RESOURCE_BUNDLE/gemoji-shortcodes.json" ]] || fail "Quick Look extension is missing Gemoji shortcode data: $CORE_RESOURCE_BUNDLE"
 [[ -f "$CORE_RESOURCE_BUNDLE/gemoji-LICENSE.txt" ]] || fail "Quick Look extension is missing Gemoji license: $CORE_RESOURCE_BUNDLE"
-[[ -f "$CORE_RESOURCE_BUNDLE/katex.min.js" ]] || fail "Quick Look extension is missing KaTeX renderer: $CORE_RESOURCE_BUNDLE"
-[[ -f "$CORE_RESOURCE_BUNDLE/katex.min.css" ]] || fail "Quick Look extension is missing KaTeX stylesheet: $CORE_RESOURCE_BUNDLE"
-[[ -f "$CORE_RESOURCE_BUNDLE/katex-LICENSE.txt" ]] || fail "Quick Look extension is missing KaTeX license: $CORE_RESOURCE_BUNDLE"
-[[ -f "$CORE_RESOURCE_BUNDLE/KaTeX_Main-Regular.woff2" ]] || fail "Quick Look extension is missing KaTeX fonts: $CORE_RESOURCE_BUNDLE"
+unused_resources=("$CORE_RESOURCE_BUNDLE"/mermaid* "$CORE_RESOURCE_BUNDLE"/katex* "$CORE_RESOURCE_BUNDLE"/KaTeX_*)
+(( ${#unused_resources} == 0 )) || fail "Quick Look extension contains unused Mermaid or KaTeX resources: $unused_resources"
 
 plutil -lint "$INFO_PLIST" >/dev/null
 require_plist_value ":CFBundleExecutable" "$QUICKLOOK_NAME"
@@ -48,6 +59,13 @@ require_plist_value ":CFBundleIdentifier" "dev.wafer.app.quicklook"
 require_plist_value ":CFBundlePackageType" "XPC!"
 require_plist_value ":NSExtension:NSExtensionPointIdentifier" "com.apple.quicklook.preview"
 require_plist_value ":NSExtension:NSExtensionPrincipalClass" "PreviewProvider"
+
+data_based=$(/usr/libexec/PlistBuddy -c "Print :NSExtension:NSExtensionAttributes:QLIsDataBasedPreview" "$INFO_PLIST" 2>/dev/null || true)
+[[ -z "$data_based" || "$data_based" == "false" ]] || fail "Quick Look extension must be view-based (QLIsDataBasedPreview must be absent or false)."
+
+linked_libraries=$(otool -L "$EXECUTABLE") || fail "could not read Quick Look executable linkage: $EXECUTABLE"
+[[ "$linked_libraries" == *"/QuickLookUI.framework/"* ]] || fail "Quick Look executable does not link QuickLookUI."
+[[ "$linked_libraries" != *"/WebKit.framework/"* ]] || fail "Quick Look executable must not link WebKit; previews are native and scriptless."
 
 codesign --verify --strict --verbose=2 "$QUICKLOOK_APPEX" >/dev/null
 

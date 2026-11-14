@@ -62,7 +62,7 @@ public struct WikiLinkIndex: Equatable, Sendable {
 
     public static func fold(_ text: String) -> String {
         text
-            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
             .lowercased()
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }

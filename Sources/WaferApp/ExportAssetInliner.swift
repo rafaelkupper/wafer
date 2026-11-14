@@ -29,19 +29,16 @@ final class ExportAssetInliner {
     private let allowedRootDirectories: [URL]
     private let remoteAssets: [String: ExportImageAsset]
     private let maximumInlinedByteCount: Int
-    private let dataProvider: ((URL) throws -> Data)?
     private var inlinedByteCount = 0
 
     init(
         allowedRootDirectories: [URL],
         remoteAssets: [String: ExportImageAsset] = [:],
-        maximumInlinedByteCount: Int = ExportAssetInliner.defaultMaximumInlinedByteCount,
-        dataProvider: ((URL) throws -> Data)? = nil
+        maximumInlinedByteCount: Int = ExportAssetInliner.defaultMaximumInlinedByteCount
     ) {
         self.allowedRootDirectories = allowedRootDirectories
         self.remoteAssets = remoteAssets
         self.maximumInlinedByteCount = maximumInlinedByteCount
-        self.dataProvider = dataProvider
     }
 
     func inlineImage(source: String) throws -> String? {
@@ -81,11 +78,7 @@ final class ExportAssetInliner {
             let asset = try LocalAssetLoader.load(
                 from: url,
                 allowedRootDirectories: allowedRootDirectories,
-                dataProvider: { url in
-                    if let dataProvider = self.dataProvider { return try dataProvider(url) }
-                    return try BoundedFileReader.read(from: url,
-                        maximumByteCount: self.maximumInlinedByteCount - self.inlinedByteCount)
-                }
+                maximumByteCount: maximumInlinedByteCount - inlinedByteCount
             )
             return try dataURI(data: asset.data, mimeType: asset.response.mimeType ?? "application/octet-stream")
         } catch BoundedFileReader.ReadError.tooLarge {
@@ -95,6 +88,7 @@ final class ExportAssetInliner {
         } catch let error as ExportError {
             throw error
         } catch {
+            WaferLog.export.info("Left export asset as a link because it could not be inlined: \(error.localizedDescription, privacy: .public)")
             return nil
         }
     }

@@ -11,7 +11,8 @@ public struct ScrollState: Codable, Equatable {
 }
 
 public final class ScrollStateStore {
-    private static let keyPrefix = "scroll-state:"
+    private static let keyPrefix = "scroll-state-v2:"
+    private static let legacyKeyPrefix = "scroll-state:"
 
     private let defaults: UserDefaults
     private let encoder = JSONEncoder()
@@ -25,35 +26,29 @@ public final class ScrollStateStore {
         } else {
             self.defaults = .standard
         }
+        for key in self.defaults.dictionaryRepresentation().keys where key.hasPrefix(Self.legacyKeyPrefix) {
+            self.defaults.removeObject(forKey: key)
+        }
     }
 
     public func save(fraction: Double, for fileURL: URL, fingerprint: String, updatedAt: Date = Date()) {
-        let state = ScrollState(fraction: fraction, updatedAt: updatedAt)
-        guard let data = try? encoder.encode(state) else {
-            return
-        }
-
-        defaults.set(data, forKey: key(for: fileURL, fingerprint: fingerprint))
+        let entry = Entry(fingerprint: fingerprint, state: ScrollState(fraction: fraction, updatedAt: updatedAt))
+        guard let data = try? encoder.encode(entry) else { return }
+        defaults.set(data, forKey: key(for: fileURL))
     }
 
     public func load(for fileURL: URL, fingerprint: String) -> ScrollState? {
-        guard let data = defaults.data(forKey: key(for: fileURL, fingerprint: fingerprint)) else {
-            return nil
-        }
-
-        return try? decoder.decode(ScrollState.self, from: data)
-    }
-
-    public func remove(for fileURL: URL, fingerprint: String) {
-        defaults.removeObject(forKey: key(for: fileURL, fingerprint: fingerprint))
+        guard let data = defaults.data(forKey: key(for: fileURL)),
+              let entry = try? decoder.decode(Entry.self, from: data), entry.fingerprint == fingerprint else { return nil }
+        return entry.state
     }
 
     public func pruneEntries(olderThan cutoff: Date) {
-        for (key, value) in defaults.dictionaryRepresentation() where key.hasPrefix(Self.keyPrefix) {
+        for (key, value) in defaults.dictionaryRepresentation() where key.hasPrefix(Self.keyPrefix) || key.hasPrefix(Self.legacyKeyPrefix) {
             guard
                 let data = value as? Data,
-                let state = try? decoder.decode(ScrollState.self, from: data),
-                state.updatedAt >= cutoff
+                let entry = try? decoder.decode(Entry.self, from: data),
+                entry.state.updatedAt >= cutoff
             else {
                 defaults.removeObject(forKey: key)
                 continue
@@ -61,8 +56,12 @@ public final class ScrollStateStore {
         }
     }
 
-    private func key(for fileURL: URL, fingerprint: String) -> String {
-        let identity = "\(fileURL.standardizedFileURL.path)|\(fingerprint)"
-        return "\(Self.keyPrefix)\(FileFingerprint.sha256Hex(for: identity))"
+    private struct Entry: Codable {
+        let fingerprint: String
+        let state: ScrollState
+    }
+
+    private func key(for fileURL: URL) -> String {
+        "\(Self.keyPrefix)\(FileFingerprint.sha256Hex(for: fileURL.standardizedFileURL.path))"
     }
 }
