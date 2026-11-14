@@ -92,12 +92,28 @@ Owns the `UserDefaults(suiteName:)` sites in `Tests/**` (63 sites in 22 files), 
 
 ## Done when
 
-- [ ] Each finding is fixed, or its resolution is recorded under Decisions.
-- [ ] `swift test` passes five consecutive runs, with no "Conflicting constraints" or "Unable to simultaneously satisfy" in the logs.
-- [ ] A full test run leaves no new files in `~/Library/Preferences`, and makes no outbound requests from export tests.
-- [ ] `scripts/check.sh`, `scripts/build-app.sh release` and `scripts/verify-appex.sh build/Wafer.app` pass.
+- [x] Each finding is fixed, or its resolution is recorded under Decisions.
+- [x] `swift test` passes five consecutive runs, with no "Conflicting constraints" or "Unable to simultaneously satisfy" in the logs.
+- [x] A full test run leaves no new files in `~/Library/Preferences`, and makes no outbound requests from export tests.
+- [x] `scripts/check.sh`, `scripts/build-app.sh release` and `scripts/verify-appex.sh build/Wafer.app` pass.
 - [ ] Merging into `main` waits for the user.
 
 ## Decisions
 
+- K3 reverted at integration. Deriving folded search text per query saved 42 MiB on a 2,000 x 20 KB library but made every full-text query 30 to 53 percent slower (no-match 608 to 891 ms). Search latency wins; `LibraryFile` keeps the readable and folded bodies (`docs/benchmarks/2026-11-13-round-4.md`).
+- T1: deleting suite plists after `removePersistentDomain` proved unreliable because cfprefsd can recreate them, so tests use an in-memory `UserDefaults` subclass (`Tests/WaferCoreTests/TestUserDefaults.swift`, symlinked into the app tests). Teardown fails the test if a generated suite reaches disk. Three tests added in parallel by D, L and W, and K's `CountingDefaults`, were moved to in-memory defaults at integration.
+- Shared scroll store: D and L each added one; the integrator kept `AppDelegate.sharedScrollStateStore`, and `MarkdownDocumentOpener.scrollStateStore` forwards to it.
+- W6 makes the reader reset its user scripts on every load. A DEBUG-only `additionalUserScriptsForTesting` lets the export CSP test keep its listener across loads.
+- R2: release-configuration tests cover WaferCore and Quick Look; app tests rely on DEBUG-only seams and stay debug-only.
+- App byte limits now use `WaferLimits` (document, asset, read chunk); values unchanged.
+- Leftover test plists created by this round's parallel stream runs (3,619 files holding only Wafer test keys or nothing) were removed after the fix landed; backup at `/tmp/wafer-verify2/test-prefs-backup-r4.tar.gz`.
+
 ## Verification
+
+Branch `review-fixes-round-4`, 2026-11-13, after merging L, D, R, W, K and T:
+
+- `swift test`: five consecutive runs passed at `f2f79a0`, each 707 tests (265 core, 429 app with 1 opt-in perf test skipped, 13 Quick Look), 0 failures, 0 constraint-conflict messages; real scroll-state key count 2,633 throughout. A sixth run after the last test fix (`Keep the scroll-state counting defaults in memory`) passed with the same counts and created 0 Wafer-pattern files in `~/Library/Preferences`.
+- `scripts/check.sh` and `scripts/check.sh --release`: passed (44 Python release-tool tests, Node tests, 25 vendored checksums; release-configuration Core and Quick Look tests).
+- `scripts/build-app.sh release` and `scripts/verify-appex.sh build/Wafer.app`: passed. Bundles: app `Wafer_WaferApp.bundle`, `Wafer_WaferCore.bundle`; appex `Wafer_WaferCore.bundle`. Shipped executable: 0 `ForTesting` symbols, 0 checkout paths. Appex links QuickLookUI, not WebKit.
+- Stream regressions verified failing before fixes: D1 to D4, W1, W3, W4, K1.
+- Not run: hosted CI, notarization, publication, installed Finder Quick Look smoke test.
