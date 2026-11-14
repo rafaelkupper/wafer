@@ -112,6 +112,7 @@ final class WebKitLocalAssetSchemeHandler: NSObject, WKURLSchemeHandler {
 
         switch result {
         case let .success(data):
+            WaferLog.rendering.debug("Served a local asset (\(mimeType, privacy: .public), \(data.count, privacy: .public) bytes)")
             let response = URLResponse(
                 url: requestURL,
                 mimeType: mimeType,

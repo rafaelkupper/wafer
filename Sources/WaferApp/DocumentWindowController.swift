@@ -533,12 +533,19 @@ class DocumentWindowController: NSWindowController, ThemeApplying, NSUserInterfa
         guard let documentURL = activeDocumentURL,
               !dismissedFolderAccessNotices.contains(FileIdentity.identity(for: documentURL)),
               !store.unreadableFiles(neededByDocumentAt: documentURL).isEmpty else {
-            folderAccessNotice?.isHidden = true
+            if let folderAccessNotice, !folderAccessNotice.isHidden {
+                folderAccessNotice.isHidden = true
+                FolderAccessStore.log.info("Hid the folder access notice")
+            }
             return
         }
 
         let folder = store.suggestedFolder(forDocumentAt: documentURL)
-        installFolderAccessNoticeIfNeeded().show(message: FolderAccessFlow.noticeMessage(folderName: folder.lastPathComponent))
+        let notice = installFolderAccessNoticeIfNeeded()
+        if notice.isHidden || notice.message.isEmpty {
+            FolderAccessStore.log.info("Showing the folder access notice for \(documentURL.lastPathComponent, privacy: .private)")
+        }
+        notice.show(message: FolderAccessFlow.noticeMessage(folderName: folder.lastPathComponent))
     }
 
     private func installFolderAccessNoticeIfNeeded() -> FolderAccessNoticeViewController {

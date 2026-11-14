@@ -178,6 +178,7 @@ final class FolderAccessStore {
             grants.append(grant)
         }
         if changed { persistGrants() }
+        Self.log.info("Restored access to \(self.grants.filter { $0.containment != nil }.count, privacy: .public) of \(self.grants.count, privacy: .public) granted folders")
     }
 
     /// The folders Wafer can read now through stored grants.
@@ -214,6 +215,7 @@ final class FolderAccessStore {
             grants.append(grant)
             superseded.compactMap(\.accessURL).forEach(bookmarks.stopAccessing)
             persistGrants()
+            Self.log.info("Granted access to \(path, privacy: .private), replacing \(superseded.count, privacy: .public) narrower grants")
         } catch {
             // Still readable this session through the panel's own access.
             Self.log.error("Could not remember access to \(path, privacy: .private): \(error.localizedDescription, privacy: .public)")
@@ -266,6 +268,7 @@ final class FolderAccessStore {
         let unreadable = Set(fileURLs.filter { !scope.covers($0) }.map(FileIdentity.normalized))
         guard linkNeeds[key, default: []] != unreadable else { return }
         linkNeeds[key] = unreadable.isEmpty ? nil : unreadable
+        Self.log.info("\(documentURL.lastPathComponent, privacy: .private) links to \(unreadable.count, privacy: .public) files outside the granted folders")
         postChange()
     }
 
@@ -279,6 +282,7 @@ final class FolderAccessStore {
             return
         }
         guard fileNeeds[FileIdentity.identity(for: documentURL), default: []].insert(file).inserted else { return }
+        Self.log.info("\(documentURL.lastPathComponent, privacy: .private) could not read \(file.lastPathComponent, privacy: .private) outside the granted folders")
         postChange()
     }
 
