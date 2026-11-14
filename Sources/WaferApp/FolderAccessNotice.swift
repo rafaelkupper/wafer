@@ -4,7 +4,7 @@ import WaferCore
 
 /// What a folder prompt asks for.
 struct FolderAccessRequest: Equatable {
-    /// A file whose folder is too broad to offer (see `FolderAccessRange`).
+    /// A file whose folder a prompt may not offer (see `FolderAccessRange`).
     struct OutOfRange: Equatable {
         /// The explanation's title.
         let title: String
@@ -58,9 +58,9 @@ enum FolderAccessFlow {
 
     /// Asks for a folder that holds `url`, even when Wafer believes it can
     /// read it (after a refused read), and calls `onGranted` once a grant
-    /// allows `access`. The panel offers only the file's own folder, never
-    /// one too broad to offer. It may be a sheet, so callers continue only
-    /// from `onGranted`, never after this returns.
+    /// allows `access`. The panel offers only the file's own folder, and
+    /// only one a prompt may offer. It may be a sheet, so callers continue
+    /// only from `onGranted`, never after this returns.
     static func requestAccess(
         to url: URL, requestedBy documentURL: URL? = nil, window: NSWindow?,
         access: FolderAccessMode = .readOnly, onGranted: @escaping @MainActor () -> Void
@@ -159,9 +159,9 @@ enum FolderAccessFlow {
     }
 
     /// Mentions a parent folder only while the suggestion is narrow: not
-    /// once it was widened, and not when its parent is too broad to offer.
+    /// once it was widened, and not when a prompt may not offer its parent.
     private static func parentFolderHint(for folder: URL, isWidened: Bool, range: FolderAccessRange) -> String {
-        guard !isWidened, !range.isTooBroad(folder.deletingLastPathComponent()) else { return "" }
+        guard !isWidened, range.mayOffer(folder.deletingLastPathComponent()) else { return "" }
         return " Choosing a parent folder instead covers more of your documents."
     }
 
@@ -173,11 +173,11 @@ enum FolderAccessFlow {
             ? " To read only this document, open it with File > Open…." : ""
         return FolderAccessRequest(
             suggestedFolder: nil,
-            message: "“\(name)” (\(file.path)) is outside the folders Wafer offers. Wafer never offers your home folder, a whole disk, or a folder above them, because a document's links decide which file is asked for.\(alternative) To allow it anyway, choose a folder that contains it yourself.",
+            message: "“\(name)” (\(file.path)) is outside the folders Wafer offers. Wafer never offers your home folder, a whole disk or cloud drive, a folder above them, a hidden folder, or a folder in your Library, because a document's links decide which file is asked for.\(alternative) To allow it anyway, choose a folder that contains it yourself.",
             outOfRange: .init(
                 title: "“\(name)” is outside the folders Wafer offers",
                 panelMessage: "Choose a folder that contains “\(name)” (\(file.path)).",
-                startingFolder: documentFolder.flatMap { range.isTooBroad($0) ? nil : $0 }
+                startingFolder: documentFolder.flatMap { range.mayOffer($0) ? $0 : nil }
             )
         )
     }

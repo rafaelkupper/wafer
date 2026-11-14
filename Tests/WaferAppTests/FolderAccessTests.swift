@@ -556,6 +556,28 @@ final class FolderAccessStoreTests: XCTestCase {
         XCTAssertEqual(access.store.suggestion(forDocumentAt: inHome), folder("\(home)/Pictures", widened: false),
                        "a document in the home folder never widens to it")
     }
+
+    func testTheSuggestionWidensInsideACloudDriveButNeverToItsRootOrIntoAHiddenFolder() {
+        let access = installSandboxedFolderAccess(range: someoneRange)
+        let drive = "/Users/someone/Library/Mobile Documents/com~apple~CloudDocs"
+        let document = URL(fileURLWithPath: "\(drive)/Notes/Projects/Plan.md")
+        func folder(_ path: String, widened: Bool) -> FolderAccessSuggestion {
+            .folder(URL(fileURLWithPath: path, isDirectory: true), isWidened: widened)
+        }
+
+        access.store.recordLinkedFiles([URL(fileURLWithPath: "\(drive)/Notes/Areas/b.md")], forDocumentAt: document)
+        XCTAssertEqual(access.store.suggestion(forDocumentAt: document), folder("\(drive)/Notes", widened: true))
+        access.store.recordLinkedFiles([URL(fileURLWithPath: "\(drive)/Other/c.md")], forDocumentAt: document)
+        XCTAssertEqual(access.store.suggestion(forDocumentAt: document), folder("\(drive)/Other", widened: false),
+                       "never widened to the whole of iCloud Drive")
+
+        let hidden = URL(fileURLWithPath: "/Users/someone/.notes/Plan.md")
+        let image = URL(fileURLWithPath: "/Users/someone/.notes/i.png")
+        access.store.recordLinkedFiles([image], forDocumentAt: hidden)
+        XCTAssertEqual(access.store.suggestion(forDocumentAt: hidden),
+                       .outOfRange(file: image, folder: URL(fileURLWithPath: "/Users/someone/.notes", isDirectory: true)),
+                       "a document in a hidden folder is not offered its folder")
+    }
 }
 
 /// The user `someone`, whose home is /Users/someone.
@@ -571,20 +593,45 @@ final class FolderAccessRangeTests: XCTestCase {
             "/Volumes/Drive", "/System/Volumes/Data/Users/someone", "/System/Volumes/Data/Users",
             "/Users/someone/Mounts/Share", "/Users/someone/Notes/../../..",
         ] {
-            XCTAssertTrue(range.isTooBroad(URL(fileURLWithPath: path, isDirectory: true)), path)
+            XCTAssertFalse(range.mayOffer(URL(fileURLWithPath: path, isDirectory: true)), path)
         }
         for path in [
-            "/Users/someone/Notes", "/Users/someone/Library/Mobile Documents", "/Volumes/Drive/Notes",
+            "/Users/someone/Notes", "/Volumes/Drive/Notes",
             "/Users/Shared/Notes", "/System/Volumes/Data/Users/someone/Notes", "/Users/someone/Mounts",
         ] {
-            XCTAssertFalse(range.isTooBroad(URL(fileURLWithPath: path, isDirectory: true)), path)
+            XCTAssertTrue(range.mayOffer(URL(fileURLWithPath: path, isDirectory: true)), path)
         }
 
         let temporary = try TemporaryTestDirectory()
         defer { temporary.remove() }
-        XCTAssertFalse(FolderAccessRange.current.isTooBroad(temporary.url))
-        XCTAssertTrue(FolderAccessRange.current.isTooBroad(FolderAccessRange.realHomeDirectory()))
-        XCTAssertTrue(FolderAccessRange.current.isTooBroad(URL(fileURLWithPath: "/", isDirectory: true)))
+        XCTAssertTrue(FolderAccessRange.current.mayOffer(temporary.url))
+        XCTAssertFalse(FolderAccessRange.current.mayOffer(FolderAccessRange.realHomeDirectory()))
+        XCTAssertFalse(FolderAccessRange.current.mayOffer(URL(fileURLWithPath: "/", isDirectory: true)))
+    }
+
+    /// Folders of settings and secrets are never offered, however narrow.
+    /// Only the cloud drives in the Library hold documents, below their roots.
+    func testHiddenFoldersAndTheLibraryAreNeverOfferedExceptInsideCloudDrives() {
+        let home = "/Users/someone"
+        for path in [
+            "\(home)/.ssh", "\(home)/.config/gh", "\(home)/Notes/.private", "\(home)/Notes/.obsidian/plugins",
+            "/Users/Shared/.cache", "/Volumes/Drive/.Trashes/501",
+            "\(home)/Library/Keychains", "\(home)/Library/Application Support/SomeApp", "\(home)/Library/Containers/dev.wafer.app/Data",
+            "\(home)/LIBRARY/KEYCHAINS", "/System/Volumes/Data\(home)/Library/Keychains",
+            "\(home)/Library/Mobile Documents", "\(home)/Library/Mobile Documents/iCloud~md~obsidian/Documents/Vault",
+            "\(home)/Library/Mobile Documents/com~apple~CloudDocs", "\(home)/Library/CloudStorage",
+            "\(home)/Library/CloudStorage/Dropbox", "\(home)/Library/CloudStorage/Dropbox/.dropbox.cache",
+        ] {
+            XCTAssertFalse(someoneRange.mayOffer(URL(fileURLWithPath: path, isDirectory: true)), path)
+        }
+        for path in [
+            "\(home)/Library/Mobile Documents/com~apple~CloudDocs/Notes",
+            "\(home)/Library/Mobile Documents/com~apple~CloudDocs/Notes/Projects",
+            "\(home)/Library/CloudStorage/Dropbox/Notes", "\(home)/Library/CloudStorage/GoogleDrive-someone/My Drive",
+            "\(home)/Notes/Library", "\(home)/Notes/Plan.d", "\(home)/Notes/v1.2",
+        ] {
+            XCTAssertTrue(someoneRange.mayOffer(URL(fileURLWithPath: path, isDirectory: true)), path)
+        }
     }
 }
 
@@ -662,6 +709,72 @@ final class FolderAccessFlowTests: XCTestCase {
         XCTAssertFalse(FolderAccessFlow.ensureAccess(to: URL(fileURLWithPath: "/x.md"), requestedBy: inHome, window: nil) {})
         XCTAssertNotNil(requests.first?.outOfRange)
         XCTAssertNil(requests.first?.outOfRange?.startingFolder, "a document in the home folder offers no starting folder either")
+    }
+
+    /// A narrow folder can still hold keys or app data: hidden folders and
+    /// the Library are never offered, outside the cloud drives' own folders.
+    func testHostileLinksNeverOfferAHiddenFolderOrOneInTheLibrary() throws {
+        _ = installSandboxedFolderAccess(range: someoneRange)
+        let home = "/Users/someone"
+        let documentFolder = URL(fileURLWithPath: "\(home)/Notes", isDirectory: true)
+        let document = documentFolder.appendingPathComponent("Plan.md")
+        var requests: [FolderAccessRequest] = []
+        FolderAccessFlow.chooseFolder = { request, _, completion in
+            requests.append(request)
+            completion(nil)
+        }
+        let hostile = [
+            FileIdentity.normalized(URL(fileURLWithPath: "../.ssh/config", relativeTo: documentFolder)),
+            URL(fileURLWithPath: "\(home)/.gnupg/private-keys-v1.d/key.md"),
+            URL(fileURLWithPath: "\(home)/Notes/.obsidian/workspace.json"),
+            URL(fileURLWithPath: "/Volumes/X/.Trashes/501/x.md"),
+            URL(fileURLWithPath: "\(home)/Library/Keychains/login.keychain-db"),
+            URL(fileURLWithPath: "\(home)/Library/Application Support/SomeApp/data.md"),
+            URL(fileURLWithPath: "/System/Volumes/Data\(home)/Library/Cookies/Cookies.binarycookies"),
+            URL(fileURLWithPath: "\(home)/Library/Mobile Documents/x.md"),
+            URL(fileURLWithPath: "\(home)/Library/Mobile Documents/iCloud~com~someapp/Documents/x.md"),
+            URL(fileURLWithPath: "\(home)/Library/Mobile Documents/com~apple~CloudDocs/x.md"),
+            URL(fileURLWithPath: "\(home)/Library/CloudStorage/Dropbox/x.md"),
+        ]
+        XCTAssertEqual(hostile[0].path, "\(home)/.ssh/config")
+
+        for target in hostile {
+            XCTAssertFalse(FolderAccessFlow.ensureAccess(to: target, requestedBy: document, window: nil) { XCTFail("resumed") })
+        }
+
+        XCTAssertEqual(requests.count, hostile.count)
+        for (request, target) in zip(requests, hostile) {
+            XCTAssertNil(request.suggestedFolder, "\(target.path) suggests no folder")
+            XCTAssertEqual(request.outOfRange?.startingFolder, documentFolder,
+                           "a panel the user asks for anyway opens at the document's folder, not \(target.path)")
+            XCTAssertTrue(request.message.contains("(\(target.path)) is outside the folders Wafer offers"), request.message)
+        }
+        XCTAssertTrue(try XCTUnwrap(requests.first).message.contains("a hidden folder, or a folder in your Library"))
+
+        // The window's notice offers none of them either.
+        let store = FolderAccessStore.shared
+        store.recordLinkedFiles(hostile.filter { !$0.path.hasPrefix(documentFolder.path + "/") }, forDocumentAt: document)
+        guard case .outOfRange? = store.suggestion(forDocumentAt: document) else {
+            return XCTFail("offered \(String(describing: store.suggestion(forDocumentAt: document)))")
+        }
+
+        requests = []
+        let inCloudDrives = [
+            URL(fileURLWithPath: "\(home)/Library/Mobile Documents/com~apple~CloudDocs/Notes/x.md"),
+            URL(fileURLWithPath: "\(home)/Library/CloudStorage/Dropbox/Notes/x.md"),
+        ]
+        for target in inCloudDrives {
+            XCTAssertFalse(FolderAccessFlow.ensureAccess(to: target, requestedBy: document, window: nil) {})
+        }
+        XCTAssertEqual(requests.map(\.suggestedFolder?.path), inCloudDrives.map { $0.deletingLastPathComponent().path },
+                       "folders inside iCloud Drive and cloud storage are offered")
+
+        requests = []
+        let hiddenDocument = URL(fileURLWithPath: "\(home)/.notes/Plan.md")
+        XCTAssertFalse(FolderAccessFlow.ensureAccess(to: URL(fileURLWithPath: "\(home)/.notes/i.png"), requestedBy: hiddenDocument, window: nil) {})
+        XCTAssertNil(requests.first?.suggestedFolder)
+        XCTAssertNotNil(requests.first?.outOfRange)
+        XCTAssertNil(requests.first?.outOfRange?.startingFolder, "the panel never opens in a hidden folder")
     }
 
     func testCancelledOrUnrelatedChoicesDoNotResume() throws {
