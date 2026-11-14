@@ -308,6 +308,25 @@ final class FolderAccessStore {
         }
     }
 
+    /// Resolves the grants that could not be resolved before, such as on a
+    /// drive connected after launch (`NSWorkspace.didMountNotification`).
+    /// Returns whether any did, and the documents whose needed files
+    /// became readable.
+    func resolveUnavailableGrants() -> (didResolve: Bool, documents: Set<String>) {
+        guard isSandboxed else { return (false, []) }
+        restoreGrants()
+        var changed = false
+        var resolved = 0
+        for index in grants.indices where grants[index].containment == nil {
+            changed = resolve(&grants[index]) || changed
+            if grants[index].containment != nil { resolved += 1 }
+        }
+        if changed { persistGrants() }
+        guard resolved > 0 else { return (false, []) }
+        Self.log.info("Restored access to \(resolved, privacy: .public) granted folders after a volume mounted")
+        return (true, pruneSatisfiedNeeds())
+    }
+
     /// The folders Wafer can read now through stored grants.
     var grantedFolders: [URL] {
         restoreGrants()

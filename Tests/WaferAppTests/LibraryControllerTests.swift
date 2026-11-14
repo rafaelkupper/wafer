@@ -500,6 +500,45 @@ final class LibraryControllerTests: XCTestCase {
         XCTAssertNil(preferences.libraryGrantID)
     }
 
+    func testALibraryOnADriveConnectedAfterLaunchIsScannedOnceItsGrantResolves() throws {
+        let tempDirectory = try TemporaryTestDirectory()
+        defer { tempDirectory.remove() }
+        let library = tempDirectory.url.appendingPathComponent("Drive/Library", isDirectory: true)
+        let defaults = makeTestUserDefaults()
+        defaults.set([[
+            "id": "library-grant", "path": FileIdentity.identity(for: library),
+            "bookmark": FakeSecurityScopedBookmarks.bookmark(for: library), "readOnly": false, "library": true,
+        ]], forKey: "folderAccessGrants")
+        let bookmarks = FakeSecurityScopedBookmarks()
+        bookmarks.unresolvablePaths = [library.path]
+        let access = installSandboxedFolderAccess(defaults: defaults, bookmarks: bookmarks)
+        let preferences = LibraryPreferenceStore(defaults: makeTestUserDefaults())
+        preferences.libraryFolderURL = library
+        preferences.libraryGrantID = "library-grant"
+        preferences.hasAskedForLibraryAccess = true
+        let controller = LibraryController(
+            preferenceStore: preferences,
+            monitorFactory: { rootURL, onChange in FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange) },
+            chooseLibraryFolder: { _, _, _ in XCTFail("asked although the library has its grant") }
+        )
+        controller.reopenPersistedLibraryIfAvailable()
+        waitForLibraryIdle(controller)
+        XCTAssertNotNil(controller.scanFailure, "the drive is not connected")
+        controller.retryIfUnavailable()
+        XCTAssertNotNil(controller.scanFailure, "nothing to retry before the grant resolves")
+
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        try Data("# Guide".utf8).write(to: library.appendingPathComponent("Guide.md"))
+        bookmarks.unresolvablePaths = []
+        XCTAssertTrue(access.store.resolveUnavailableGrants().didResolve)
+        controller.retryIfUnavailable()
+        waitForLibraryIdle(controller)
+
+        XCTAssertNil(controller.scanFailure)
+        XCTAssertEqual(controller.files.map(\.displayTitle), ["Guide"])
+        controller.closeLibrary()
+    }
+
     func testALibraryCoveredOnlyByAReadOnlyGrantAsksOnceForAccessThatAllowsSaving() throws {
         let tempDirectory = try TemporaryTestDirectory()
         defer { tempDirectory.remove() }

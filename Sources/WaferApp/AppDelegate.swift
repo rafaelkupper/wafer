@@ -19,6 +19,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let reopenPersistedLibrary: PersistedLibraryReopenHandler
     private let scrollStateStore: ScrollStateStore
     private let appearancePreferenceStore: AppearancePreferenceStore
+    private let workspaceNotificationCenter: NotificationCenter
+    private let retryUnavailableAccess: @MainActor () -> Void
+    private var volumeMountObserver: NSObjectProtocol?
 
     init(
         openURLs: @escaping URLOpenHandler = MarkdownDocumentOpener.open(urls:),
@@ -32,7 +35,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             LibraryController.shared.reopenPersistedLibraryIfAvailable()
         },
         scrollStateStore: ScrollStateStore = AppDelegate.sharedScrollStateStore,
-        appearancePreferenceStore: AppearancePreferenceStore = .shared
+        appearancePreferenceStore: AppearancePreferenceStore = .shared,
+        workspaceNotificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
+        retryUnavailableAccess: @escaping @MainActor () -> Void = AppDelegate.retryUnavailableAccess
     ) {
         self.openURLs = openURLs
         self.openLibrary = openLibrary
@@ -40,12 +45,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.reopenPersistedLibrary = reopenPersistedLibrary
         self.scrollStateStore = scrollStateStore
         self.appearancePreferenceStore = appearancePreferenceStore
+        self.workspaceNotificationCenter = workspaceNotificationCenter
+        self.retryUnavailableAccess = retryUnavailableAccess
     }
 
     /// Documents opened at launch arrive before `applicationDidFinishLaunching`,
-    /// so stored folder grants are restored first.
+    /// so stored folder grants are restored first. Grants on a drive that is
+    /// not connected are retried whenever a volume mounts.
     func applicationWillFinishLaunching(_ notification: Notification) {
         FolderAccessStore.shared.restoreGrants()
+        let retry = retryUnavailableAccess
+        volumeMountObserver = workspaceNotificationCenter.addObserver(
+            forName: NSWorkspace.didMountNotification, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { retry() }
+        }
+    }
+
+    /// After a volume mounts: resolves the grants that were unavailable,
+    /// reloads documents whose files became readable, and rescans a library
+    /// that could not be read.
+    static func retryUnavailableAccess() {
+        let result = FolderAccessStore.shared.resolveUnavailableGrants()
+        guard result.didResolve else { return }
+        FolderAccessFlow.refreshDocuments(result.documents)
+        LibraryController.shared.retryIfUnavailable()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -72,6 +96,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        volumeMountObserver.map(workspaceNotificationCenter.removeObserver)
+        volumeMountObserver = nil
         FolderAccessStore.shared.stopAccessingAll()
     }
 

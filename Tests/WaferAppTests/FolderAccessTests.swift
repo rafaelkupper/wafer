@@ -193,6 +193,56 @@ final class FolderAccessStoreTests: XCTestCase {
         XCTAssertEqual(storedPaths(defaults), records.compactMap { $0["path"] as? String }, "an unresolved grant is kept for a later launch")
     }
 
+    func testGrantsOnADriveConnectedAfterLaunchResolveWhenItMounts() {
+        let away = URL(fileURLWithPath: "/Volumes/WaferTestLater-\(UUID().uuidString)/Notes", isDirectory: true)
+        let defaults = makeTestUserDefaults()
+        defaults.set([["id": "away", "path": away.path, "bookmark": FakeSecurityScopedBookmarks.bookmark(for: away), "readOnly": true]],
+                     forKey: "folderAccessGrants")
+        let bookmarks = FakeSecurityScopedBookmarks()
+        bookmarks.unresolvablePaths = [away.path]
+        let access = installSandboxedFolderAccess(defaults: defaults, bookmarks: bookmarks)
+        let document = URL(fileURLWithPath: "/tmp/wafer-mount/Plan.md")
+        access.store.recordRefusedImage(away.appendingPathComponent("image.png"), forDocumentAt: document)
+        XCTAssertFalse(access.store.covers(away.appendingPathComponent("image.png")))
+
+        XCTAssertFalse(access.store.resolveUnavailableGrants().didResolve, "still not connected")
+        bookmarks.unresolvablePaths = []
+        let result = access.store.resolveUnavailableGrants()
+
+        XCTAssertTrue(result.didResolve)
+        XCTAssertEqual(result.documents, [FileIdentity.identity(for: document)])
+        XCTAssertTrue(access.store.covers(away.appendingPathComponent("image.png")))
+        XCTAssertEqual(bookmarks.started, [away.path])
+        XCTAssertFalse(access.store.resolveUnavailableGrants().didResolve, "nothing left to resolve")
+    }
+
+    func testTheAppRetriesUnavailableGrantsWheneverAVolumeMounts() {
+        let away = URL(fileURLWithPath: "/Volumes/WaferTestLater-\(UUID().uuidString)/Notes", isDirectory: true)
+        let defaults = makeTestUserDefaults()
+        defaults.set([["id": "away", "path": away.path, "bookmark": FakeSecurityScopedBookmarks.bookmark(for: away)]],
+                     forKey: "folderAccessGrants")
+        let bookmarks = FakeSecurityScopedBookmarks()
+        bookmarks.unresolvablePaths = [away.path]
+        let access = installSandboxedFolderAccess(defaults: defaults, bookmarks: bookmarks)
+        let workspace = NotificationCenter()
+        var retries = 0
+        let delegate = AppDelegate(openURLs: { _ in }, reopenPersistedLibrary: {}, workspaceNotificationCenter: workspace,
+                                   retryUnavailableAccess: { retries += 1 })
+
+        delegate.applicationWillFinishLaunching(Notification(name: NSApplication.willFinishLaunchingNotification))
+        workspace.post(name: NSWorkspace.didMountNotification, object: nil)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        XCTAssertEqual(retries, 1)
+        delegate.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification))
+        workspace.post(name: NSWorkspace.didMountNotification, object: nil)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        XCTAssertEqual(retries, 1, "no retries after quitting")
+
+        bookmarks.unresolvablePaths = []
+        AppDelegate.retryUnavailableAccess()
+        XCTAssertTrue(access.store.covers(away.appendingPathComponent("Plan.md")), "the default retry resolves the grant")
+    }
+
     func testAParentGrantReplacesNarrowerOnesAndAGrantInsideOneAddsNothing() throws {
         let directory = try TemporaryTestDirectory()
         defer { directory.remove() }

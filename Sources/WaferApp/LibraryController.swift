@@ -142,6 +142,13 @@ final class LibraryController {
         performScan()
     }
 
+    /// After a volume mounts: a library that could not be read is scanned
+    /// again once Wafer may use its folder.
+    func retryIfUnavailable() {
+        guard let rootURL, scanFailure != nil, !isScanning, !needsFolderAccess(rootURL) else { return }
+        refreshLibrary()
+    }
+
     func reopenPersistedLibraryIfAvailable() {
         guard var persistedURL = preferenceStore.libraryFolderURL else {
             return
