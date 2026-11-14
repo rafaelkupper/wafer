@@ -44,9 +44,9 @@ public enum LibraryIndexDiff {
                 return scannedFile
             }
 
-            // Same text; keep the fresher metadata so the next recovery scan
-            // can reuse the entry.
-            return scannedFile
+            // Same text. When only metadata moved, keep the fresher metadata
+            // so the next recovery scan can reuse the entry.
+            return existingFile.contentFingerprint == scannedFile.contentFingerprint ? existingFile : scannedFile
         }
 
         let removed = existingFiles.filter {
