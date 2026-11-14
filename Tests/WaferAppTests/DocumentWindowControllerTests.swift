@@ -378,13 +378,20 @@ final class DocumentWindowControllerTests: XCTestCase {
     }
 
     func testWindowRoutesLibrarySearchCommandWhenLibraryOpen() throws {
-        LibraryController.shared.closeLibrary()
+        let suiteName = "dev.wafer.tests.window-library.\(UUID())"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        let library = LibraryController(preferenceStore: LibraryPreferenceStore(defaults: defaults))
         let tempDirectory = try TemporaryTestDirectory()
         defer {
-            LibraryController.shared.closeLibrary()
+            library.closeLibrary()
+            defaults.removePersistentDomain(forName: suiteName)
             tempDirectory.remove()
         }
-        let windowController = testWindowController(contentViewController: NSViewController())
+        let windowController = testWindowController(
+            contentViewController: NSViewController(), libraryController: library
+        )
+        let otherWindowController = testWindowController(contentViewController: NSViewController())
+        defer { otherWindowController.close() }
         defer { windowController.close() }
 
         let window = try XCTUnwrap(windowController.window)
@@ -400,9 +407,10 @@ final class DocumentWindowControllerTests: XCTestCase {
 
         XCTAssertFalse(window.validateUserInterfaceItem(searchLibraryItem))
 
-        try LibraryController.shared.openLibrary(at: tempDirectory.url)
+        try library.openLibrary(at: tempDirectory.url)
 
         XCTAssertTrue(window.validateUserInterfaceItem(searchLibraryItem))
+        XCTAssertFalse(otherWindowController.canFocusLibrarySearch)
 
         window.perform(#selector(DocumentWindowController.focusLibrarySearch(_:)), with: searchLibraryItem)
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
@@ -410,6 +418,10 @@ final class DocumentWindowControllerTests: XCTestCase {
         XCTAssertTrue(windowController.isSidebarVisibleForTesting)
         XCTAssertEqual(windowController.sidebarModeForTesting, .library)
         XCTAssertTrue(windowController.librarySearchFieldIsFocusedForTesting)
+
+        library.closeLibrary()
+        XCTAssertFalse(window.validateUserInterfaceItem(searchLibraryItem))
+        XCTAssertEqual(windowController.sidebarModeForTesting, .documents)
     }
 
     func testWindowRoutesExportActionsOnlyWhenReaderContentIsReady() throws {
@@ -507,12 +519,14 @@ final class DocumentWindowControllerTests: XCTestCase {
 @MainActor
 private func testWindowController(
     contentViewController: NSViewController,
+    libraryController: LibraryController = LibraryController(),
     statisticPreferenceStore: DocumentStatisticPreferenceStore = .shared,
     systemIsDark: Bool = true,
     exportController: DocumentExportControlling = DocumentExportController()
 ) -> DocumentWindowController {
     DocumentWindowController(
         contentViewController: contentViewController,
+        libraryController: libraryController,
         statisticPreferenceStore: statisticPreferenceStore,
         appearancePreferenceStore: testAppearancePreferenceStore(systemIsDark: systemIsDark),
         exportController: exportController

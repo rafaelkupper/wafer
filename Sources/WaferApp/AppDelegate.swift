@@ -9,6 +9,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     typealias InitialLibraryDocumentOpenHandler = @MainActor ([LibraryFile]) -> Void
     typealias PersistedLibraryReopenHandler = @MainActor () -> Void
 
+    static let sharedScrollStateStore = ScrollStateStore()
+
     private static let scrollStateRetentionInterval: TimeInterval = 180 * 24 * 60 * 60
 
     private let openURLs: URLOpenHandler
@@ -29,7 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         reopenPersistedLibrary: @escaping PersistedLibraryReopenHandler = {
             LibraryController.shared.reopenPersistedLibraryIfAvailable()
         },
-        scrollStateStore: ScrollStateStore = ScrollStateStore(),
+        scrollStateStore: ScrollStateStore = AppDelegate.sharedScrollStateStore,
         appearancePreferenceStore: AppearancePreferenceStore = .shared
     ) {
         self.openURLs = openURLs
@@ -87,7 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func application(_ application: NSApplication, open urls: [URL]) {
         var documentURLs: [URL] = []
         for url in urls {
-            if Self.isDirectory(url) {
+            if LibraryController.isDirectory(url) {
                 do {
                     try openLibrary(url) { [openInitialLibraryDocument] files in
                         openInitialLibraryDocument(files)
@@ -103,13 +105,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !documentURLs.isEmpty {
             openURLs(documentURLs)
         }
-    }
-
-    private static func isDirectory(_ url: URL) -> Bool {
-        guard url.isFileURL else {
-            return false
-        }
-
-        return (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
     }
 }

@@ -97,7 +97,7 @@ final class DocumentSidebarViewController: NSViewController, NSTextFieldDelegate
     private(set) var mode: DocumentSidebarMode = .documents
 
     init(
-        libraryController: LibraryController = .shared,
+        libraryController: LibraryController = LibraryController(),
         notificationCenter: NotificationCenter = .default,
         librarySearchRunner: LibrarySearchRunner? = nil
     ) {

@@ -252,7 +252,7 @@ final class LibraryController {
         )
     }
 
-    private static func isDirectory(_ url: URL) -> Bool {
+    static func isDirectory(_ url: URL) -> Bool {
         guard url.isFileURL else {
             return false
         }
