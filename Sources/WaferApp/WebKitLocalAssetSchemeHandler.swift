@@ -21,12 +21,18 @@ final class WebKitLocalAssetSchemeHandler: NSObject, WKURLSchemeHandler {
     static let maximumByteCount = WaferLimits.assetByteCount
     private let queue: OperationQueue
     private let byteLimit: Int
+    private let accessScope: @MainActor () -> FolderAccessScope
     private var activeTasks: [ObjectIdentifier: Operation] = [:]
 
+    /// `accessScope` is what the App Sandbox lets Wafer read; a request outside
+    /// it fails at once and posts `.localAssetAccessDenied` for the web view,
+    /// so its window can offer a folder grant.
     init(queue: OperationQueue = WebKitLocalAssetSchemeHandler.readQueue,
-         maximumByteCount: Int = WebKitLocalAssetSchemeHandler.maximumByteCount) {
+         maximumByteCount: Int = WebKitLocalAssetSchemeHandler.maximumByteCount,
+         accessScope: @escaping @MainActor () -> FolderAccessScope = { FolderAccessStore.shared.scope }) {
         self.queue = queue
         self.byteLimit = maximumByteCount
+        self.accessScope = accessScope
         super.init()
     }
 
@@ -41,7 +47,7 @@ final class WebKitLocalAssetSchemeHandler: NSObject, WKURLSchemeHandler {
     nonisolated func webView(_ webView: WKWebView, start urlSchemeTask: any WKURLSchemeTask) {
         let taskBox = LocalAssetSchemeTaskBox(task: urlSchemeTask)
         MainActor.assumeIsolated {
-            start(taskBox)
+            start(taskBox, webView: webView)
         }
     }
 
@@ -52,7 +58,7 @@ final class WebKitLocalAssetSchemeHandler: NSObject, WKURLSchemeHandler {
         }
     }
 
-    private func start(_ taskBox: LocalAssetSchemeTaskBox) {
+    private func start(_ taskBox: LocalAssetSchemeTaskBox, webView: WKWebView) {
         let urlSchemeTask = taskBox.task
         let taskID = taskBox.identifier
 
@@ -65,8 +71,16 @@ final class WebKitLocalAssetSchemeHandler: NSObject, WKURLSchemeHandler {
                 )
             }
             let fileURL = try LocalAssetLoader.fileURL(for: url, allowedRootDirectories: allowedRootDirectories)
+            let scope = accessScope()
+            guard scope.covers(fileURL) else {
+                reportAccessDenied(to: fileURL, from: webView)
+                throw FolderAccessDeniedError(fileURL: fileURL)
+            }
             let mimeType = LocalAssetLoader.mimeType(for: fileURL)
-            let completionBox = LocalAssetCompletionBox { [weak self] result in
+            let completionBox = LocalAssetCompletionBox { [weak self, weak webView] result in
+                if case .failure(let error as FolderAccessDeniedError) = result, let webView {
+                    self?.reportAccessDenied(to: error.fileURL, from: webView)
+                }
                 self?.complete(
                     taskBox: taskBox,
                     taskID: taskID,
@@ -77,7 +91,7 @@ final class WebKitLocalAssetSchemeHandler: NSObject, WKURLSchemeHandler {
             }
 
             let operation = LocalAssetReadOperation(fileURL: fileURL, allowedRootDirectories: allowedRootDirectories, maximumByteCount: byteLimit,
-                                                    completionBox: completionBox)
+                                                    scope: scope, completionBox: completionBox)
             activeTasks[taskID] = operation
             queue.addOperation(operation)
         } catch {
@@ -116,6 +130,10 @@ final class WebKitLocalAssetSchemeHandler: NSObject, WKURLSchemeHandler {
         activeTasks.removeValue(forKey: taskID)
         urlSchemeTask.didFailWithError(error)
     }
+
+    private func reportAccessDenied(to fileURL: URL, from webView: WKWebView) {
+        NotificationCenter.default.post(name: .localAssetAccessDenied, object: webView, userInfo: ["fileURL": fileURL])
+    }
 }
 
 // WebKit calls and all uses of the task stay on the main actor.
@@ -142,18 +160,23 @@ private final class LocalAssetReadOperation: Operation, @unchecked Sendable {
     private let fileURL: URL
     private let allowedRootDirectories: [URL]
     private let maximumByteCount: Int
+    private let scope: FolderAccessScope
     private let completionBox: LocalAssetCompletionBox
 
-    init(fileURL: URL, allowedRootDirectories: [URL], maximumByteCount: Int, completionBox: LocalAssetCompletionBox) {
+    init(fileURL: URL, allowedRootDirectories: [URL], maximumByteCount: Int, scope: FolderAccessScope,
+         completionBox: LocalAssetCompletionBox) {
         self.fileURL = fileURL
         self.allowedRootDirectories = allowedRootDirectories
         self.maximumByteCount = maximumByteCount
+        self.scope = scope
         self.completionBox = completionBox
     }
 
     override func main() {
         guard !isCancelled else { return }
-        let result = Result { try LocalAssetLoader.read(fileURL, allowedRootDirectories: allowedRootDirectories, maximumByteCount: maximumByteCount) }
+        let result = Result {
+            try LocalAssetLoader.read(fileURL, allowedRootDirectories: allowedRootDirectories, maximumByteCount: maximumByteCount, scope: scope)
+        }
         guard !isCancelled else { return }
         DispatchQueue.main.async { [completionBox] in
             completionBox.completion(result)

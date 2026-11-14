@@ -1,6 +1,7 @@
 import AppKit
 import QuartzCore
 import WaferCore
+import WebKit
 
 @MainActor
 private final class DocumentWindow: NSWindow {
@@ -118,6 +119,10 @@ class DocumentWindowController: NSWindowController, ThemeApplying, NSUserInterfa
     private let navigationAccessoryController = NavigationHistoryAccessoryViewController()
     private let appearancePreferenceStore: AppearancePreferenceStore
     private let exportController: DocumentExportControlling
+    /// Created the first time a document here needs a folder grant.
+    private var folderAccessNotice: FolderAccessNoticeViewController?
+    /// Documents whose notice was dismissed in this window.
+    private var dismissedFolderAccessNotices: Set<String> = []
 
     var onSelectSidebarDocument: ((URL) -> Void)? {
         get { chromeViewController.onSelectSidebarDocument }
@@ -199,6 +204,18 @@ class DocumentWindowController: NSWindowController, ThemeApplying, NSUserInterfa
             name: .readerThemeDidChange,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleFolderAccessDidChange(_:)),
+            name: .folderAccessDidChange,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleLocalAssetAccessDenied(_:)),
+            name: .localAssetAccessDenied,
+            object: nil
+        )
         statisticsAccessoryController.onToggleSidebar = { [weak self] in
             self?.toggleSidebar()
         }
@@ -239,6 +256,8 @@ class DocumentWindowController: NSWindowController, ThemeApplying, NSUserInterfa
 
     deinit {
         NotificationCenter.default.removeObserver(self, name: .readerThemeDidChange, object: nil)
+        NotificationCenter.default.removeObserver(self, name: .folderAccessDidChange, object: nil)
+        NotificationCenter.default.removeObserver(self, name: .localAssetAccessDenied, object: nil)
     }
 
     var hostedContentViewController: NSViewController {
@@ -248,6 +267,7 @@ class DocumentWindowController: NSWindowController, ThemeApplying, NSUserInterfa
     func setHostedContent(_ controller: NSViewController) {
         chromeViewController.setContentViewController(controller)
         (window as? DocumentWindow)?.findResponder = Self.findNativeFindResponder(in: controller)
+        refreshFolderAccessNotice()
     }
 
     /// Shows the editor pane left of the reader, or hides it (nil). Opening
@@ -475,10 +495,89 @@ class DocumentWindowController: NSWindowController, ThemeApplying, NSUserInterfa
     func setDisplayedTitle(_ title: String) {
         window?.title = title
         chromeViewController.setDisplayedTitle(title)
+        refreshFolderAccessNotice()
     }
 
     func apply(sidebarEntries: [DocumentSidebarEntry], outlineItems: [DocumentOutlineItem]) {
         chromeViewController.apply(sidebarEntries: sidebarEntries, outlineItems: outlineItems)
+        // Linked documents outside the granted folders cannot be summarized or opened.
+        if let current = sidebarEntries.first(where: \.isCurrent) {
+            FolderAccessStore.shared.recordLinkedFiles(
+                sidebarEntries.filter { !$0.isCurrent }.map(\.fileURL), forDocumentAt: current.fileURL
+            )
+        }
+        refreshFolderAccessNotice()
+    }
+
+    // MARK: - Folder access notice
+
+    #if DEBUG
+    var folderAccessNoticeForTesting: FolderAccessNoticeViewController? {
+        folderAccessNotice
+    }
+
+    var isFolderAccessNoticeVisibleForTesting: Bool {
+        folderAccessNotice.map { !$0.isHidden } ?? false
+    }
+    #endif
+
+    private var activeDocumentURL: URL? {
+        (document as? NSDocument)?.fileURL
+    }
+
+    /// Shows the notice while the active document needs files the App Sandbox
+    /// does not let Wafer read, and hides it otherwise.
+    func refreshFolderAccessNotice() {
+        let store = FolderAccessStore.shared
+        guard store.isSandboxed else { return }
+        guard let documentURL = activeDocumentURL,
+              !dismissedFolderAccessNotices.contains(FileIdentity.identity(for: documentURL)),
+              !store.unreadableFiles(neededByDocumentAt: documentURL).isEmpty else {
+            folderAccessNotice?.isHidden = true
+            return
+        }
+
+        let folder = store.suggestedFolder(forDocumentAt: documentURL)
+        installFolderAccessNoticeIfNeeded().show(message: FolderAccessFlow.noticeMessage(folderName: folder.lastPathComponent))
+    }
+
+    private func installFolderAccessNoticeIfNeeded() -> FolderAccessNoticeViewController {
+        if let folderAccessNotice { return folderAccessNotice }
+        let notice = FolderAccessNoticeViewController()
+        notice.onGrantAccess = { [weak self] in
+            guard let self, let documentURL = self.activeDocumentURL else { return }
+            FolderAccessFlow.requestAccess(forDocumentAt: documentURL, window: self.window) { [weak self] _ in
+                self?.refreshFolderAccessNotice()
+            }
+        }
+        notice.onDismiss = { [weak self] in
+            guard let self, let documentURL = self.activeDocumentURL else { return }
+            self.dismissedFolderAccessNotices.insert(FileIdentity.identity(for: documentURL))
+            self.refreshFolderAccessNotice()
+        }
+        folderAccessNotice = notice
+        window?.addTitlebarAccessoryViewController(notice)
+        return notice
+    }
+
+    @objc private func handleFolderAccessDidChange(_ notification: Notification) {
+        refreshFolderAccessNotice()
+    }
+
+    /// The scheme handler refused an image: record it for the tab whose
+    /// reader requested it.
+    @objc private func handleLocalAssetAccessDenied(_ notification: Notification) {
+        guard let webView = notification.object as? WKWebView,
+              let fileURL = notification.userInfo?["fileURL"] as? URL,
+              let documentURL = documentURL(owning: webView) else { return }
+        FolderAccessStore.shared.recordUnreadableFile(fileURL, forDocumentAt: documentURL)
+    }
+
+    private func documentURL(owning webView: WKWebView) -> URL? {
+        if let host = self as? DocumentHostWindowController {
+            return host.tabs.first { webView.isDescendant(of: $0.readerController.view) }?.document.fileURL
+        }
+        return webView.isDescendant(of: hostedContentViewController.view) ? activeDocumentURL : nil
     }
 
     func setActiveOutlineAnchorID(_ anchorID: String?) {
@@ -496,6 +595,7 @@ class DocumentWindowController: NSWindowController, ThemeApplying, NSUserInterfa
         chromeViewController.applyCurrentTheme()
         statisticsAccessoryController.applyCurrentTheme()
         navigationAccessoryController.applyCurrentTheme()
+        folderAccessNotice?.applyCurrentTheme()
         if let window {
             suppressSystemTitlebarBackground(in: window)
             chromeViewController.installCenteredTitleIfNeeded(in: window)

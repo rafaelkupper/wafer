@@ -83,9 +83,24 @@ final class MarkdownSourceLoader {
                     return
                 }
                 self.state = .idle
-                completion(result)
+                completion(Self.explainingSandboxDenial(of: result, for: state))
             }
         }
+    }
+
+    /// Under the App Sandbox, a read refused outside the granted folders
+    /// fails with a `FolderAccessDeniedError`, whose alert offers Grant
+    /// Access…. A refused reload also records the file for its window's notice.
+    static func explainingSandboxDenial(
+        of result: Result<LoadedMarkdownSource, Error>, for state: LoadState
+    ) -> Result<LoadedMarkdownSource, Error> {
+        let store = FolderAccessStore.shared
+        guard store.isSandboxed, case .failure(let error) = result, let url = state.url,
+              FolderAccessDeniedError.isPermissionDenied(error) else { return result }
+        if case .reloading = state {
+            store.recordUnreadableFile(url, forDocumentAt: url)
+        }
+        return store.covers(url) ? result : .failure(FolderAccessDeniedError(fileURL: url))
     }
 
     /// Discards the read in progress, if any.

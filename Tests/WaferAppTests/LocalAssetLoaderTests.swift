@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
 @testable import WaferApp
+@testable import WaferCore
 
 final class LocalAssetLoaderTests: XCTestCase {
     func testFileURLExtractionRejectsInvalidLocalAssetURLs() {
@@ -29,6 +30,24 @@ final class LocalAssetLoaderTests: XCTestCase {
 
         XCTAssertEqual(response.data, Data("hello".utf8))
         XCTAssertEqual(response.response.mimeType, "text/plain")
+    }
+
+    func testReadRefusesFilesOutsideTheSandboxScopeBeforeOpeningThem() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let other = try TemporaryTestDirectory()
+        defer { other.remove() }
+        let image = try directory.createFile(named: "image.png", contents: Data([1]))
+        let elsewhere = FolderAccessScope(roots: [FileContainment(rootDirectory: other.url)])
+
+        XCTAssertThrowsError(try LocalAssetLoader.read(
+            image, allowedRootDirectories: [directory.url], maximumByteCount: 10, scope: elsewhere,
+            beforeOpening: { XCTFail("opened a file outside the sandbox scope") }
+        )) { error in
+            XCTAssertEqual((error as? FolderAccessDeniedError)?.fileURL.lastPathComponent, "image.png")
+        }
+        let covering = FolderAccessScope(roots: [FileContainment(rootDirectory: directory.url)])
+        XCTAssertEqual(try LocalAssetLoader.read(image, allowedRootDirectories: [directory.url], maximumByteCount: 10, scope: covering), Data([1]))
     }
 
     func testFileURLAllowsFilesInRootAndNestedSubdirectories() throws {

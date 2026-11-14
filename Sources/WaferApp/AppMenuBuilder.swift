@@ -567,6 +567,8 @@ final class RecentDocumentsMenuController: NSObject, NSMenuDelegate {
             return
         }
 
+        // AppKit restores access to recent documents from its own bookmarks.
+        FolderAccessStore.shared.noteUserSelected([url])
         MarkdownDocumentOpener.open(urls: [url])
     }
 }
