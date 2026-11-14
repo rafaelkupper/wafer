@@ -64,6 +64,27 @@ final class MarkdownSaveBoundsTests: XCTestCase {
         )
     }
 
+    func testOversizedSaveCopyPreservesTheOriginalCopyAndUnsavedText() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let url = try directory.createTextFile(named: "Note.md", contents: "original")
+        let copyURL = try directory.createTextFile(named: "Copy.md", contents: "existing copy")
+        var prompts = 0
+        let session = MarkdownEditSession(
+            fileURL: url, text: "original", fingerprint: FileFingerprint.sha256Hex(for: Data("original".utf8)),
+            format: .default, resolveConflict: { _, _ in
+                prompts += 1
+                return prompts == 1 ? .saveCopy(copyURL) : .cancel
+            }
+        )
+        let text = String(repeating: "x", count: MarkdownSourceLoader.maximumSourceByteCount + 1)
+        XCTAssertEqual(session.save(text, interactive: true), .keptInMemory)
+        XCTAssertEqual(prompts, 2)
+        XCTAssertTrue(session.hasUnsavedChanges(text))
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "original")
+        XCTAssertEqual(try String(contentsOf: copyURL, encoding: .utf8), "existing copy")
+    }
+
     private func checkEncodedBoundary(text: String, extra: String, format: MarkdownTextFormat) throws {
         let directory = try TemporaryTestDirectory()
         defer { directory.remove() }

@@ -65,6 +65,56 @@ final class DocumentEditingReviewTests: XCTestCase {
         XCTAssertEqual(gate.readCount, 2, "Discard the stale read and repeat it against the saved disk state")
     }
 
+    func testReadRepeatsWhenApplyingItFinishesAnUndeliveredSave() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let url = try directory.createTextFile(named: "Note.md", contents: "B")
+        let readCaptured = expectation(description: "captured B")
+        let saveStaged = DispatchSemaphore(value: 0)
+        let readGate = ReloadDeliveryGate()
+        let writeGate = DispatchSemaphore(value: 0)
+        let diskState = MarkdownDiskState()
+        let session = MarkdownEditSession(
+            fileURL: url, text: "B", fingerprint: FileFingerprint.sha256Hex(for: Data("B".utf8)),
+            format: .default, resolveConflict: { _, _ in .cancel },
+            worker: MarkdownSaveWorker(writer: { url, data, beforeReplacing in
+                saveStaged.signal()
+                guard writeGate.wait(timeout: .now() + 5) == .success else {
+                    throw CocoaError(.userCancelled)
+                }
+                try MarkdownEditSession.replaceContents(of: url, with: data, beforeReplacing: beforeReplacing)
+            }), diskState: diskState
+        )
+        let loader = MarkdownSourceLoader(load: { url in
+            let source = try MarkdownSourceLoader.loadSource(from: url)
+            if readGate.beginRead() == 1 {
+                readCaptured.fulfill()
+                readGate.wait()
+            }
+            return source
+        }, diskState: diskState, finishPendingSave: {
+            writeGate.signal()
+            session.finishPendingSave()
+        })
+        let completed = expectation(description: "read applied")
+        loader.read(.reloading(url)) { result in
+            XCTAssertEqual(try? result.get().sourceText, "C")
+            completed.fulfill()
+        }
+        defer { readGate.release(); writeGate.signal(); session.finishPendingSave() }
+        wait(for: [readCaptured], timeout: 5)
+        XCTAssertTrue(session.saveInBackground(.init(text: "C", revision: 1)) { _ in
+            XCTFail("The source loader must synchronously take this save's result")
+        })
+        XCTAssertEqual(saveStaged.wait(timeout: .now() + 5), .success)
+        XCTAssertTrue(session.isSaving)
+        readGate.release()
+        wait(for: [completed], timeout: 5)
+        XCTAssertEqual(session.savedText, "C")
+        XCTAssertFalse(session.isSaving)
+        XCTAssertEqual(readGate.readCount, 2)
+    }
+
 }
 
 private final class ReloadDeliveryGate: @unchecked Sendable {
