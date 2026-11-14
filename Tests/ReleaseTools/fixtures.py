@@ -35,14 +35,26 @@ def save():
 if command == 'codesign':
     if os.environ.get('FAIL_EXTRACTED_SIGNATURE') and '--verify' in args and not args[-1].startswith(str(root)):
         sys.exit(23)
+    # Remember the entitlements each signature was made with, so display
+    # reports what the scripts actually signed.
+    signatures_file = root / 'signed-entitlements.json'
+    signatures = json.loads(signatures_file.read_text()) if signatures_file.exists() else {}
+    if '--sign' in args and not fail:
+        if '--entitlements' in args:
+            signatures[args[-1]] = plistlib.loads(Path(args[args.index('--entitlements') + 1]).read_bytes())
+        else:
+            signatures.pop(args[-1], None)
+        signatures_file.write_text(json.dumps(signatures))
     if '-d' in args and '--entitlements' in args:
-        entitlements = {'com.apple.security.app-sandbox': True} if args[-1].endswith('.appex') else {}
+        entitlements = {'com.apple.security.app-sandbox': True} if args[-1].endswith('.appex') else signatures.get(args[-1], {})
         if os.environ.get('NETWORK_ENTITLEMENT') and args[-1].endswith('.appex'):
             entitlements['com.apple.security.network.client'] = True
+        if 'APP_ENTITLEMENTS' in os.environ and args[-1].endswith('.app'):
+            entitlements = json.loads(os.environ['APP_ENTITLEMENTS'])
         sys.stdout.buffer.write(plistlib.dumps(entitlements))
     elif '-dv' in args:
         print('Authority=' + os.environ.get('SIGNING_IDENTITY', 'Developer ID Application: Fixture Publisher (FIXTURE)'))
-        print('TeamIdentifier=FIXTURE\nTimestamp=fixture\nflags=runtime')
+        print('TeamIdentifier=FIXTURE\nTimestamp=fixture\nflags=' + os.environ.get('CODESIGN_FLAGS', 'runtime'))
 elif command == 'node' and args[:1] == ['-e']:
     version = os.environ.get('NODE_VERSION', '22.0.0')
     if int(version.split('.')[0]) < 22:
@@ -143,7 +155,7 @@ class Fixture:
         self.temporary = tempfile.TemporaryDirectory(prefix='wafer-release-test-')
         self.root = Path(self.temporary.name).resolve()
         (self.root / 'scripts').mkdir()
-        for name in ('build-app.sh', 'verify-appex.sh', 'package-release.sh', 'release.py', 'verify-update.swift',
+        for name in ('build-app.sh', 'verify-appex.sh', 'verify-app.sh', 'package-release.sh', 'release.py', 'verify-update.swift',
                      'check.sh', 'check-source.py', 'verify-vendored-assets.py', 'select-xcode.sh'):
             shutil.copy2(ROOT / 'scripts' / name, self.root / 'scripts' / name)
         shutil.copytree(ROOT / 'App', self.root / 'App')
@@ -163,6 +175,7 @@ class Fixture:
             path.chmod(0o755)
         (self.products / 'Sparkle.framework/Versions/B').mkdir(parents=True)
         (self.products / 'Sparkle.framework/Versions/B/Sparkle').write_text('fixture')
+        (self.products / 'Sparkle.framework/Versions/B/XPCServices/Installer.xpc/Contents').mkdir(parents=True)
         self.resources = self.make_resources(nested=True)
         (self.root / 'Tests/ReleaseTools').mkdir(parents=True)
         (self.root / 'Tests/JavaScript/app').mkdir(parents=True)

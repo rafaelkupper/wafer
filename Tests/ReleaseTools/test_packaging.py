@@ -1,10 +1,39 @@
+import json
 import plistlib
 import shutil
 import subprocess
 import unittest
 from pathlib import Path
 
-from fixtures import CORE_FILES, Fixture
+from fixtures import CORE_FILES, IDENTITY, ROOT, Fixture
+
+SANDBOX_ENTITLEMENTS = {
+    'com.apple.security.app-sandbox': True,
+    'com.apple.security.files.user-selected.read-write': True,
+    'com.apple.security.files.bookmarks.app-scope': True,
+    'com.apple.security.network.client': True,
+    'com.apple.security.print': True,
+    # Sparkle's sandboxed installer: https://sparkle-project.org/documentation/sandboxing/
+    'com.apple.security.temporary-exception.mach-lookup.global-name': ['dev.wafer.app-spks', 'dev.wafer.app-spki'],
+}
+
+
+class SandboxConfigurationTests(unittest.TestCase):
+    def test_app_entitlements_are_the_reviewed_sandbox_set(self):
+        self.assertEqual(plistlib.loads((ROOT / 'App/Wafer.entitlements').read_bytes()), SANDBOX_ENTITLEMENTS)
+
+    def test_sparkle_uses_the_installer_service_and_not_the_downloader(self):
+        info = plistlib.loads((ROOT / 'App/Info.plist').read_bytes())
+        self.assertIs(info['SUEnableInstallerLauncherService'], True)
+        self.assertNotIn('SUEnableDownloaderService', info)
+
+    def test_first_sandboxed_launch_moves_preferences_scroll_state_and_themes(self):
+        manifest = plistlib.loads((ROOT / 'App/container-migration.plist').read_bytes())
+        self.assertEqual(manifest, {'Move': [
+            '${Library}/Preferences/dev.wafer.app.plist',
+            '${Library}/Preferences/dev.wafer.scroll-state.plist',
+            '${ApplicationSupport}/Wafer',
+        ]})
 
 
 @unittest.skipUnless(shutil.which('zsh') and Path('/usr/libexec/PlistBuddy').exists(), 'macOS packaging tools required')
@@ -98,8 +127,100 @@ class PackagingTests(unittest.TestCase):
         old_template.write_text('preserve another invocation')
         for _ in range(2):
             self.assert_success(self.run_script('verify-appex.sh', TMPDIR=str(temporary)))
+            self.assert_success(self.run_script('verify-app.sh', TMPDIR=str(temporary)))
         self.assertEqual(old_template.read_text(), 'preserve another invocation')
         self.assertEqual(list(temporary.iterdir()), [old_template])
+
+    def test_build_signs_the_app_last_and_ad_hoc_with_the_sandbox_entitlements(self):
+        self.assert_success(self.run_script('build-app.sh', 'release'))
+        app = self.root / 'build/Wafer.app'
+        signing = [c for c in self.fixture.calls() if c[0] == 'codesign' and '--sign' in c]
+        self.assertEqual([c[-1] for c in signing], [str(app / 'Contents/PlugIns/WaferQuickLook.appex'), str(app)])
+        app_signing = signing[-1]
+        self.assertEqual(app_signing[app_signing.index('--sign') + 1], '-')
+        self.assertEqual(app_signing[app_signing.index('--entitlements') + 1], str(self.root / 'App/Wafer.entitlements'))
+        self.assertNotIn('--options', app_signing)
+        manifest = app / 'Contents/Resources/container-migration.plist'
+        self.assertEqual(manifest.read_bytes(), (self.root / 'App/container-migration.plist').read_bytes())
+        result = self.run_script('verify-app.sh', app)
+        self.assert_success(result)
+        self.assertIn('Verified app signature and sandbox entitlements', result.stdout)
+
+    def test_app_verifier_requires_the_exact_entitlement_set(self):
+        self.assert_success(self.run_script('build-app.sh', 'release'))
+        missing = dict(SANDBOX_ENTITLEMENTS)
+        del missing['com.apple.security.print']
+        lookups = 'com.apple.security.temporary-exception.mach-lookup.global-name'
+        for entitlements, message in [
+            ({}, 'missing entitlement com.apple.security.app-sandbox'),
+            (missing, 'missing entitlement com.apple.security.print'),
+            (dict(SANDBOX_ENTITLEMENTS, **{'com.apple.security.files.downloads.read-write': True}),
+             'unexpected entitlement com.apple.security.files.downloads.read-write'),
+            (dict(SANDBOX_ENTITLEMENTS, **{'com.apple.security.network.client': False}),
+             'entitlement com.apple.security.network.client is False'),
+            (dict(SANDBOX_ENTITLEMENTS, **{lookups: ['dev.wafer.app-spks']}), 'entitlement ' + lookups + ' is'),
+        ]:
+            with self.subTest(message=message):
+                result = self.run_script('verify-app.sh', APP_ENTITLEMENTS=json.dumps(entitlements))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+        self.assert_success(self.run_script('verify-app.sh'))
+
+    def test_app_verifier_checks_sparkle_keys_installer_and_migration_manifest(self):
+        self.assert_success(self.run_script('build-app.sh', 'release'))
+        app = self.root / 'build/Wafer.app'
+        info_path = app / 'Contents/Info.plist'
+        original = info_path.read_bytes()
+        info = plistlib.loads(original)
+        for change, message in [
+            ({'SUEnableInstallerLauncherService': False}, 'must set SUEnableInstallerLauncherService'),
+            ({'SUEnableDownloaderService': True}, 'must not set SUEnableDownloaderService'),
+            ({'CFBundleIdentifier': 'dev.example.other'}, "do not match the bundle identifier 'dev.example.other'"),
+        ]:
+            with self.subTest(change=change):
+                info_path.write_bytes(plistlib.dumps(dict(info, **change)))
+                result = self.run_script('verify-app.sh')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+        info_path.write_bytes(original)
+        manifest = app / 'Contents/Resources/container-migration.plist'
+        original_manifest = manifest.read_bytes()
+        manifest.write_bytes(plistlib.dumps({'Move': []}))
+        result = self.run_script('verify-app.sh')
+        self.assertIn('no Move entries', result.stderr)
+        self.assertIn('differs from App/container-migration.plist', result.stderr)
+        manifest.unlink()
+        self.assertIn('container migration manifest not found', self.run_script('verify-app.sh').stderr)
+        manifest.write_bytes(original_manifest)
+        installer = app / 'Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Installer.xpc'
+        shutil.rmtree(installer)
+        self.assertIn("Sparkle's Installer.xpc is missing", self.run_script('verify-app.sh').stderr)
+        installer.mkdir()
+        self.assert_success(self.run_script('verify-app.sh'))
+
+    def test_release_signs_the_app_with_its_entitlements_and_the_hardened_runtime(self):
+        self.assert_success(self.run_script('package-release.sh'))
+        calls = self.fixture.calls()
+        app = str(self.root / 'build/Wafer.app')
+        signing = [c for c in calls if c[0] == 'codesign' and '--timestamp' in c and c[-1] == app]
+        self.assertEqual(len(signing), 1)
+        self.assertEqual(signing[0][signing[0].index('--options') + 1], 'runtime')
+        self.assertEqual(signing[0][signing[0].index('--entitlements') + 1], str(self.root / 'App/Wafer.entitlements'))
+        self.assertEqual(signing[0][signing[0].index('--sign') + 1], IDENTITY)
+        signed_at = calls.index(signing[0])
+        distribution_checks = [i for i, c in enumerate(calls) if c[0] == 'codesign' and '-dv' in c and c[-1] == app]
+        self.assertTrue(distribution_checks and all(i > signed_at for i in distribution_checks))
+
+    def test_release_refuses_an_app_without_developer_id_or_hardened_runtime(self):
+        for environment, message in [
+            (dict(CODESIGN_FLAGS='none'), 'not signed with the hardened runtime'),
+            (dict(SIGNING_IDENTITY='Apple Development: Fixture Publisher (FIXTURE)'), 'not signed with a Developer ID Application identity'),
+        ]:
+            with self.subTest(environment=environment):
+                result = self.run_script('package-release.sh', **environment)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+                self.assertFalse((self.root / 'dist/Wafer-1.0.0.zip').exists())
 
     def test_release_generates_symbols_then_strips_shipping_copies_before_signing(self):
         self.assert_success(self.run_script('package-release.sh'))
