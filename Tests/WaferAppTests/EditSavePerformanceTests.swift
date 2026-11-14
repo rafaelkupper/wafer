@@ -57,8 +57,14 @@ final class EditSavePerformanceTests: XCTestCase {
 
         textView.insertText("y", replacementRange: NSRange(location: 40, length: 0))
         let typed = ProcessInfo.processInfo.systemUptime
-        XCTAssertTrue(document.flushEdits(interactive: true))
-        let explicitSave = ProcessInfo.processInfo.systemUptime - typed
+        let saved = expectation(description: "explicit save completed")
+        document.flushEdits(interactive: true) { success in
+            XCTAssertTrue(success)
+            saved.fulfill()
+        }
+        let explicitSaveTurn = ProcessInfo.processInfo.systemUptime - typed
+        wait(for: [saved], timeout: 30)
+        let explicitSaveLatency = ProcessInfo.processInfo.systemUptime - typed
 
         func milliseconds(_ values: [TimeInterval]) -> String {
             let sorted = values.sorted()
@@ -67,7 +73,7 @@ final class EditSavePerformanceTests: XCTestCase {
         }
         print("""
             edit-mode autosave on \(source.utf8.count) bytes: longest main-thread turn per save \(milliseconds(longest)) ms; \
-            main-thread busy per save \(milliseconds(total)) ms; explicit save (Cmd-S) \(String(format: "%.1f", explicitSave * 1_000)) ms
+            main-thread busy per save \(milliseconds(total)) ms; explicit save (Cmd-S) main turn \(String(format: "%.1f", explicitSaveTurn * 1_000)) ms, completion latency \(String(format: "%.1f", explicitSaveLatency * 1_000)) ms
             """)
     }
 

@@ -159,23 +159,25 @@ final class DocumentHostWindowController: DocumentWindowController {
             window?.performClose(nil)
             return
         }
-        // Save editor text first; a cancelled save keeps the tab open.
-        guard tabs[index].document.flushEdits(interactive: true) else {
-            return
-        }
-
-        let closingActive = index == activeTabIndex
-        let tab = tabs.remove(at: index)
-        if closingActive {
-            // Prefer the neighbor to the LEFT unless closing the first tab.
-            selectTab(at: index == 0 ? 0 : index - 1)
-        } else {
-            if index < activeTabIndex {
-                activeTabIndex -= 1
+        let document = tabs[index].document
+        document.flushEdits(interactive: true) { [weak self] success in
+            guard let self, success,
+                  let index = self.tabs.firstIndex(where: { $0.document === document }) else { return }
+            // Another tab may have closed while this save was running.
+            guard self.tabs.count > 1 else {
+                self.window?.performClose(nil)
+                return
             }
-            refreshTabStrip()
+            let closingActive = index == self.activeTabIndex
+            let tab = self.tabs.remove(at: index)
+            if closingActive {
+                self.selectTab(at: index == 0 ? 0 : index - 1)
+            } else {
+                if index < self.activeTabIndex { self.activeTabIndex -= 1 }
+                self.refreshTabStrip()
+            }
+            tab.document.close()
         }
-        tab.document.close()
     }
 
     func moveTab(from fromIndex: Int, to toIndex: Int) {
@@ -222,8 +224,16 @@ final class DocumentHostWindowController: DocumentWindowController {
         setEditorPane(controller, animated: animated)
     }
 
-    override func prepareToCloseWindow() -> Bool {
-        tabs.allSatisfy { $0.document.flushEdits(interactive: true) }
+    override func prepareToCloseWindow(completion: @escaping @MainActor (Bool) -> Void) {
+        let documents = tabs.map(\.document)
+        MarkdownReaderDocument.flushEdits(in: documents) { success in
+            guard success else { completion(false); return }
+            if self.tabs.contains(where: { tab in !documents.contains(where: { $0 === tab.document }) }) {
+                self.prepareToCloseWindow(completion: completion)
+            } else {
+                completion(true)
+            }
+        }
     }
 
     static func host(containing document: MarkdownReaderDocument) -> DocumentHostWindowController? {

@@ -51,6 +51,8 @@ final class MarkdownEditCoordinator {
     /// A background save requested while one was running: whether it may
     /// prompt. It starts when the running save finishes.
     private var queuedBackgroundSave: Bool?
+    private var flushCompletions: [@MainActor (Bool) -> Void] = []
+    private var flushIsInteractive = false
     private var liveRenderWorkItem: DispatchWorkItem?
     private var alignment = Alignment.aligned
     /// Bumped by each load and by the end of edit mode, so a line reported
@@ -86,7 +88,6 @@ final class MarkdownEditCoordinator {
     /// the reader.
     func load(_ source: LoadedMarkdownSource, fileURL: URL) {
         guard isEditing, let editor else { return }
-        session?.finishPendingSave()
         let session = MarkdownEditSession(
             fileURL: fileURL,
             text: source.sourceText,
@@ -107,7 +108,6 @@ final class MarkdownEditCoordinator {
     /// while its pane closes.
     func end() {
         stopTimers()
-        session?.finishPendingSave()
         isEditing = false
         editor?.endSession()
         editor = nil
@@ -147,6 +147,11 @@ final class MarkdownEditCoordinator {
 
     // MARK: Saving
 
+    var needsFlush: Bool {
+        guard isEditing, let session, let editor else { return false }
+        return session.isSaving || editor.revision != session.savedRevision
+    }
+
     /// True when Revert Edits would change the text.
     var canRevert: Bool {
         guard isEditing, let session, let editor else { return false }
@@ -160,34 +165,53 @@ final class MarkdownEditCoordinator {
         editor.replaceAllUndoably(with: session.baselineText)
     }
 
-    /// Saves unsaved editor text and waits for the result (explicit saves,
-    /// navigation, closing, quitting). A background save in flight finishes
-    /// first. Returns true when nothing unsaved remains: the text was saved
-    /// or unchanged, or the user discarded the edits.
-    @discardableResult
-    func flush(interactive: Bool) -> Bool {
-        guard isEditing, let session, let editor else { return true }
+    /// Coalesces interactive actions behind one ordered save. If typing
+    /// continues during the write, save the newer revision before resuming.
+    func flush(interactive: Bool, completion: @escaping @MainActor (Bool) -> Void) {
+        guard isEditing, let session, let editor else { completion(true); return }
         editor.commitComposition()
         autosaveWorkItem?.cancel()
         autosaveWorkItem = nil
         queuedBackgroundSave = nil
+        flushIsInteractive = flushIsInteractive || interactive
+        flushCompletions.append(completion)
+        guard flushCompletions.count == 1 else { return }
+        session.finishPendingSave { self.continueFlush(in: session, editor: editor) }
+    }
 
-        session.finishPendingSave()
-        let outcome = editor.revision == session.savedRevision
-            ? .unchanged
-            : session.save(editor.snapshot, interactive: interactive)
-        delegate?.editCoordinator(self, didUpdateDiskFingerprint: session.savedFingerprint, format: session.format)
-        switch outcome {
-        case .unchanged, .saved:
-            return true
-        case .reverted(let text):
-            editor.replaceTextPreservingPosition(text)
-            session.editorShowsSavedText(revision: editor.revision)
-            renderLive()
-            return true
-        case .keptInMemory:
-            return false
+    private func continueFlush(in session: MarkdownEditSession, editor: MarkdownSourceEditorViewController) {
+        editor.commitComposition()
+        let snapshot = editor.snapshot
+        guard editor.revision != session.savedRevision else { completeFlush(true); return }
+        session.save(snapshot, interactive: flushIsInteractive) { outcome in
+            self.delegate?.editCoordinator(self, didUpdateDiskFingerprint: session.savedFingerprint, format: session.format)
+            switch outcome {
+            case .unchanged, .saved:
+                break
+            case .reverted(let text):
+                // Do not discard text typed after the snapshot was taken.
+                if editor.revision == snapshot.revision {
+                    editor.replaceTextPreservingPosition(text)
+                    session.editorShowsSavedText(revision: editor.revision)
+                    self.renderLive()
+                }
+            case .keptInMemory:
+                self.completeFlush(false)
+                return
+            }
+            if editor.revision != session.savedRevision {
+                self.continueFlush(in: session, editor: editor)
+            } else {
+                self.completeFlush(true)
+            }
         }
+    }
+
+    private func completeFlush(_ success: Bool) {
+        let completions = flushCompletions
+        flushCompletions.removeAll()
+        flushIsInteractive = false
+        for completion in completions { completion(success) }
     }
 
     /// The file changed on disk while editing. Without unsaved edits the
@@ -197,14 +221,13 @@ final class MarkdownEditCoordinator {
     func adoptDiskVersion(_ loadedSource: LoadedMarkdownSource) -> Bool {
         guard let session, let editor else { return true }
         // A save that just finished may be what changed the file.
-        finishPendingSave(of: session)
         guard loadedSource.fingerprint != session.savedFingerprint else {
             return false
         }
 
         guard editor.revision == session.savedRevision || !session.hasUnsavedChanges(editor.text) else {
             // Both sides changed: the save path detects the conflict and asks.
-            flush(interactive: true)
+            flush(interactive: true) { _ in }
             return true
         }
 
@@ -239,7 +262,7 @@ final class MarkdownEditCoordinator {
     /// save on the main thread asks the user when `promptsOnConflict`;
     /// otherwise the edits stay in memory for the next save.
     private func saveInBackground(promptsOnConflict: Bool) {
-        guard isEditing, let session, let editor else { return }
+        guard isEditing, flushCompletions.isEmpty, let session, let editor else { return }
         guard !session.isSaving else {
             queuedBackgroundSave = (queuedBackgroundSave ?? false) || promptsOnConflict
             return
@@ -254,22 +277,11 @@ final class MarkdownEditCoordinator {
         }
     }
 
-    /// Lets a background save in flight finish now and passes its result to
-    /// the document. A save requested meanwhile goes back on the autosave
-    /// schedule, since the finished save's completion does not run.
-    func finishPendingSave() {
-        guard let session else { return }
-        finishPendingSave(of: session)
-    }
-
-    private func finishPendingSave(of session: MarkdownEditSession) {
-        guard session.isSaving else { return }
-        session.finishPendingSave()
-        delegate?.editCoordinator(self, didUpdateDiskFingerprint: session.savedFingerprint, format: session.format)
-        if queuedBackgroundSave != nil {
-            queuedBackgroundSave = nil
-            scheduleAutosave()
-        }
+    /// Reload delivery waits asynchronously for the save bookkeeping before
+    /// checking its disk revision. A flush includes all newer editor text.
+    func finishPendingSave(completion: @escaping @MainActor () -> Void) {
+        guard let session else { completion(); return }
+        session.finishPendingSave(completion: completion)
     }
 
     private func backgroundSaveDidFinish(
@@ -278,6 +290,7 @@ final class MarkdownEditCoordinator {
         promptsOnConflict: Bool
     ) {
         delegate?.editCoordinator(self, didUpdateDiskFingerprint: session.savedFingerprint, format: session.format)
+        guard flushCompletions.isEmpty else { return }
         let queued = queuedBackgroundSave
         queuedBackgroundSave = nil
         switch outcome {
@@ -287,7 +300,7 @@ final class MarkdownEditCoordinator {
             }
         case .conflict:
             if promptsOnConflict || queued == true {
-                flush(interactive: true)
+                flush(interactive: true) { _ in }
             }
         }
     }
