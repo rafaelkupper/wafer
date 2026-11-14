@@ -169,7 +169,7 @@ Both panes are aligned by the source line at their top, and either can lead.
 
 The editor describes its position as an `EditorScrollPosition`: the fractional source line at the top, the lines at the top when scrolled all the way up and all the way down (its scroll range), how many lines are visible, and the line count. Texts up to 80,000 UTF-16 units are fully laid out before the position is read, so the range is exact; this costs about 0.4 ms per 1,000 units, once per text or width change. Longer texts use TextKit's estimate until background layout catches up.
 
-The page script builds one mapping from editor line to preview offset for that geometry:
+The isolated reader script builds one mapping from editor line to preview offset for that geometry:
 
 1. Annotated elements are cached as sorted `(line, top)` pairs with non-decreasing tops. A line's raw offset is interpolated between the pairs around it.
 2. The editor's first and last scroll positions map to offset 0 and the preview's scroll limit. The difference between those and the raw offsets is blended in with a smoothstep over about one screen of lines at each end.
@@ -180,7 +180,7 @@ Who leads:
 - Editor scrolls (reported once per run-loop turn, skipping notifications that change nothing) call `scrollToLine`; at most one call is in flight.
 - Preview scrolls are detected in the page. A scroll event at the offset the script last set is its own; anything else (wheel, scroll bar, keyboard, anchor link, outline jump) is inverted to a line and posted to `waferLiveScroll`, and the editor scrolls there without reporting back.
 - After a patch, an image load, a `details` toggle, a size change, or async diagram rendering, the script realigns: the preview moves to the editor's line, unless the preview was scrolled in the last 250 ms, in which case the editor follows.
-- Live patches carry the editor's position, so typing realigns in the same step.
+- After a live patch completes in the page world, the app realigns the isolated scroll mapping with the editor position. A mutation observer invalidates that mapping when page-world patches change blocks or source-line attributes.
 
 Entering edit mode never moves the reader. The editor is first placed by the reader's scroll fraction, then `lineAtTop` returns the exact line for the preview's current offset and the page adopts that as the synced position. Until that answer arrives neither pane follows the other.
 
@@ -421,7 +421,9 @@ The WebKit reader is built around a deny-by-default render shell plus narrow loc
 - Raw HTML tracks open elements across the render, drops unmatched closing tags, and closes leftover elements before the `main` boundary ends. Browser repair across Markdown containers cannot close that boundary because raw HTML cannot emit `main` tags. Sanitized HTML is emitted only inside `#write`; scripts, styles, iframes, objects, embeds, metadata tags, forms, and unsafe layout attributes are removed so raw HTML cannot escape the reader shell.
 - Remote images are opt-out and non-blocking. Disabling File > Load Remote Images blocks future remote image fetches; failed remote images fail the scheme request instead of hanging rendering.
 
-`WebKitReaderViewController` uses two WebKit content-world paths. Scripted renderer readiness (`waferContentReady`) remains page-world because Mermaid and KaTeX bootstraps run in the page. Reader scroll and active-heading instrumentation runs in the named reader content world so page CSP does not block the app-owned observer scripts. Heading IDs are JSON-encoded before JavaScript evaluation, and scroll-restoration fractions travel through `callAsyncJavaScript` arguments. WebKit background styling uses the public `underPageBackgroundColor` API.
+`WebKitReaderViewController` registers all six native message handlers in the named reader content world. Scroll mapping runs there too. Page-world code handles DOM patches and bundled Mermaid and KaTeX renderers. An app-owned page script relays the renderer's readiness API through a DOM event; an isolated document-start script attaches the load's UUID before posting to native code. Native code still checks that UUID. This avoids scanning or modifying the rendered HTML. No page-world handler accepts scroll-sync payloads.
+
+Each app-owned `loadHTMLString` has a unique base-URL query identifier and one pending navigation authorization. The policy cancels other main-frame loads, including script, form, and meta-refresh navigations. Same-document fragment changes remain available, and activated links route through the document. Heading IDs are JSON-encoded before JavaScript evaluation, and scroll-restoration fractions travel through `callAsyncJavaScript` arguments. WebKit background styling uses the public `underPageBackgroundColor` API.
 
 ## In-App Updates
 

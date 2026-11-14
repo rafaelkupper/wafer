@@ -129,7 +129,7 @@ final class RemoteAssetURLGuardTests: XCTestCase {
         let counter = LookupCounter()
         let delegate = RemoteImageSessionDelegate(maximumByteCount: 1024, urlGuard: RemoteAssetURLGuard(resolve: { _ in
             let count = counter.begin()
-            if (1...2).contains(count) { firstTwo.fulfill() } else if count > 2 { excess.fulfill() }
+            if (1...2).contains(count) { firstTwo.fulfill() } else if count == 3 { excess.fulfill() }
             _ = gate.wait(timeout: .now() + 5)
             counter.end()
             return ["8.8.8.8"]

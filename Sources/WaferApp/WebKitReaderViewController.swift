@@ -35,6 +35,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
     private var hasRenderableContent = false
     private var displayedLoadingFileName: String?
     private var navigationID = UUID()
+    private var pendingReaderLoadURL: URL?
     private var currentNavigation: WKNavigation?
     private var themeUpdateID: UUID?
     private var awaitingContentReady = false
@@ -90,8 +91,8 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         contentController.add(messageHandler, contentWorld: Self.readerContentWorld, name: ScriptMessageName.activeHeading)
         contentController.add(messageHandler, contentWorld: Self.readerContentWorld, name: ScriptMessageName.openLinkInNewTab)
         contentController.add(messageHandler, contentWorld: Self.readerContentWorld, name: ScriptMessageName.copyCode)
-        contentController.add(messageHandler, name: ScriptMessageName.contentReady)
-        contentController.add(messageHandler, name: ScriptMessageName.liveScroll)
+        contentController.add(messageHandler, contentWorld: Self.readerContentWorld, name: ScriptMessageName.contentReady)
+        contentController.add(messageHandler, contentWorld: Self.readerContentWorld, name: ScriptMessageName.liveScroll)
         didInstallScriptMessageHandlers = true
         webView.navigationDelegate = self
         webView.wantsLayer = true
@@ -269,7 +270,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         hasRenderableContent = false
         pendingRestoreFraction = nil
         localAssetSchemeHandler.documentRootDirectory = nil
-        currentNavigation = webView.loadHTMLString(loadingHTML(for: fileName), baseURL: nil)
+        loadReaderHTML(loadingHTML(for: fileName), baseURL: nil)
     }
 
     func apply(renderOutput: WebKitRenderOutput, initialScrollFraction: Double?) {
@@ -280,8 +281,31 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         pendingRestoreFraction = initialScrollFraction
         lastKnownScrollFraction = initialScrollFraction ?? 0
         localAssetSchemeHandler.documentRootDirectory = renderOutput.baseURL
-        let html = renderOutput.html.replacingOccurrences(of: "<head>", with: "<head><meta name=\"wafer-navigation\" content=\"\(navigationID.uuidString)\">")
-        currentNavigation = webView.loadHTMLString(html, baseURL: renderOutput.baseURL)
+        loadReaderHTML(renderOutput.html, baseURL: renderOutput.baseURL)
+    }
+
+    private func loadReaderHTML(_ html: String, baseURL: URL?) {
+        var components = URLComponents(url: baseURL ?? URL(string: "wafer-reader://document/")!, resolvingAgainstBaseURL: false)!
+        components.queryItems = (components.queryItems ?? []) + [URLQueryItem(name: "wafer-navigation", value: navigationID.uuidString)]
+        let readerURL = components.url!
+        pendingReaderLoadURL = readerURL
+        let controller = webView.configuration.userContentController
+        controller.removeAllUserScripts()
+        controller.addUserScript(WKUserScript(source: """
+            document.addEventListener('wafer-content-ready', function() {
+              window.webkit.messageHandlers.waferContentReady.postMessage('\(navigationID.uuidString)');
+            });
+            """, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: Self.readerContentWorld))
+        // The bundled Core renderer uses this page-world API. It is a DOM
+        // relay only; the native message handler exists in the reader world.
+        controller.addUserScript(WKUserScript(source: """
+            window.webkit = window.webkit || {};
+            window.webkit.messageHandlers = window.webkit.messageHandlers || {};
+            window.webkit.messageHandlers.waferContentReady = {
+              postMessage: function() { document.dispatchEvent(new Event('wafer-content-ready')); }
+            };
+            """, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page))
+        currentNavigation = webView.loadHTMLString(html, baseURL: readerURL)
     }
 
     /// Update CSS and existing diagrams without replacing the reading surface.
@@ -318,7 +342,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         pendingRestoreFraction = initialScrollFraction
         lastKnownScrollFraction = initialScrollFraction ?? 0
         localAssetSchemeHandler.documentRootDirectory = baseURL
-        currentNavigation = webView.loadHTMLString(html, baseURL: baseURL)
+        loadReaderHTML(html, baseURL: baseURL)
     }
     #endif
 
@@ -437,7 +461,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         var arguments = Self.scriptArguments(for: editorPosition ?? .zero)
         arguments["html"] = body
         arguments["previous"] = previous
-        arguments["hasPosition"] = editorPosition != nil
+        arguments["hasPosition"] = false
         if let editorPosition {
             lastSyncedMetrics = editorPosition
         }
@@ -445,7 +469,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
             guard let self, self.navigationID == expectedNavigationID else { return }
             if case let .success(value) = result, let status = value as? String, status.hasPrefix("patched") {
                 self.liveBodyHTML = body
-                self.liveHelpersInstalled = true
+                if let editorPosition { self.syncScroll(to: editorPosition) }
                 self.livePatchStateReady = true
                 #if DEBUG
                 self.livePatchCountForTesting += 1
@@ -474,7 +498,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         let expectedNavigationID = navigationID
         let script = liveHelpersInstalled ? ReaderLivePreviewScript.installedScrollCall : ReaderLivePreviewScript.scrollCall
         liveHelpersInstalled = true
-        webView.callAsyncJavaScript(script, arguments: Self.scriptArguments(for: position), in: nil, in: .page) { [weak self] _ in
+        webView.callAsyncJavaScript(script, arguments: Self.scriptArguments(for: position), in: nil, in: Self.readerContentWorld) { [weak self] _ in
             guard let self else { return }
             self.scrollSyncInFlight = false
             guard self.navigationID == expectedNavigationID else {
@@ -500,7 +524,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
             ReaderLivePreviewScript.updateMetricsCall,
             arguments: Self.scriptArguments(for: position),
             in: nil,
-            in: .page
+            in: Self.readerContentWorld
         ) { _ in }
     }
 
@@ -520,7 +544,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
             ReaderLivePreviewScript.lineAtTopCall,
             arguments: Self.scriptArguments(for: position),
             in: nil,
-            in: .page
+            in: Self.readerContentWorld
         ) { result in
             if case let .success(value) = result, let number = value as? NSNumber {
                 completion(number.doubleValue)
@@ -538,7 +562,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
             return
         }
 
-        webView.callAsyncJavaScript(ReaderLivePreviewScript.deactivateCall, arguments: [:], in: nil, in: .page) { _ in }
+        webView.callAsyncJavaScript(ReaderLivePreviewScript.deactivateCall, arguments: [:], in: nil, in: Self.readerContentWorld) { _ in }
     }
 
     private static func scriptArguments(for position: EditorScrollPosition) -> [String: Any] {
@@ -658,15 +682,31 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
     ) {
-        guard
-            navigationAction.navigationType == .linkActivated,
-            let url = navigationAction.request.url
-        else {
+        guard let url = navigationAction.request.url else {
+            decisionHandler(.cancel)
+            return
+        }
+        if navigationAction.navigationType == .linkActivated {
+            decisionHandler(handleActivatedLink(url, modifierFlags: navigationAction.modifierFlags))
+            return
+        }
+        guard navigationAction.targetFrame?.isMainFrame == true,
+              navigationAction.navigationType == .other else {
+            decisionHandler(.cancel)
+            return
+        }
+        if url == pendingReaderLoadURL {
+            pendingReaderLoadURL = nil
             decisionHandler(.allow)
             return
         }
-
-        decisionHandler(handleActivatedLink(url, modifierFlags: navigationAction.modifierFlags))
+        // Fragment changes retain this document and its isolated handlers.
+        var target = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        var current = webView.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }
+        let hasFragment = target?.fragment != nil
+        target?.fragment = nil
+        current?.fragment = nil
+        decisionHandler(hasFragment && target?.url == current?.url ? .allow : .cancel)
     }
 
     func handleActivatedLink(_ url: URL, modifierFlags: NSEvent.ModifierFlags = []) -> WKNavigationActionPolicy {
@@ -785,8 +825,8 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         contentController.removeScriptMessageHandler(forName: ScriptMessageName.activeHeading, contentWorld: Self.readerContentWorld)
         contentController.removeScriptMessageHandler(forName: ScriptMessageName.openLinkInNewTab, contentWorld: Self.readerContentWorld)
         contentController.removeScriptMessageHandler(forName: ScriptMessageName.copyCode, contentWorld: Self.readerContentWorld)
-        contentController.removeScriptMessageHandler(forName: ScriptMessageName.contentReady)
-        contentController.removeScriptMessageHandler(forName: ScriptMessageName.liveScroll)
+        contentController.removeScriptMessageHandler(forName: ScriptMessageName.contentReady, contentWorld: Self.readerContentWorld)
+        contentController.removeScriptMessageHandler(forName: ScriptMessageName.liveScroll, contentWorld: Self.readerContentWorld)
         didInstallScriptMessageHandlers = false
     }
 

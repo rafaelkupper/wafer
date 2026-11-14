@@ -1,11 +1,85 @@
 import AppKit
 import JavaScriptCore
 import XCTest
+import WebKit
 @testable import WaferApp
 @testable import WaferCore
 
 @MainActor
 final class WebKitReaderViewControllerTests: XCTestCase {
+    func testRejectsScriptAndFormMainFrameNavigation() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let destination = try directory.createTextFile(named: "escaped.html", contents: "<html>escaped</html>")
+        for destination in [destination, URL(string: "https://navigation.invalid/escaped.html")!] {
+            for script in ["location.href = target", "const form = document.createElement('form'); form.action = target; document.body.appendChild(form); form.submit()",
+                           "const meta = document.createElement('meta'); meta.httpEquiv = 'refresh'; meta.content = '0;url=' + target; document.head.appendChild(meta)"] {
+                let controller = NavigationPolicyReader()
+                let window = hostInWindow(controller)
+                defer { close(window, controller: controller) }
+                waitForNavigation(in: controller) {
+                    controller.loadHTMLForTesting("<html><head></head><body><main id='write'>reader</main></body></html>", baseURL: directory.url)
+                }
+                let checked = expectation(description: "navigation rejected")
+                controller.didDecide = { action, policy in
+                    guard action.request.url?.path == destination.path else { return }
+                    XCTAssertEqual(policy, .cancel)
+                    checked.fulfill()
+                }
+                let data = try JSONSerialization.data(withJSONObject: destination.absoluteString, options: .fragmentsAllowed)
+                _ = evaluateString("const target = \(String(decoding: data, as: UTF8.self)); \(script); undefined", in: controller)
+                wait(for: [checked], timeout: 5)
+                controller.didDecide = nil
+                XCTAssertEqual(evaluateString("document.getElementById('write')?.textContent || ''", in: controller) as? String, "reader")
+            }
+        }
+    }
+
+    func testPageCannotPostLiveScrollPayloadsAndReaderWorldCanReportScroll() {
+        let controller = WebKitReaderViewController()
+        let window = hostInWindow(controller)
+        defer { close(window, controller: controller) }
+        waitForNavigation(in: controller) {
+            controller.loadHTMLForTesting("<html><body><main id='write'>reader</main></body></html>")
+        }
+        XCTAssertEqual(evaluateString("typeof window.webkit?.messageHandlers?.waferLiveScroll", in: controller) as? String, "undefined")
+        let received = expectation(description: "isolated scroll report")
+        controller.onLiveScroll = { line in XCTAssertEqual(line, 12.5); received.fulfill() }
+        _ = evaluateReaderContentString("window.webkit.messageHandlers.waferLiveScroll.postMessage(12.5); true", in: controller)
+        wait(for: [received], timeout: 5)
+    }
+
+    func testReadinessChecksNavigationUUIDAndHTMLWithLiteralHeadIsUntouched() {
+        let controller = NavigationPolicyReader()
+        let window = hostInWindow(controller)
+        defer { close(window, controller: controller) }
+        let loaded = expectation(description: "DOM loaded while waiting for renderers")
+        controller.didFinishObserved = { loaded.fulfill() }
+        controller.apply(renderOutput: WebKitRenderOutput(html: "<html><head><script>window.asset = '<head>';</script></head><body><main id='write'>reader</main></body></html>", baseURL: nil, waitsForContentReady: true), initialScrollFraction: nil)
+        wait(for: [loaded], timeout: 5)
+        controller.didFinishObserved = nil
+        _ = evaluateReaderContentString("window.webkit.messageHandlers.waferContentReady.postMessage('stale-id'); true", in: controller)
+        XCTAssertTrue(controller.isAwaitingContentReadyForTesting)
+        XCTAssertEqual(evaluateString("window.asset", in: controller) as? String, "<head>")
+        XCTAssertEqual(evaluateString("document.querySelectorAll('meta[name=wafer-navigation]').length", in: controller) as? Int, 0)
+        waitForNavigation(in: controller) {
+            _ = evaluateString("window.webkit.messageHandlers.waferContentReady.postMessage(''); true", in: controller)
+        }
+        XCTAssertFalse(controller.isAwaitingContentReadyForTesting)
+    }
+
+    func testScriptAnchorNavigationKeepsReaderDocument() {
+        let controller = WebKitReaderViewController()
+        let window = hostInWindow(controller)
+        defer { close(window, controller: controller) }
+        waitForNavigation(in: controller) {
+            controller.loadHTMLForTesting("<html><body><main id='write'><h1 id='target'>heading</h1></main></body></html>")
+        }
+        _ = evaluateString("location.hash = 'target'; true", in: controller)
+        XCTAssertEqual(evaluateString("location.hash", in: controller) as? String, "#target")
+        XCTAssertEqual(evaluateString("document.getElementById('write').textContent", in: controller) as? String, "heading")
+    }
+
     func testShowFindInterfaceRevealsFindBar() {
         let controller = WebKitReaderViewController()
         let window = hostInWindow(controller)
@@ -1023,4 +1097,21 @@ final class WebKitReaderViewControllerTests: XCTestCase {
 private final class JavaScriptEvaluationState: @unchecked Sendable {
     var result: Any?
     var receivedError: Error?
+}
+
+@MainActor
+private final class NavigationPolicyReader: WebKitReaderViewController {
+    var didDecide: ((WKNavigationAction, WKNavigationActionPolicy) -> Void)?
+    var didFinishObserved: (() -> Void)?
+    override func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        super.webView(webView, didFinish: navigation)
+        didFinishObserved?()
+    }
+    override func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
+        decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
+        super.webView(webView, decidePolicyFor: action) { policy in
+            self.didDecide?(action, policy)
+            decisionHandler(policy)
+        }
+    }
 }

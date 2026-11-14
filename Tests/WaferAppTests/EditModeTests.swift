@@ -886,10 +886,11 @@ final class ReaderLivePreviewTests: XCTestCase {
         reader.onNavigationFinished = nil
     }
 
-    private func evaluate(_ script: String, in reader: WebKitReaderViewController) -> Any? {
+    private func evaluate(_ script: String, in reader: WebKitReaderViewController, isolated: Bool = false) -> Any? {
         let finished = expectation(description: "evaluate")
         let box = ResultBox()
-        reader.evaluateJavaScriptForTesting(script) { value, _ in
+        let evaluation = isolated ? reader.evaluateReaderContentJavaScriptForTesting : reader.evaluateJavaScriptForTesting
+        evaluation(script) { value, _ in
             box.value = value
             finished.fulfill()
         }
@@ -1088,7 +1089,7 @@ final class ReaderLivePreviewTests: XCTestCase {
               var root = document.scrollingElement;
               return [offsets[0], offsets[offsets.length - 1], root.scrollHeight - window.innerHeight, largest, backwards];
             })()
-            """, in: reader) as? [Double])
+            """, in: reader, isolated: true) as? [Double])
 
         XCTAssertEqual(result[0], 0, "starts at the top")
         XCTAssertEqual(result[1], result[2], accuracy: 1.5, "ends at the bottom")
