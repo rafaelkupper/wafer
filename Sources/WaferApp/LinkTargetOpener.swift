@@ -55,6 +55,10 @@ struct LinkTargetOpener {
         return allowedExternalSchemes.contains(scheme)
     }
 
+    nonisolated private static let activeMarkupTypes: [UTType] = [
+        .svg, .xml, .html, .webArchive,
+    ]
+
     nonisolated private static let passiveTypes: [UTType] = [
         .image, .pdf, .audio, .movie, .rtf,
     ]
@@ -74,8 +78,11 @@ struct LinkTargetOpener {
             return false
         }
         let pathExtension = resolved.pathExtension.lowercased()
+        guard let type = values.contentType ?? UTType(filenameExtension: pathExtension),
+              !activeMarkupTypes.contains(where: { type.conforms(to: $0) }) else { return false }
+        // XHTML conforms to XML and HTML. Check active markup before either
+        // allowlist: SVG also conforms to image, but can run scripts.
         if passiveExtensions.contains(pathExtension) { return true }
-        guard let type = values.contentType ?? UTType(filenameExtension: pathExtension) else { return false }
         return passiveTypes.contains { type.conforms(to: $0) }
     }
 
