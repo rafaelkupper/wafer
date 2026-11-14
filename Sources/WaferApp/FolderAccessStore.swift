@@ -166,9 +166,15 @@ final class FolderAccessStore {
                     // A moved or renamed folder resolves to its new place.
                     grant.path = FileIdentity.identity(for: resolved.url)
                     if resolved.isStale {
-                        grant.bookmark = try bookmarks.bookmarkData(for: resolved.url)
+                        do {
+                            grant.bookmark = try bookmarks.bookmarkData(for: resolved.url)
+                            changed = true
+                        } catch {
+                            // Access works now; the old bookmark is tried again next launch.
+                            Self.log.error("Could not refresh the bookmark for \(path, privacy: .private): \(error.localizedDescription, privacy: .public)")
+                        }
                     }
-                    changed = changed || resolved.isStale || grant.path != path
+                    changed = changed || grant.path != path
                 } else {
                     Self.log.error("Could not access the granted folder \(path, privacy: .private)")
                 }
