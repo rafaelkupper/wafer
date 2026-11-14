@@ -62,13 +62,35 @@ Unit tests run unsandboxed, so they cover the logic only (with a fake bookmark s
 
 ```sh
 scripts/build-app.sh release
-scripts/sandbox-smoke.sh prepare   # copy as dev.wafer.app.sandbox-smoke, sign, create fixtures
-scripts/sandbox-smoke.sh open      # opens /tmp/wafer-sandbox-smoke/Documents/Notes/Plan.md
-scripts/sandbox-smoke.sh check     # container, migration, grants, sandbox and Wafer logs
-scripts/sandbox-smoke.sh clean     # quit and remove what the smoke test created
+export WAFER_SMOKE_BUNDLE_ID=dev.wafer.app.sandbox-smoke-$(date +%Y%m%d%H%M%S)
+export WAFER_SMOKE_DIR=/tmp/wafer-sandbox-smoke-$(date +%Y%m%d%H%M%S)
+scripts/sandbox-smoke.sh run       # prepare, open fixture folder, relaunch, assert
+scripts/sandbox-smoke.sh clean     # remove owned fixtures; keep evidence
 ```
 
-The copy uses its own bundle identifier (set `WAFER_SMOKE_BUNDLE_ID` for a fresh container) and no Quick Look extension, so the real `dev.wafer.app` container and preferences are never touched. Before its first launch, `prepare` saves fixture preferences (a custom theme selection, the line statistic, and an older install's `libraryFolderPath`) and a fixture theme folder, and the copy's migration manifest moves them into its container. A container is migrated only once; macOS keeps an emptied container after `clean`, which Finder can delete. Opening a folder with `scripts/sandbox-smoke.sh open /tmp/wafer-sandbox-smoke/Documents` works like dropping it on the app: it becomes the library and a stored folder grant.
+Use a fresh ID and work directory for each run. `prepare` refuses existing fixture paths and containers. The smoke copy has no Quick Look extension or release update feed. Its manifest migrates only private seeded preferences, scroll state and themes. The real `dev.wafer.app` preferences and scroll suite are never seeded or launched.
+
+`check` has four failure exits: **20** for container creation, **21** for migrated fixture preferences, scroll state or themes, **22** for a missing bookmark or failed relaunch access, and **23** for sandbox violations or unavailable unified logs. There is no denial allowlist. It reads `com.apple.sandbox.reporting` and Wafer's `access` category for the original and relaunched processes. A separate sandboxed probe under the smoke ID resolves the persisted bookmark and reads the sibling image without a new user-selection event; its bytes must match the fixture. This proves OS access alongside Wafer's restoration log, without asserting that WebKit visibly painted the image.
+
+Evidence stays in `build/sandbox-smoke-evidence/<bundle-id>` after `clean`, including unified JSON, the read-back image and probe diagnostics. Cleanup requires the work directory's ownership marker. If macOS refuses container deletion, the script prints the remaining path and saves `cleanup.log`; delete that private container in Finder if desired.
+
+For manual checks, use `prepare`, `open [FILE...]`, `relaunch`, `check`, then `clean`. Opening the fixture Documents folder grants it without a panel. Opening just `Notes/Plan.md` first tests the notice. `check --migration-only` checks migration and sandbox logs before any grants. Full `check` requires a recorded relaunch.
+
+CI runs the no-click `run` on the macOS debug job, prints its unified log to the job output and cleans the copy on exit. It needs a GUI login session that LaunchServices can use; SSH daemons without one cannot run this gate. The hosted-runner configuration has not been exercised locally. CI fails if launch or sandbox checks fail, rather than silently skipping them. Migration, relaunch access and the local update smoke remain required on a logged-in Mac before release, even if CI is green.
+
+Test the sandboxed Sparkle installation without publishing a feed:
+
+```sh
+scripts/sandbox-update-smoke.sh
+```
+
+The script assembles smoke builds `900001` and `900002` with the same private ID and matching Sparkle mach-lookup exceptions. It generates a throwaway Ed25519 key using OpenSSL, passes the raw seed through `sign_update --ed-key-file`, and signs both archive and appcast. It never calls `generate_keys` or reads or writes signing keys in the Keychain. The HTTP server binds only loopback and stops on exit. The private key, archives and apps are deleted after the run.
+
+Sparkle 2.10.1 [rejects `file://` downloads](https://github.com/sparkle-project/Sparkle/blob/2.10.1/Downloader/SPUDownloader.m#L59-L75). The script uses `http://localhost` with `NSAllowsLocalNetworking` confined to the smoke copies. Sparkle's [App Transport Security guide](https://sparkle-project.org/documentation/app-transport-security/) requires HTTPS or an appropriate exception. The release feed stays HTTPS.
+
+For unattended installation, the old copy runs `scripts/sandbox-update-driver.m` in its sandbox, using the embedded Sparkle and smoke entitlements. It supplies the install choices, waits for the archive to validate, defers installation, then quits. The target archive contains Wafer's actual executable. This follows the [installer XPC configuration](https://sparkle-project.org/documentation/sandboxing/) and the [install-on-quit API](https://sparkle-project.org/documentation/api-reference/Protocols/SPUUserDriver.html). It exercises Sparkle installation, not Wafer's menu or production `UpdateController`, which disables automatic downloads. The normal update prompts still need a manual release check.
+
+Success requires `Installer.xpc` process evidence, the installer-ready callback, the on-disk build changing from `900001` to `900002`, and a valid resulting signature. The script retains `driver.log`, `http.log`, `processes.log`, `installer.log`, the signed appcast, public key and installed Info.plist under the same evidence root. No clicks were needed on the controller Mac on 2026-11-14. This ad hoc run does not qualify Developer ID, hardened runtime, Gatekeeper or notarization.
 
 Watch the logs with:
 
@@ -76,7 +98,7 @@ Watch the logs with:
 log stream --level debug --predicate 'subsystem == "dev.wafer.app" OR sender == "Sandbox" OR subsystem == "com.apple.sandbox.reporting"'
 ```
 
-On macOS 27, `sandboxd` reports app sandbox denials under `com.apple.sandbox.reporting`; `sender == "Sandbox"` shows the kernel's reports. Reads the sandbox refuses outside the granted folders are often not reported at all, so the `access` category records the files Wafer refused and the grants it restored or added. The only denial seen in the smoke runs on 2026-11-13 and 2026-11-14 was WebKit's `mach-lookup com.apple.Safari.SafeBrowsing.Service`, which the reader does not need.
+On macOS 27, `sandboxd` reports app sandbox denials under `com.apple.sandbox.reporting`; `sender == "Sandbox"` shows the kernel's reports. Reads the sandbox refuses outside the granted folders are often not reported at all, so the `access` category records the files Wafer refused and the grants it restored or added. Earlier smoke runs saw WebKit's `mach-lookup com.apple.Safari.SafeBrowsing.Service` denied. The reader now disables that unnecessary lookup; the current gate permits no denials.
 
 Steps that need clicks:
 
@@ -86,7 +108,7 @@ Steps that need clicks:
 - Edit and save, Save a Copy..., Export as HTML and PDF, and Print.
 - Switch the theme, and Reveal Themes Folder in Finder opens the container's themes folder.
 - Scroll, quit with Cmd-Q, relaunch, and confirm the position; File > Open Recent reopens a file.
-- Wafer > Check for Updates... against a published feed (not testable before a release).
+- Wafer > Check for Updates... with the standard UI against a reviewed test or published feed. The scripted local feed covers the sandboxed installer separately.
 
 ## Development Files
 
@@ -144,6 +166,8 @@ test -f build/Wafer.app/Contents/Resources/Wafer_WaferCore.bundle/Contents/Resou
 ```
 
 These resource paths match Swift 6.4.2. Earlier SwiftPM toolchains use a flat resource bundle; the build and verification scripts accept that layout.
+
+Required release gates: run `scripts/sandbox-smoke.sh run` with a fresh smoke ID and `scripts/sandbox-update-smoke.sh` on a logged-in Mac, and retain their evidence. Prove the migration assertion once by removing the migration manifest from a fresh smoke copy before launch, re-signing it, and confirming `check --migration-only` exits 21. An unmodified fresh copy must pass. Never launch `dev.wafer.app` for this check.
 
 Then do a short single-machine smoke pass. Run the sandbox items with `scripts/sandbox-smoke.sh` (see [App Sandbox](#app-sandbox)), and the rest with the copy it prepares or with the installed app:
 

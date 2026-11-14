@@ -95,6 +95,12 @@ if [[ "$SKIP_TESTS" != "1" ]]; then
   "$ROOT_DIR/scripts/check.sh"
 fi
 
+# Required release checklist (docs/DEVELOPMENT.md#release-confidence-checks):
+# - sandbox-smoke.sh run: fresh private ID, migration, relaunch/bookmark read, logs
+# - sandbox-update-smoke.sh: signed localhost feed, Installer.xpc, version change
+# - standard update UI, folder-grant UI, exports and Finder previews on a logged-in Mac
+# CI runs the no-click sandbox gate; it does not qualify Developer ID updates.
+# Never launch the release-identity bundle below as a smoke test.
 step "Building release app bundle"
 "$BUILD_SCRIPT" release --release-identity
 
