@@ -65,7 +65,8 @@ enum LocalAssetLoader {
 
     /// `scope` is what the App Sandbox lets Wafer read. A file outside it is
     /// refused with `FolderAccessDeniedError` before it is opened, so the
-    /// sandbox never logs a violation for it.
+    /// sandbox never logs a violation for it. The path the descriptor really
+    /// opened (`F_GETPATH`) is checked against the roots and the scope again.
     static func read(
         _ fileURL: URL, allowedRootDirectories: [URL], maximumByteCount: Int,
         scope: FolderAccessScope = .unrestricted, beforeOpening: () throws -> Void = {}
@@ -88,7 +89,10 @@ enum LocalAssetLoader {
         guard fcntl(descriptor, F_GETPATH, &path) == 0 else { throw CocoaError(.fileReadUnknown) }
         let pathBytes = path.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
         let openedURL = URL(fileURLWithPath: String(decoding: pathBytes, as: UTF8.self)).standardizedFileURL
+        // A parent swapped for a symlink between the checks and the open can
+        // land outside either set of roots; check what was actually opened.
         guard isAllowed(fileURL: openedURL, in: roots) else { throw CocoaError(.fileReadNoPermission) }
+        guard scope.covers(openedURL) else { throw FolderAccessDeniedError(fileURL: openedURL) }
         guard info.st_size <= maximumByteCount else { throw BoundedFileReader.ReadError.tooLarge }
         var data = Data()
         while let chunk = try handle.read(upToCount: min(maximumByteCount - data.count + 1, WaferLimits.fileReadChunkByteCount)), !chunk.isEmpty {
@@ -103,7 +107,8 @@ enum LocalAssetLoader {
     }
 
     private static func isAllowed(fileURL: URL, in roots: [FileContainment]) -> Bool {
-        roots.contains { $0.contains(fileURL) }
+        let candidate = FileContainment.Candidate(fileURL)
+        return roots.contains { $0.contains(candidate) }
     }
 
     private static func resolvedFileURL(forPath path: String) -> URL {

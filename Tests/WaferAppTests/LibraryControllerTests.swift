@@ -413,7 +413,7 @@ final class LibraryControllerTests: XCTestCase {
         try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
         try Data("# Guide".utf8).write(to: library.appendingPathComponent("Guide.md"))
         let access = installSandboxedFolderAccess()
-        access.store.grantAccess(to: tempDirectory.url)
+        access.store.grantAccess(to: tempDirectory.url, mode: .readWrite)
         let store = LibraryPreferenceStore(defaults: makeTestUserDefaults())
         store.libraryFolderURL = library
         let controller = LibraryController(
@@ -428,6 +428,142 @@ final class LibraryControllerTests: XCTestCase {
 
         XCTAssertFalse(store.hasAskedForLibraryAccess)
         XCTAssertEqual(controller.files.map(\.displayTitle), ["Guide"])
+        let libraryGrant = try XCTUnwrap(access.store.folderGrants.first(where: \.isLibrary), "the library gets a grant of its own")
+        XCTAssertEqual(libraryGrant.folderURL.path, library.path)
+        XCTAssertEqual(store.libraryGrantID, libraryGrant.id)
+        controller.closeLibrary()
+    }
+
+    func testALibraryWhoseFolderMovedReopensAtItsNewPlaceThroughItsGrant() throws {
+        let tempDirectory = try TemporaryTestDirectory()
+        defer { tempDirectory.remove() }
+        let oldFolder = tempDirectory.url.appendingPathComponent("Vault", isDirectory: true)
+        let newFolder = tempDirectory.url.appendingPathComponent("Renamed Vault", isDirectory: true)
+        try FileManager.default.createDirectory(at: newFolder, withIntermediateDirectories: true)
+        try Data("# Guide".utf8).write(to: newFolder.appendingPathComponent("Guide.md"))
+        let defaults = makeTestUserDefaults()
+        defaults.set([[
+            "id": "library-grant", "path": FileIdentity.identity(for: oldFolder),
+            "bookmark": FakeSecurityScopedBookmarks.bookmark(for: oldFolder), "readOnly": false, "library": true,
+        ]], forKey: "folderAccessGrants")
+        let bookmarks = FakeSecurityScopedBookmarks()
+        bookmarks.movedPaths = [oldFolder.path: newFolder.path]
+        _ = installSandboxedFolderAccess(defaults: defaults, bookmarks: bookmarks)
+        let preferences = LibraryPreferenceStore(defaults: makeTestUserDefaults())
+        preferences.libraryFolderURL = oldFolder
+        preferences.libraryGrantID = "library-grant"
+        let controller = LibraryController(
+            preferenceStore: preferences,
+            monitorFactory: { rootURL, onChange in FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange) },
+            chooseLibraryFolder: { _, _, _ in XCTFail("asked although the library's grant found the moved folder") }
+        )
+
+        controller.reopenPersistedLibraryIfAvailable()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+        waitForLibraryIdle(controller)
+
+        XCTAssertEqual(controller.rootURL, FileIdentity.normalized(newFolder))
+        XCTAssertEqual(controller.files.map(\.displayTitle), ["Guide"])
+        XCTAssertNil(controller.scanFailure)
+        XCTAssertEqual(preferences.libraryFolderURL, FileIdentity.normalized(newFolder), "the saved path follows the grant")
+        XCTAssertEqual(preferences.libraryGrantID, "library-grant")
+        controller.closeLibrary()
+    }
+
+    func testTheLibraryKeepsAGrantOfItsOwnInsideAndUnderBroaderGrantsUntilItCloses() throws {
+        let tempDirectory = try TemporaryTestDirectory()
+        defer { tempDirectory.remove() }
+        let library = tempDirectory.url.appendingPathComponent("Notes/Vault", isDirectory: true)
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        let access = installSandboxedFolderAccess()
+        access.store.grantAccess(to: library.deletingLastPathComponent(), mode: .readWrite)
+        let preferences = LibraryPreferenceStore(defaults: makeTestUserDefaults())
+        let controller = LibraryController(
+            preferenceStore: preferences,
+            scanner: { _ in LibraryScanner.Result(files: [], truncated: false) },
+            monitorFactory: { rootURL, onChange in FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange) }
+        )
+        func libraryGrants() -> [FolderGrantInfo] { access.store.folderGrants.filter(\.isLibrary) }
+
+        try controller.openLibrary(at: library)
+        XCTAssertEqual(libraryGrants().map(\.folderURL.path), [library.path], "stored although a broader grant covers it")
+        XCTAssertEqual(libraryGrants().first?.mode, .readWrite)
+        XCTAssertEqual(preferences.libraryGrantID, libraryGrants().first?.id)
+
+        access.store.grantAccess(to: tempDirectory.url, mode: .readWrite)
+        XCTAssertEqual(libraryGrants().map(\.folderURL.path), [library.path], "a parent grant does not replace it")
+        XCTAssertEqual(access.store.folderGrants.count, 2)
+
+        controller.closeLibrary()
+        XCTAssertTrue(libraryGrants().isEmpty)
+        XCTAssertTrue(access.store.folderGrants.contains { $0.folderURL.path == library.path }, "Close Library keeps the folder granted")
+        XCTAssertNil(preferences.libraryGrantID)
+    }
+
+    func testALibraryOnADriveConnectedAfterLaunchIsScannedOnceItsGrantResolves() throws {
+        let tempDirectory = try TemporaryTestDirectory()
+        defer { tempDirectory.remove() }
+        let library = tempDirectory.url.appendingPathComponent("Drive/Library", isDirectory: true)
+        let defaults = makeTestUserDefaults()
+        defaults.set([[
+            "id": "library-grant", "path": FileIdentity.identity(for: library),
+            "bookmark": FakeSecurityScopedBookmarks.bookmark(for: library), "readOnly": false, "library": true,
+        ]], forKey: "folderAccessGrants")
+        let bookmarks = FakeSecurityScopedBookmarks()
+        bookmarks.unresolvablePaths = [library.path]
+        let access = installSandboxedFolderAccess(defaults: defaults, bookmarks: bookmarks)
+        let preferences = LibraryPreferenceStore(defaults: makeTestUserDefaults())
+        preferences.libraryFolderURL = library
+        preferences.libraryGrantID = "library-grant"
+        preferences.hasAskedForLibraryAccess = true
+        let controller = LibraryController(
+            preferenceStore: preferences,
+            monitorFactory: { rootURL, onChange in FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange) },
+            chooseLibraryFolder: { _, _, _ in XCTFail("asked although the library has its grant") }
+        )
+        controller.reopenPersistedLibraryIfAvailable()
+        waitForLibraryIdle(controller)
+        XCTAssertNotNil(controller.scanFailure, "the drive is not connected")
+        controller.retryIfUnavailable()
+        XCTAssertNotNil(controller.scanFailure, "nothing to retry before the grant resolves")
+
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        try Data("# Guide".utf8).write(to: library.appendingPathComponent("Guide.md"))
+        bookmarks.unresolvablePaths = []
+        XCTAssertTrue(access.store.resolveUnavailableGrants().didResolve)
+        controller.retryIfUnavailable()
+        waitForLibraryIdle(controller)
+
+        XCTAssertNil(controller.scanFailure)
+        XCTAssertEqual(controller.files.map(\.displayTitle), ["Guide"])
+        controller.closeLibrary()
+    }
+
+    func testALibraryCoveredOnlyByAReadOnlyGrantAsksOnceForAccessThatAllowsSaving() throws {
+        let tempDirectory = try TemporaryTestDirectory()
+        defer { tempDirectory.remove() }
+        let library = tempDirectory.url.appendingPathComponent("Notes", isDirectory: true)
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        let access = installSandboxedFolderAccess()
+        access.store.grantAccess(to: tempDirectory.url)
+        let preferences = LibraryPreferenceStore(defaults: makeTestUserDefaults())
+        preferences.libraryFolderURL = library
+        let asked = expectation(description: "asked to choose the library folder again")
+        let controller = LibraryController(
+            preferenceStore: preferences,
+            scanner: { _ in LibraryScanner.Result(files: [], truncated: false) },
+            monitorFactory: { rootURL, onChange in FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange) },
+            chooseLibraryFolder: { folder, _, completion in
+                asked.fulfill()
+                completion(folder)
+            }
+        )
+
+        controller.reopenPersistedLibraryIfAvailable()
+        wait(for: [asked], timeout: 5)
+
+        XCTAssertTrue(access.store.allowsWriting(library.appendingPathComponent("Guide.md")))
+        XCTAssertEqual(access.store.folderGrants.first(where: \.isLibrary)?.folderURL.path, library.path)
         controller.closeLibrary()
     }
 

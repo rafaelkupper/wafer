@@ -115,7 +115,7 @@ final class MarkdownDocumentOpenerTests: XCTestCase {
         }
         try MarkdownDocumentOpener.open(url: fileURL, documentFactory: makeDocument)
 
-        XCTAssertEqual(requests.map(\.suggestedFolder.path), [tempDirectory.url.path])
+        XCTAssertEqual(requests.map(\.suggestedFolder?.path), [tempDirectory.url.path])
         XCTAssertEqual(MarkdownDocumentOpener.retainedDocumentCountForTesting, initialRetainedCount + 1)
         XCTAssertTrue(access.store.covers(fileURL))
     }

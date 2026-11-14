@@ -4,7 +4,17 @@ import WaferCore
 
 @MainActor
 final class WebKitLocalAssetSchemeHandler: NSObject, WKURLSchemeHandler {
-    var documentRootDirectory: URL?
+    /// Set for every page the reader loads. Once this handler has served
+    /// its web view, each new page posts `.localAssetPageWillLoad`, so the
+    /// window can drop refused images the new page no longer shows.
+    var documentRootDirectory: URL? {
+        didSet {
+            guard let servedWebView else { return }
+            NotificationCenter.default.post(name: .localAssetPageWillLoad, object: servedWebView)
+        }
+    }
+    /// The web view whose requests this handler serves.
+    private weak var servedWebView: WKWebView?
 
     private let coreResourceRootDirectory = ReaderTheme.resourceURL(named: "mermaid.min.js")?.deletingLastPathComponent()
     // Shared across reader windows, including bundled renderer/font requests.
@@ -61,6 +71,7 @@ final class WebKitLocalAssetSchemeHandler: NSObject, WKURLSchemeHandler {
     private func start(_ taskBox: LocalAssetSchemeTaskBox, webView: WKWebView) {
         let urlSchemeTask = taskBox.task
         let taskID = taskBox.identifier
+        servedWebView = webView
 
         do {
             guard let url = urlSchemeTask.request.url else {

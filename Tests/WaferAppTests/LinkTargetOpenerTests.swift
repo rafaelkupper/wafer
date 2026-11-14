@@ -172,7 +172,7 @@ final class LinkTargetOpenerTests: XCTestCase {
         }
         opener.handle(.otherFile(image))
 
-        XCTAssertEqual(requests.map(\.suggestedFolder.path), [directory.url.path])
+        XCTAssertEqual(requests.map(\.suggestedFolder?.path), [directory.url.path])
         XCTAssertEqual(opened, [image])
         XCTAssertEqual(asked, [])
     }

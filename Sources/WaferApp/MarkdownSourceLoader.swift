@@ -88,19 +88,27 @@ final class MarkdownSourceLoader {
         }
     }
 
-    /// Under the App Sandbox, a read refused outside the granted folders
-    /// fails with a `FolderAccessDeniedError`, whose alert offers Grant
-    /// Access…. A refused reload also records the file for its window's notice.
+    /// Under the App Sandbox, a read the sandbox refused (`EPERM`) fails with
+    /// a `FolderAccessDeniedError`, whose alert offers Grant Access…, in
+    /// every state. The refusal also drops a stale session selection for
+    /// the file, such as a recent document saved without the sandbox. A
+    /// refused reload records the file for its window's notice as well.
     static func explainingSandboxDenial(
         of result: Result<LoadedMarkdownSource, Error>, for state: LoadState
     ) -> Result<LoadedMarkdownSource, Error> {
         let store = FolderAccessStore.shared
-        guard store.isSandboxed, case .failure(let error) = result, let url = state.url,
-              FolderAccessDeniedError.isPermissionDenied(error) else { return result }
+        guard store.isSandboxed, let url = state.url else { return result }
+        guard case .failure(let error) = result else {
+            // A file that reads again no longer needs a grant for itself.
+            store.noteReadSucceeded(url)
+            return result
+        }
+        guard FolderAccessDeniedError.isPermissionDenied(error) else { return result }
+        store.noteReadRefused(url)
         if case .reloading = state {
             store.recordUnreadableFile(url, forDocumentAt: url)
         }
-        return store.covers(url) ? result : .failure(FolderAccessDeniedError(fileURL: url))
+        return .failure(FolderAccessDeniedError(fileURL: url))
     }
 
     /// Discards the read in progress, if any.

@@ -100,6 +100,30 @@ final class WebKitLocalAssetSchemeHandlerTests: XCTestCase {
         XCTAssertTrue(queue.operations.isEmpty, "nothing was scheduled to read")
     }
 
+    func testEachNewPageOfAServedReaderIsAnnounced() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let url = directory.url.appendingPathComponent("image.png")
+        try Data([1]).write(to: url)
+        let handler = WebKitLocalAssetSchemeHandler(accessScope: { FolderAccessScope(roots: []) })
+        let webView = WKWebView()
+        var announced: [ObjectIdentifier] = []
+        let token = NotificationCenter.default.addObserver(forName: .localAssetPageWillLoad, object: nil, queue: nil) { notification in
+            if let object = notification.object as AnyObject? { announced.append(ObjectIdentifier(object)) }
+        }
+        defer { NotificationCenter.default.removeObserver(token) }
+
+        handler.documentRootDirectory = directory.url
+        XCTAssertTrue(announced.isEmpty, "nothing served yet, so nothing to reconcile")
+        let refused = expectation(description: "refused")
+        handler.webView(webView, start: LocalAssetTestTask(fileURL: url) { refused.fulfill() })
+        wait(for: [refused], timeout: 5)
+        handler.documentRootDirectory = directory.url
+        handler.documentRootDirectory = nil
+
+        XCTAssertEqual(announced, [ObjectIdentifier(webView), ObjectIdentifier(webView)])
+    }
+
     func testRequestInsideTheSandboxScopeIsRead() throws {
         let directory = try TemporaryTestDirectory()
         defer { directory.remove() }
