@@ -36,7 +36,7 @@ final class DirectoryChangeMonitorTests: XCTestCase {
     func testCallbackBoxDoesNotKeepReleasedMonitorAlive() {
         var monitor: DirectoryChangeMonitor? = DirectoryChangeMonitor(rootURL: URL(fileURLWithPath: "/tmp")) {}
         let box = DirectoryMonitorWeakBox(monitor!)
-        weak var reference = monitor
+        weak let reference = monitor
         monitor = nil
         XCTAssertNil(reference)
         XCTAssertNil(box.monitor)

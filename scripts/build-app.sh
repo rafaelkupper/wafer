@@ -8,9 +8,6 @@ MODE=${CONFIGURATION:l}
 APP_NAME=Wafer
 QUICKLOOK_NAME=WaferQuickLook
 APP_BUNDLE="$ROOT_DIR/build/$APP_NAME.app"
-EXECUTABLE_PATH="$ROOT_DIR/.build/$MODE/$APP_NAME"
-QUICKLOOK_EXECUTABLE_PATH="$ROOT_DIR/.build/$MODE/$QUICKLOOK_NAME"
-BUILD_PRODUCTS_DIR="$ROOT_DIR/.build/$MODE"
 RESOURCE_BUNDLES=(Wafer_WaferCore.bundle Wafer_WaferApp.bundle)
 QUICKLOOK_APPEX="$APP_BUNDLE/Contents/PlugIns/$QUICKLOOK_NAME.appex"
 LSREGISTER=${WAFER_LSREGISTER:-"/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"}
@@ -52,6 +49,9 @@ if [[ "$MODE" == "release" ]]; then
 fi
 swift build -c "$MODE" "${BUILD_FLAGS[@]}" --product "$APP_NAME"
 swift build -c "$MODE" "${BUILD_FLAGS[@]}" --product "$QUICKLOOK_NAME"
+BUILD_PRODUCTS_DIR=$(swift build -c "$MODE" "${BUILD_FLAGS[@]}" --show-bin-path)
+EXECUTABLE_PATH="$BUILD_PRODUCTS_DIR/$APP_NAME"
+QUICKLOOK_EXECUTABLE_PATH="$BUILD_PRODUCTS_DIR/$QUICKLOOK_NAME"
 
 # Check required bundles before replacing the previous app.
 for bundle_name in "${RESOURCE_BUNDLES[@]}"; do

@@ -31,7 +31,25 @@ class CheckScriptTests(unittest.TestCase):
     def test_swift_failure_stops_subsequent_checks(self):
         result = self.run_script('check.sh', FAIL_COMMAND='swift test')
         self.assertEqual(result.returncode, 23, result.stdout + result.stderr)
-        self.assertFalse(any(c[0] == 'node' for c in self.fixture.calls()))
+        self.assertFalse(any(c[:2] == ['node', 'Tests/JavaScript/app/fixture.cjs'] for c in self.fixture.calls()))
+
+    def test_release_mode_selects_optimized_core_and_quicklook_tests(self):
+        result = self.run_script('check.sh', '--release', '--perf')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(['swift', 'test', '-c', 'release'], self.fixture.calls())
+        self.assertEqual((self.fixture.root / 'release-test-mode.txt').read_text(), '1')
+        self.assertEqual((self.fixture.root / 'perf-test-mode.txt').read_text(), '1')
+
+    def test_missing_or_old_node_stops_before_swift(self):
+        result = self.run_script('check.sh', NODE_VERSION='20.19.0')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Node.js 22 or newer is required; found 20.19.0', result.stderr)
+        node = self.fixture.root / 'bin/node'
+        node.rename(node.with_suffix('.disabled'))
+        result = self.run_script('check.sh', PATH=str(node.parent) + ':/usr/bin:/bin')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('install node and add it to PATH', result.stderr)
+        self.assertFalse(any(c[0] == 'swift' for c in self.fixture.calls()))
 
     def test_vendored_manifest_matches_the_real_resources(self):
         result = subprocess.run(['python3', str(ROOT / 'scripts/verify-vendored-assets.py')],
@@ -66,3 +84,12 @@ class CheckScriptTests(unittest.TestCase):
         result = self.run_script('check.sh')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('Missing vendored asset provenance', result.stderr)
+
+    def test_xcode_selection_accepts_supported_toolchain_and_reports_missing_version(self):
+        result = self.run_script('select-xcode.sh')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.strip(), str(self.fixture.root / 'Selected Xcode.app/Contents/Developer'))
+        for environment in [dict(XCODE_VERSION='25.4'), dict(XCODE_SWIFT_VERSION='6.2')]:
+            result = self.run_script('select-xcode.sh', **environment)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('Xcode 26 with Swift 6.2.3 or newer is required', result.stderr)

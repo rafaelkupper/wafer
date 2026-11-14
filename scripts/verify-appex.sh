@@ -69,7 +69,7 @@ linked_libraries=$(otool -L "$EXECUTABLE") || fail "could not read Quick Look ex
 
 codesign --verify --strict --verbose=2 "$QUICKLOOK_APPEX" >/dev/null
 
-entitlements_plist=$(mktemp "${TMPDIR:-/tmp}/wafer-appex-entitlements.XXXXXX.plist")
+entitlements_plist=$(mktemp "${TMPDIR:-/tmp}/wafer-appex-entitlements.XXXXXX")
 trap 'rm -f "$entitlements_plist"' EXIT
 codesign -d --entitlements :- "$QUICKLOOK_APPEX" > "$entitlements_plist" 2>/dev/null
 sandbox=$(/usr/libexec/PlistBuddy -c "Print :com.apple.security.app-sandbox" "$entitlements_plist" 2>/dev/null || true)

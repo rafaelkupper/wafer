@@ -1,5 +1,9 @@
 // swift-tools-version: 6.2
 import PackageDescription
+import Foundation
+
+// SwiftPM builds every test target before applying --filter. App tests use DEBUG-only seams.
+let releaseTestsOnly = ProcessInfo.processInfo.environment["WAFER_RELEASE_TESTS"] == "1"
 
 let package = Package(
     name: "Wafer",
@@ -67,15 +71,19 @@ let package = Package(
             path: "Tests",
             exclude: ["WaferAppTests", "WaferQuickLookTests", "JavaScript", "ReleaseTools"],
             sources: ["WaferCoreTests"],
-            resources: [.copy("Fixtures")]
+            resources: [.copy("Fixtures")],
+            swiftSettings: [.treatAllWarnings(as: .error)]
         ),
         .testTarget(
             name: "WaferQuickLookTests",
-            dependencies: ["WaferCore", "WaferQuickLookSupport"]
+            dependencies: ["WaferCore", "WaferQuickLookSupport"],
+            swiftSettings: [.treatAllWarnings(as: .error)]
         ),
+    ] + (releaseTestsOnly ? [] : [
         .testTarget(
             name: "WaferAppTests",
-            dependencies: ["WaferApp"]
+            dependencies: ["WaferApp"],
+            swiftSettings: [.treatAllWarnings(as: .error)]
         ),
-    ]
+    ])
 )
