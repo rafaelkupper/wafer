@@ -11,7 +11,7 @@ struct RemoteAssetURLGuard: Sendable {
     }
 
     func validate(_ url: URL?) throws {
-        guard let url, ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+        guard let url, url.scheme?.lowercased() == "https",
               let host = url.host, !host.isEmpty else { throw Rejection.invalidURL }
         let name = host.hasPrefix("[") && host.hasSuffix("]") ? String(host.dropFirst().dropLast()) : host
         // Literal addresses are checked even when tests inject a DNS resolver.
@@ -81,18 +81,34 @@ struct RemoteAssetURLGuard: Sendable {
         }
         // IPv4-compatible, unspecified and loopback addresses share ::/96.
         if bytes.prefix(12).allSatisfy({ $0 == 0 }) { return false }
+        // IANA special-purpose ranges: discard-only, dummy, benchmarking,
+        // deprecated ORCHID, documentation and non-global segment routing.
+        if bytes.prefix(8) == [0x01, 0, 0, 0, 0, 0, 0, 0] { return false }
+        if bytes.prefix(8) == [0x01, 0, 0, 0, 0, 0, 0, 1] { return false }
+        if bytes.prefix(6) == [0x20, 0x01, 0, 2, 0, 0] { return false }
+        if bytes.prefix(3) == [0x20, 0x01, 0] && bytes[3] & 0xf0 == 0x10 { return false }
+        if bytes.prefix(4) == [0x20, 0x01, 0x0d, 0xb8] { return false }
+        if bytes.prefix(2) == [0x3f, 0xff] && bytes[2] & 0xf0 == 0 { return false }
+        if bytes.prefix(2) == [0x5f, 0] { return false }
         if bytes[0] & 0xfe == 0xfc || bytes[0] == 0xff { return false }
         if bytes[0] == 0xfe && bytes[1] & 0xc0 == 0x80 { return false }
         return true
     }
 
     private static func isPublicIPv4(_ bytes: [UInt8]) -> Bool {
-        let a = bytes[0], b = bytes[1]
+        let a = bytes[0], b = bytes[1], c = bytes[2]
         if a == 0 || a == 10 || a == 127 || a >= 224 { return false }
         if a == 172 && (16...31).contains(b) { return false }
         if a == 192 && b == 168 { return false }
         if a == 169 && b == 254 { return false }
         if a == 100 && (64...127).contains(b) { return false }
+        // IANA protocol assignments, documentation, deprecated 6to4 relay
+        // anycast and benchmarking. The whole 192.0.0.0/24 is blocked.
+        if a == 192 && b == 0 && (c == 0 || c == 2) { return false }
+        if a == 192 && b == 88 && c == 99 { return false }
+        if a == 198 && (b == 18 || b == 19) { return false }
+        if a == 198 && b == 51 && c == 100 { return false }
+        if a == 203 && b == 0 && c == 113 { return false }
         return true
     }
 }
