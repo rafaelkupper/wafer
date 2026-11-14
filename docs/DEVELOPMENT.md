@@ -4,9 +4,9 @@ Notes for building, testing, and releasing Wafer from source. For the design, se
 
 ## Source build identity
 
-The package, app, and Quick Look extension use Wafer names and the `dev.wafer.app` bundle identifier. This identity has separate preferences and macOS registration from earlier distributions. The app runs in the App Sandbox, so its preferences and custom themes live in its container, `~/Library/Containers/dev.wafer.app/Data` (themes in `Library/Application Support/Wafer/Themes`). The first sandboxed launch moves the unsandboxed `dev.wafer.app` preferences, scroll positions, and themes folder there; it does not migrate support folders of earlier distributions.
+Local and CI bundles use `dev.wafer.app.dev`, with Quick Look under `dev.wafer.app.dev.quicklook`. Their preferences and themes live in `~/Library/Containers/dev.wafer.app.dev/Data`. They omit the release migration manifest and update feed, so opening a development build leaves release preferences in place.
 
-The app manifest carries the project's update feed and public key, so a local build checks the same feed as the released app. To distribute your own builds, replace both as described in [the update guide](UPDATES.md). Packaging variables use the `WAFER_` prefix. The existing notarization Keychain profile may still be named `VibeMD`.
+`package-release.sh` explicitly passes `--release-identity` to assemble `dev.wafer.app` and `dev.wafer.app.quicklook`. That bundle retains the project's feed, public key and migration manifest. Its first sandboxed launch moves the unsandboxed release preferences, scroll positions and themes into `~/Library/Containers/dev.wafer.app/Data`. Never launch that identity for development or smoke tests. Packaging variables use the `WAFER_` prefix. The existing notarization Keychain profile may still be named `VibeMD`.
 
 ## Build
 
@@ -19,7 +19,7 @@ scripts/build-app.sh release
 scripts/verify-app.sh build/Wafer.app
 ```
 
-Launching `build/Wafer.app` creates the real `~/Library/Containers/dev.wafer.app` container on first launch and moves your existing Wafer preferences, scroll positions, and themes into it, where an older unsandboxed Wafer no longer sees them. For experiments, use the sandboxed smoke copy described in [App Sandbox](#app-sandbox), which has its own bundle identifier.
+Launching `build/Wafer.app` uses the development container. To test migration and release-style updates, use the disposable smoke copies in [App Sandbox](#app-sandbox).
 
 For local installation, copy `build/Wafer.app` into `~/Applications` or `/Applications`.
 An ad hoc signature has no Developer ID, so a copy downloaded from elsewhere still needs the usual manual approval steps.
@@ -46,7 +46,7 @@ Runtime failures that are handled without user interaction are written to unifie
 
 [CI](../.github/workflows/ci.yml) runs separate debug and release test jobs on macOS 15. The debug job also assembles the release app and verifies its Quick Look extension. `scripts/select-xcode.sh` selects the newest installed Xcode 26 with Swift 6.2.3 or newer from `/Applications` or the current `xcode-select` directory, and fails clearly if none is usable. Checkout and cache actions are pinned to full commit SHAs. The `.build` cache key includes the runner platform, configuration, Xcode and Swift versions, and `Package.resolved`. Push builds run only for `main`; pull requests run once per configuration. Performance assertions remain opt-in because hosted runners have variable load. The app retains its macOS 14 deployment target.
 
-`scripts/build-app.sh` locates executables, resource bundles, and Sparkle through `swift build --show-bin-path` for the selected configuration, including toolchain-specific product directories. Quick Look request coordination lives in `WaferQuickLookSupport`; its tests run without importing the extension executable or its `_NSExtensionMain` linker flag. The extension still links QuickLookUI, excludes WebKit, and uses the app sandbox.
+`scripts/build-app.sh` builds all package products once, then locates executables, resource bundles, and Sparkle through `swift build --show-bin-path` for the selected configuration, including toolchain-specific product directories. Quick Look request coordination lives in `WaferQuickLookSupport`; its tests run without importing the extension executable or its `_NSExtensionMain` linker flag. The extension still links QuickLookUI, excludes WebKit, and uses the app sandbox.
 
 ## App Sandbox
 
@@ -56,7 +56,7 @@ Signing:
 
 - `scripts/build-app.sh` signs the Quick Look extension and then the app ad hoc, each with its entitlements. Ad hoc signatures have no team identity, so local builds leave out the hardened runtime, whose library validation needs one.
 - `scripts/package-release.sh` signs Sparkle's helpers, the extension, and the app inside out with Developer ID, the hardened runtime, and a secure timestamp; the app gets `App/Wafer.entitlements`.
-- `scripts/verify-app.sh [--distribution] [app]` fails unless the signed entitlements are exactly `App/Wafer.entitlements`, the Sparkle mach-lookup names match the bundle identifier, `SUEnableInstallerLauncherService` is set and the Downloader service is not, `Installer.xpc` is present, and the bundled `container-migration.plist` matches `App/`. `--distribution` also requires a Developer ID Application signature with the hardened runtime. CI runs it after assembling the app, and packaging runs it with `--distribution`. `check.sh` runs its release-tool tests.
+- `scripts/verify-app.sh [--distribution|--release-identity] [app]` defaults to the development identity. It fails unless the signed entitlements are exactly `App/Wafer.entitlements` with the selected identity's mach names, the Sparkle mach-lookup names match the bundle identifier, `SUEnableInstallerLauncherService` is set and the Downloader service is not, `Installer.xpc` is present, and the migration manifest matches `App/` in release mode or is absent in development mode. Development verification also rejects the release feed and key. `verify-appex.sh` accepts the same identity flags and checks both the containing app and nested extension IDs. `--distribution` also requires a Developer ID Application signature with the hardened runtime. CI runs it after assembling the app, and packaging runs it with `--distribution`. `check.sh` runs its release-tool tests.
 
 Unit tests run unsandboxed, so they cover the logic only (with a fake bookmark store and an injected folder panel). The sandbox itself is covered by a smoke test of the built app:
 

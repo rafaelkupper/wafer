@@ -150,7 +150,7 @@ open build/Wafer.app
 
 `scripts/check.sh --release` tests optimized Core and Quick Look code. `scripts/check.sh --perf` enables the optional performance assertions; the options can be combined. Release builds retain matching dSYMs in `build` and strip the shipping executables before signing. Release packaging requires committed source and a notarytool Keychain profile.
 
-A source build is not signed with a Developer ID. The screenshots on this page use the small vault in [`docs/demo`](docs/demo); open it with File > Open Folder... to try the library, wiki links, diagrams, and math. See [Development](docs/DEVELOPMENT.md) for tests and packaging.
+A source build uses the sandboxed `dev.wafer.app.dev` identity, with separate preferences and no migration of release data or release update feed. It is signed ad hoc. Only release packaging selects `dev.wafer.app` explicitly. The screenshots on this page use the small vault in [`docs/demo`](docs/demo); open it with File > Open Folder... to try the library, wiki links, diagrams, and math. See [Development](docs/DEVELOPMENT.md) for tests and packaging.
 
 ## License
 

@@ -15,7 +15,7 @@ Wafer is a SwiftPM-based macOS document viewer for Markdown files. The app is sp
 
 - `App/Info.plist`
 - `App/Wafer.entitlements`, the app's App Sandbox entitlements
-- `App/container-migration.plist`, copied to `Contents/Resources` (see [file access](#file-access))
+- `App/container-migration.plist`, copied to `Contents/Resources` only with `--release-identity` (see [file access](#file-access))
 - `App/QuickLook-Info.plist`
 - `App/QuickLook.entitlements`
 - `App/Resources/Wafer.icns`
@@ -26,11 +26,11 @@ Wafer is a SwiftPM-based macOS document viewer for Markdown files. The app is sp
 
 The script signs the Quick Look extension and then the app ad hoc, each with its entitlements, so a local build runs in the App Sandbox exactly as a release does. Ad hoc signatures have no team identity, so the hardened runtime (whose library validation needs one) is added only by the Developer ID signing in `scripts/package-release.sh`. `scripts/verify-app.sh` checks the signature, the exact entitlement set, Sparkle's sandbox keys, and the bundled migration manifest.
 
-The bundle identifier is `dev.wafer.app`, and the minimum macOS version is 14.0.
+Local and CI builds use `dev.wafer.app.dev`, omit the release migration manifest and update feed, and rewrite Sparkle's mach names to match. `package-release.sh` passes `--release-identity` to produce `dev.wafer.app` with the shipping manifest, feed and public key unchanged. The minimum macOS version is 14.0. The build uses one SwiftPM build invocation and one `--show-bin-path` query.
 `CFBundleShortVersionString` follows a three-component marketing version format.
 The build script copies SwiftPM resource bundles into `Contents/Resources`; `ReaderTheme` and the app-local `ReaderScriptResource` lookup check that packaged location before using SwiftPM `Bundle.module` in debug and test contexts. Release script lookup never evaluates the SwiftPM accessor when packaging is broken; it logs a resource fault instead.
 
-The Quick Look extension is hand-assembled at `Contents/PlugIns/WaferQuickLook.appex`. Its bundle identifier is `dev.wafer.app.quicklook`, its extension point is `com.apple.quicklook.preview`, and its principal class is the Objective-C-visible `PreviewProvider`. SwiftPM builds it as the `WaferQuickLook` executable product with the `_NSExtensionMain` linker entry point and links QuickLookUI explicitly because the repository does not use an Xcode appex target. The appex also receives `Wafer_WaferCore.bundle` in `Contents/Resources` so `Bundle.module` can resolve reader CSS and emoji data from inside the extension process. `build-app.sh` removes the Mermaid and KaTeX runtime files from the appex copy because Quick Look is scriptless, and `verify-appex.sh` checks they are absent while the needed resources are present. SwiftPM 6.4 and later emit resource bundles in the standard macOS layout (`Contents/Resources`), while earlier toolchains emitted them flat; runtime lookup goes through `Bundle` APIs and `scripts/verify-appex.sh` accepts either layout.
+The Quick Look extension is hand-assembled at `Contents/PlugIns/WaferQuickLook.appex`. Its bundle identifier is `dev.wafer.app.dev.quicklook` locally and `dev.wafer.app.quicklook` for distribution, its extension point is `com.apple.quicklook.preview`, and its principal class is the Objective-C-visible `PreviewProvider`. SwiftPM builds it as the `WaferQuickLook` executable product with the `_NSExtensionMain` linker entry point and links QuickLookUI explicitly because the repository does not use an Xcode appex target. The appex also receives `Wafer_WaferCore.bundle` in `Contents/Resources` so `Bundle.module` can resolve reader CSS and emoji data from inside the extension process. `build-app.sh` removes the Mermaid and KaTeX runtime files from the appex copy because Quick Look is scriptless, and `verify-appex.sh` checks they are absent while the needed resources are present. SwiftPM 6.4 and later emit resource bundles in the standard macOS layout (`Contents/Resources`), while earlier toolchains emitted them flat; runtime lookup goes through `Bundle` APIs and `scripts/verify-appex.sh` accepts either layout.
 
 ## Document Windows
 
@@ -498,7 +498,7 @@ The app quits when its last window closes, and Sparkle's windows count. `AppDele
 Direct distribution outside the Mac App Store is handled by `scripts/package-release.sh`. The release path is:
 
 1. Refuse a dirty source tree (`scripts/check-source.py`), then run `scripts/check.sh`, the same Swift, Python, Node and vendored-asset checksum checks CI runs.
-2. Build `build/Wafer.app` in release mode with build paths remapped, keep matching dSYMs, and strip the shipping executables before signing.
+2. Build `build/Wafer.app` with `release --release-identity` with build paths remapped, keep matching dSYMs, and strip the shipping executables before signing.
 3. Sign Sparkle's helpers and framework inside out with a `Developer ID Application` identity, hardened runtime, and secure timestamp, never with `--deep`. Then sign `Contents/PlugIns/WaferQuickLook.appex` the same way with `App/QuickLook.entitlements`.
 4. Verify the appex layout, bundled WaferCore resources, signature, sandbox entitlement, and absence of preview network entitlement with `scripts/verify-appex.sh`.
 5. Sign the containing app with the same Developer ID identity, hardened runtime, and secure timestamp, and with `App/Wafer.entitlements`.
