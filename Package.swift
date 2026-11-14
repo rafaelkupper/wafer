@@ -44,7 +44,8 @@ let package = Package(
         ),
         .executableTarget(
             name: "WaferQuickLook",
-            dependencies: ["WaferCore"],
+            dependencies: ["WaferCore", "WaferQuickLookSupport"],
+            exclude: ["Support"],
             swiftSettings: [
                 .treatAllWarnings(as: .error),
                 .unsafeFlags(["-application-extension"]),
@@ -53,6 +54,12 @@ let package = Package(
                 .linkedFramework("QuickLookUI"),
                 .unsafeFlags(["-Xlinker", "-e", "-Xlinker", "_NSExtensionMain"]),
             ]
+        ),
+        .target(
+            name: "WaferQuickLookSupport",
+            dependencies: ["WaferCore"],
+            path: "Sources/WaferQuickLook/Support",
+            swiftSettings: [.treatAllWarnings(as: .error)]
         ),
         .testTarget(
             name: "WaferCoreTests",
@@ -64,7 +71,7 @@ let package = Package(
         ),
         .testTarget(
             name: "WaferQuickLookTests",
-            dependencies: ["WaferCore"]
+            dependencies: ["WaferCore", "WaferQuickLookSupport"]
         ),
         .testTarget(
             name: "WaferAppTests",

@@ -3,11 +3,12 @@ import Foundation
 import QuickLookUI
 import UniformTypeIdentifiers
 import WaferCore
+import WaferQuickLookSupport
 
 @objc(PreviewProvider)
 final class PreviewProvider: NSViewController, @preconcurrency QLPreviewingController {
     private let queue = DispatchQueue(label: "dev.wafer.preview", qos: .userInitiated)
-    private var request: PreviewRequest?
+    private let requests = PreviewRequestCoordinator()
     private var textView: NSTextView?
 
     override func loadView() {
@@ -46,9 +47,7 @@ final class PreviewProvider: NSViewController, @preconcurrency QLPreviewingContr
     }
 
     func preparePreviewOfFile(at url: URL, completionHandler handler: @escaping (Error?) -> Void) {
-        request?.cancel()
-        let request = PreviewRequest(handler)
-        self.request = request
+        let request = requests.begin(handler)
         let token = request.cancellation
         let isDark = Self.isDarkAppearance
         queue.async { [weak self] in
@@ -63,30 +62,31 @@ final class PreviewProvider: NSViewController, @preconcurrency QLPreviewingContr
                 guard let self else { request.cancel(); request.finish(); return }
                 switch result {
                 case .success(let (title, html)):
-                    request.finish {
+                    self.requests.finish(request) {
+                        try self.applyPreviewHTML(html, palette: isDark ? .dark : .light)
                         self.title = title
-                        self.applyPreviewHTML(html, palette: isDark ? .dark : .light)
                     }
-                case .failure(let error): request.finish(error: error)
+                case .failure(let error): self.requests.finish(request, error: error)
                 }
             }
         }
     }
 
     private var previewTextView: NSTextView {
-        if let textView {
+        get throws {
+            loadViewIfNeeded()
+            guard let textView else {
+                throw CocoaError(.coderInvalidValue, userInfo: [
+                    NSLocalizedDescriptionKey: "Preview text view was not created.",
+                ])
+            }
             return textView
         }
-        loadViewIfNeeded()
-        guard let textView else {
-            preconditionFailure("Preview text view was not created.")
-        }
-        return textView
     }
 
-    private func applyPreviewHTML(_ html: String, palette: ReaderThemePalette) {
+    private func applyPreviewHTML(_ html: String, palette: ReaderThemePalette) throws {
+        let textView = try previewTextView
         let attributed = PreviewAttributedText.make(html: html, palette: palette)
-        let textView = previewTextView
         textView.backgroundColor = ReaderTheme.color(fromHex: palette.backgroundHex)
         textView.insertionPointColor = ReaderTheme.color(fromHex: palette.textHex)
         textView.textStorage?.setAttributedString(attributed)
