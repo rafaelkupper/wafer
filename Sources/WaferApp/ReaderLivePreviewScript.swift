@@ -1,7 +1,9 @@
 import Foundation
 
-/// Page-world JavaScript for the edit-mode live preview. Installed lazily on
-/// the first edit-mode call against a page; a full page load discards it.
+/// JavaScript for the edit-mode live preview. DOM patching runs in the page
+/// world; scroll mapping and the `waferLiveScroll` relay run in the isolated
+/// reader content world. Installed lazily on the first edit-mode call against
+/// a page; a full page load discards it.
 ///
 /// - `patch(html, previous, position)` replaces only the changed top-level
 ///   `#write` nodes. Nodes are compared by their rendered HTML with
