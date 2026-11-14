@@ -273,6 +273,7 @@ final class MarkdownReaderDocument: NSDocument {
         scrollPersistenceWorkItem?.cancel()
         readerController?.shutdown()
         MarkdownDocumentOpener.release(document: self)
+        FolderAccessFlow.documentStoppedShowing(fileURL)
         super.close()
     }
 
@@ -855,6 +856,7 @@ final class MarkdownReaderDocument: NSDocument {
         initialSourceFailureHandler = nil
 
         stopFileMonitor()
+        let departingFileURL = self.fileURL
         self.fileURL = fileURL
         source = loadedSource
         currentActiveHeadingID = nil
@@ -864,6 +866,7 @@ final class MarkdownReaderDocument: NSDocument {
             pendingAnchor = .none
         }
         OpenDocumentRegistry.shared.reindex(self)
+        FolderAccessFlow.documentStoppedShowing(departingFileURL)
         NSDocumentController.shared.noteNewRecentDocumentURL(fileURL)
 
         startFileMonitor(for: fileURL)

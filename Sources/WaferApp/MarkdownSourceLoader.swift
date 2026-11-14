@@ -97,8 +97,13 @@ final class MarkdownSourceLoader {
         of result: Result<LoadedMarkdownSource, Error>, for state: LoadState
     ) -> Result<LoadedMarkdownSource, Error> {
         let store = FolderAccessStore.shared
-        guard store.isSandboxed, case .failure(let error) = result, let url = state.url,
-              FolderAccessDeniedError.isPermissionDenied(error) else { return result }
+        guard store.isSandboxed, let url = state.url else { return result }
+        guard case .failure(let error) = result else {
+            // A file that reads again no longer needs a grant for itself.
+            store.noteReadSucceeded(url)
+            return result
+        }
+        guard FolderAccessDeniedError.isPermissionDenied(error) else { return result }
         store.noteReadRefused(url)
         if case .reloading = state {
             store.recordUnreadableFile(url, forDocumentAt: url)

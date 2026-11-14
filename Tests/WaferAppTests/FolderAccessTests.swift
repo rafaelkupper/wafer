@@ -94,12 +94,13 @@ extension XCTestCase {
         defaults: UserDefaults? = nil,
         bookmarks: FakeSecurityScopedBookmarks = FakeSecurityScopedBookmarks(),
         range: FolderAccessRange = .current,
+        imageSettleDelay: TimeInterval = 0.05,
         canOpenForReading: @escaping @MainActor (URL) -> Bool = { _ in true }
     ) -> SandboxedFolderAccess {
         let defaults = defaults ?? makeTestUserDefaults()
         let store = FolderAccessStore(
             defaults: defaults, bookmarks: bookmarks, isSandboxed: true, alwaysReadableRoots: [], alwaysWritableRoots: [],
-            range: range, canOpenForReading: canOpenForReading
+            range: range, imageSettleDelay: imageSettleDelay, canOpenForReading: canOpenForReading
         )
         FolderAccessTestSupport.install(store)
         addTeardownBlock {
@@ -138,7 +139,7 @@ final class FolderAccessStoreTests: XCTestCase {
 
         XCTAssertTrue(store.covers(document))
         XCTAssertTrue(store.grantAccess(to: folder).isEmpty)
-        store.recordUnreadableFile(folder.appendingPathComponent("image.png"), forDocumentAt: document)
+        store.recordRefusedImage(folder.appendingPathComponent("image.png"), forDocumentAt: document)
         store.recordLinkedFiles([folder.appendingPathComponent("Other.md")], forDocumentAt: document)
 
         XCTAssertTrue(store.unreadableFiles(neededByDocumentAt: document).isEmpty)
@@ -361,7 +362,7 @@ final class FolderAccessStoreTests: XCTestCase {
         let changes = FolderAccessChangeRecorder(store: access.store)
 
         XCTAssertEqual(access.store.suggestion(forDocumentAt: document), .folder(notes, isWidened: false), "nothing needed: its own folder")
-        access.store.recordUnreadableFile(image, forDocumentAt: document)
+        access.store.recordRefusedImage(image, forDocumentAt: document)
         XCTAssertEqual(access.store.suggestion(forDocumentAt: document), .folder(notes, isWidened: false))
         access.store.recordLinkedFiles([linked], forDocumentAt: document)
 
@@ -372,6 +373,86 @@ final class FolderAccessStoreTests: XCTestCase {
         XCTAssertEqual(access.store.grantAccess(to: directory.url), [FileIdentity.identity(for: document)])
         XCTAssertTrue(access.store.unreadableFiles(neededByDocumentAt: document).isEmpty)
         XCTAssertEqual(changes.count, 3)
+    }
+
+    func testForgettingADocumentReleasesEverythingItNeeded() {
+        let access = installSandboxedFolderAccess()
+        let document = URL(fileURLWithPath: "/tmp/wafer-forget/Plan.md")
+        access.store.recordLinkedFiles([URL(fileURLWithPath: "/tmp/wafer-forget/A.md")], forDocumentAt: document)
+        access.store.recordRefusedImage(URL(fileURLWithPath: "/tmp/wafer-forget/i.png"), forDocumentAt: document)
+        access.store.recordUnreadableFile(URL(fileURLWithPath: "/tmp/wafer-forget/T.md"), forDocumentAt: document)
+        XCTAssertEqual(access.store.recordedDocumentCountForTesting, 1)
+        let changes = FolderAccessChangeRecorder(store: access.store)
+
+        access.store.forgetDocument(at: document)
+
+        XCTAssertEqual(access.store.recordedDocumentCountForTesting, 0)
+        XCTAssertTrue(access.store.unreadableFiles(neededByDocumentAt: document).isEmpty)
+        XCTAssertEqual(changes.count, 1)
+        access.store.forgetDocument(at: document)
+        XCTAssertEqual(changes.count, 1, "forgetting nothing changes nothing")
+    }
+
+    func testLinkTargetsLastUntilTheNextRenderAndTheOwnFileUntilItReadsAgain() {
+        let access = installSandboxedFolderAccess()
+        let document = URL(fileURLWithPath: "/tmp/wafer-targets/Plan.md")
+        let target = URL(fileURLWithPath: "/tmp/wafer-targets/Far/Next.md")
+        access.store.recordUnreadableFile(target, forDocumentAt: document)
+        access.store.recordUnreadableFile(document, forDocumentAt: document)
+        XCTAssertEqual(access.store.unreadableFiles(neededByDocumentAt: document), [target, document].sorted { $0.path < $1.path })
+
+        access.store.recordLinkedFiles([], forDocumentAt: document)
+        XCTAssertEqual(access.store.unreadableFiles(neededByDocumentAt: document), [document], "the next render no longer links to it")
+
+        let loader = MarkdownSourceLoader(load: { _ in LoadedMarkdownSource(sourceText: "# Plan", fingerprint: "f") })
+        let finished = expectation(description: "read finished")
+        loader.read(.reloading(document)) { _ in finished.fulfill() }
+        wait(for: [finished], timeout: 10)
+        XCTAssertTrue(access.store.unreadableFiles(neededByDocumentAt: document).isEmpty, "it read again")
+        XCTAssertEqual(access.store.recordedDocumentCountForTesting, 0)
+    }
+
+    func testRefusedImagesAreReconciledOnEveryReaderPage() {
+        let access = installSandboxedFolderAccess(imageSettleDelay: 0.05)
+        let document = URL(fileURLWithPath: "/tmp/wafer-pages/Plan.md")
+        let kept = URL(fileURLWithPath: "/tmp/wafer-pages/kept.png")
+        let removed = URL(fileURLWithPath: "/tmp/wafer-pages/removed.png")
+        access.store.recordRefusedImage(kept, forDocumentAt: document)
+        access.store.recordRefusedImage(removed, forDocumentAt: document)
+        let changes = FolderAccessChangeRecorder(store: access.store)
+        func settle() { RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2)) }
+
+        access.store.beginReaderPage(forDocumentAt: document)
+        XCTAssertEqual(access.store.unreadableFiles(neededByDocumentAt: document), [kept, removed],
+                       "the previous page's images count while the new one loads, so the notice does not flicker")
+        access.store.recordRefusedImage(kept, forDocumentAt: document)
+        settle()
+        XCTAssertEqual(access.store.unreadableFiles(neededByDocumentAt: document), [kept], "an image the new page no longer shows stops counting")
+        XCTAssertEqual(changes.count, 1)
+
+        access.store.beginReaderPage(forDocumentAt: document)
+        access.store.beginReaderPage(forDocumentAt: document)
+        settle()
+        XCTAssertTrue(access.store.unreadableFiles(neededByDocumentAt: document).isEmpty)
+        XCTAssertEqual(access.store.recordedDocumentCountForTesting, 0)
+    }
+
+    func testSessionSelectionsKeepOnlyTheMostRecent() {
+        let access = installSandboxedFolderAccess()
+        let limit = FolderAccessStore.maximumUserSelections
+        let files = (0..<(limit + 10)).map { URL(fileURLWithPath: "/tmp/wafer-selections/\($0).md") }
+
+        access.store.noteUserSelected(files)
+
+        XCTAssertEqual(access.store.userSelectionCountForTesting, limit)
+        XCTAssertFalse(access.store.covers(files[9]))
+        XCTAssertTrue(access.store.covers(files[10]))
+        XCTAssertTrue(access.store.covers(files[limit + 9]))
+        access.store.noteUserSelected([files[10]])
+        access.store.noteUserSelected([URL(fileURLWithPath: "/tmp/wafer-selections/new.md")])
+        XCTAssertTrue(access.store.covers(files[10]), "opening a file again makes it recent")
+        XCTAssertFalse(access.store.covers(files[11]))
+        XCTAssertEqual(access.store.userSelectionCountForTesting, limit)
     }
 
     func testLinkedFilesAreReplacedOnEveryRender() {
@@ -554,7 +635,7 @@ final class FolderAccessFlowTests: XCTestCase {
         defer { directory.remove() }
         let document = directory.url.appendingPathComponent("Plan.md")
         let access = installSandboxedFolderAccess()
-        access.store.recordUnreadableFile(directory.url.appendingPathComponent("image.png"), forDocumentAt: document)
+        access.store.recordRefusedImage(directory.url.appendingPathComponent("image.png"), forDocumentAt: document)
         var requests: [FolderAccessRequest] = []
         FolderAccessFlow.chooseFolder = { request, _, completion in
             requests.append(request)
@@ -822,7 +903,7 @@ final class FolderAccessNoticeTests: XCTestCase {
         let window = try XCTUnwrap(host.window)
         let contentHeight = window.contentLayoutRect.height
 
-        access.store.recordUnreadableFile(directory.url.appendingPathComponent("image.png"), forDocumentAt: fileURL)
+        access.store.recordRefusedImage(directory.url.appendingPathComponent("image.png"), forDocumentAt: fileURL)
         window.layoutIfNeeded()
 
         XCTAssertTrue(host.isFolderAccessNoticeVisibleForTesting)
@@ -859,7 +940,7 @@ final class FolderAccessNoticeTests: XCTestCase {
         let (document, host, _) = try makeHostedDocument(fileURL)
         defer { document.close() }
 
-        access.store.recordUnreadableFile(URL(fileURLWithPath: "/image.png"), forDocumentAt: fileURL)
+        access.store.recordRefusedImage(URL(fileURLWithPath: "/image.png"), forDocumentAt: fileURL)
 
         XCTAssertTrue(host.isFolderAccessNoticeVisibleForTesting)
         XCTAssertEqual(host.folderAccessNoticeForTesting?.message, "“Plan.md” needs files outside the folders Wafer offers.")
@@ -882,11 +963,11 @@ final class FolderAccessNoticeTests: XCTestCase {
         let access = installSandboxedFolderAccess()
         let (document, host, _) = try makeHostedDocument(fileURL)
         defer { document.close() }
-        access.store.recordUnreadableFile(directory.url.appendingPathComponent("image.png"), forDocumentAt: fileURL)
+        access.store.recordRefusedImage(directory.url.appendingPathComponent("image.png"), forDocumentAt: fileURL)
         XCTAssertTrue(host.isFolderAccessNoticeVisibleForTesting)
 
         host.folderAccessNoticeForTesting?.triggerDismissForTesting()
-        access.store.recordUnreadableFile(directory.url.appendingPathComponent("other.png"), forDocumentAt: fileURL)
+        access.store.recordRefusedImage(directory.url.appendingPathComponent("other.png"), forDocumentAt: fileURL)
 
         XCTAssertFalse(host.isFolderAccessNoticeVisibleForTesting)
     }
@@ -973,6 +1054,62 @@ final class FolderAccessNoticeTests: XCTestCase {
 
         XCTAssertEqual(requests.map(\.suggestedFolder?.path), [nextFolder.path])
         waitUntil { document.fileURL == FileIdentity.normalized(next) }
+    }
+
+    func testClosingTheLastDocumentShowingAFileForgetsWhatItNeeded() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let fileURL = try directory.createTextFile(named: "Plan.md", contents: "# Plan")
+        let access = installSandboxedFolderAccess()
+        access.store.noteUserSelected([fileURL])
+        let (first, _, _) = try makeHostedDocument(fileURL)
+        let (second, _, _) = try makeHostedDocument(fileURL)
+        OpenDocumentRegistry.shared.retain(first)
+        OpenDocumentRegistry.shared.retain(second)
+        access.store.recordRefusedImage(directory.url.appendingPathComponent("image.png"), forDocumentAt: fileURL)
+
+        first.close()
+        XCTAssertEqual(access.store.unreadableFiles(neededByDocumentAt: fileURL).count, 1, "another window still shows the file")
+        second.close()
+        XCTAssertTrue(access.store.unreadableFiles(neededByDocumentAt: fileURL).isEmpty)
+        XCTAssertEqual(access.store.recordedDocumentCountForTesting, 0)
+    }
+
+    func testNavigatingAwayForgetsWhatTheDepartingFileNeeded() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let fileURL = try directory.createTextFile(named: "Plan.md", contents: "# Plan")
+        let next = try directory.createTextFile(named: "Next.md", contents: "# Next")
+        let access = installSandboxedFolderAccess()
+        access.store.noteUserSelected([fileURL, next])
+        let (document, _, _) = try makeHostedDocument(fileURL)
+        OpenDocumentRegistry.shared.retain(document)
+        defer { document.close() }
+        access.store.recordRefusedImage(directory.url.appendingPathComponent("image.png"), forDocumentAt: fileURL)
+
+        document.navigateInCurrentWindow(to: next)
+        waitUntil { document.fileURL == FileIdentity.normalized(next) }
+
+        XCTAssertTrue(access.store.unreadableFiles(neededByDocumentAt: fileURL).isEmpty)
+    }
+
+    func testANewReaderPageStopsCountingImagesItNoLongerShows() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let fileURL = try directory.createTextFile(named: "Plan.md", contents: "# Plan")
+        let access = installSandboxedFolderAccess(imageSettleDelay: 0.05)
+        access.store.noteUserSelected([fileURL])
+        let (document, host, reader) = try makeHostedDocument(fileURL)
+        defer { document.close() }
+        let webView = try XCTUnwrap(Self.webView(in: reader.view))
+        NotificationCenter.default.post(name: .localAssetAccessDenied, object: webView,
+                                        userInfo: ["fileURL": directory.url.appendingPathComponent("image.png")])
+        XCTAssertTrue(host.isFolderAccessNoticeVisibleForTesting)
+
+        // The edited document no longer shows the image; its next page asks for nothing.
+        NotificationCenter.default.post(name: .localAssetPageWillLoad, object: webView)
+        XCTAssertTrue(host.isFolderAccessNoticeVisibleForTesting, "still shown while the page loads")
+        waitUntil { !host.isFolderAccessNoticeVisibleForTesting }
     }
 
     func testALinkFollowedWhileEditingAsksForAReadWriteGrant() throws {

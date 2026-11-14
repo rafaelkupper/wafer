@@ -230,6 +230,13 @@ enum FolderAccessFlow {
         }
     }
 
+    /// Forgets what `fileURL` needed once no open document shows it: after
+    /// its last document closes or navigates away from it.
+    static func documentStoppedShowing(_ fileURL: URL?) {
+        guard let fileURL, OpenDocumentRegistry.shared.document(for: fileURL) == nil else { return }
+        FolderAccessStore.shared.forgetDocument(at: fileURL)
+    }
+
     /// Reloads open documents whose needed files became readable, so images,
     /// summaries, and links work without reopening (like File > Reload).
     static func reloadOpenDocuments(_ documentIdentities: Set<String>) {

@@ -216,6 +216,12 @@ class DocumentWindowController: NSWindowController, ThemeApplying, NSUserInterfa
             name: .localAssetAccessDenied,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleLocalAssetPageWillLoad(_:)),
+            name: .localAssetPageWillLoad,
+            object: nil
+        )
         statisticsAccessoryController.onToggleSidebar = { [weak self] in
             self?.toggleSidebar()
         }
@@ -258,6 +264,7 @@ class DocumentWindowController: NSWindowController, ThemeApplying, NSUserInterfa
         NotificationCenter.default.removeObserver(self, name: .readerThemeDidChange, object: nil)
         NotificationCenter.default.removeObserver(self, name: .folderAccessDidChange, object: nil)
         NotificationCenter.default.removeObserver(self, name: .localAssetAccessDenied, object: nil)
+        NotificationCenter.default.removeObserver(self, name: .localAssetPageWillLoad, object: nil)
     }
 
     var hostedContentViewController: NSViewController {
@@ -580,7 +587,14 @@ class DocumentWindowController: NSWindowController, ThemeApplying, NSUserInterfa
         guard let webView = notification.object as? WKWebView,
               let fileURL = notification.userInfo?["fileURL"] as? URL,
               let documentURL = documentURL(owning: webView) else { return }
-        FolderAccessStore.shared.recordUnreadableFile(fileURL, forDocumentAt: documentURL)
+        FolderAccessStore.shared.recordRefusedImage(fileURL, forDocumentAt: documentURL)
+    }
+
+    /// A reader here starts a new page; its document's refused images are
+    /// reconciled against what the page asks for.
+    @objc private func handleLocalAssetPageWillLoad(_ notification: Notification) {
+        guard let webView = notification.object as? WKWebView, let documentURL = documentURL(owning: webView) else { return }
+        FolderAccessStore.shared.beginReaderPage(forDocumentAt: documentURL)
     }
 
     private func documentURL(owning webView: WKWebView) -> URL? {

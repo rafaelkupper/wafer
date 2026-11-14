@@ -11,6 +11,9 @@ extension Notification.Name {
     /// Posted by the local asset scheme handler when the sandbox scope refuses
     /// an image. The object is the requesting web view; `fileURL` is in userInfo.
     static let localAssetAccessDenied = Notification.Name("FolderAccessStore.localAssetAccessDenied")
+    /// Posted by the local asset scheme handler when its reader starts a new
+    /// page. The object is the web view.
+    static let localAssetPageWillLoad = Notification.Name("FolderAccessStore.localAssetPageWillLoad")
 }
 
 /// Whether this process runs in the App Sandbox. XCTest and `swift run`
@@ -163,17 +166,56 @@ final class FolderAccessStore {
     private var grants: [Grant] = [] {
         didSet { cachedScope = nil }
     }
-    /// Files the user opened this session (Finder, Open, Open Recent).
+    /// Files the user opened this session (Finder, Open, Open Recent), at
+    /// most `maximumUserSelections`, oldest first in `userSelectionOrder`.
     private var userSelections: [String: FileContainment] = [:] {
         didSet { cachedScope = nil }
     }
+    private var userSelectionOrder: [String] = []
     /// `scope`, built once until the grants or selections change.
     private var cachedScope: FolderAccessScope?
     private var hasRestored = false
-    /// Linked documents each document shows; replaced on every render.
-    private var linkNeeds: [String: Set<URL>] = [:]
-    /// Images, link targets, and the document's own file that failed to read.
-    private var fileNeeds: [String: Set<URL>] = [:]
+    /// What each shown file needs and Wafer could not read, by identity.
+    private var needs: [String: DocumentNeeds] = [:]
+    /// How long the previous page's refused images keep counting after a
+    /// new page starts, while it asks for its own.
+    private let imageSettleDelay: TimeInterval
+
+    /// macOS keeps access to a file the user opened until Wafer quits, so
+    /// forgetting an old selection only means asking for its folder again.
+    static let maximumUserSelections = 512
+
+    private struct DocumentNeeds {
+        /// Linked documents the Documents sidebar shows; replaced on every render.
+        var linked: Set<URL> = []
+        /// Images the reader refused on its current page.
+        var images: Set<URL> = []
+        /// Images refused on the previous page, until the current page has
+        /// had time to ask for its own.
+        var previousImages: Set<URL> = []
+        /// Link targets the user tried to open; dropped at the next render,
+        /// which records the linked documents again.
+        var targets: Set<URL> = []
+        /// The document's own file after a refused reload, until it reads again.
+        var ownFile: URL?
+        /// Counts reader pages, so the settle check of an earlier page does nothing.
+        var page = 0
+
+        var files: Set<URL> {
+            linked.union(images).union(previousImages).union(targets).union(ownFile.map { [$0] } ?? [])
+        }
+
+        /// Keeps only what `scope` does not cover; returns true if anything went.
+        mutating func removeCovered(by scope: FolderAccessScope) -> Bool {
+            let before = files.count
+            linked = linked.filter { !scope.covers($0) }
+            images = images.filter { !scope.covers($0) }
+            previousImages = previousImages.filter { !scope.covers($0) }
+            targets = targets.filter { !scope.covers($0) }
+            if let ownFile, scope.covers(ownFile) { self.ownFile = nil }
+            return files.count != before
+        }
+    }
 
     init(
         defaults: UserDefaults = .standard,
@@ -183,9 +225,11 @@ final class FolderAccessStore {
         alwaysReadableRoots: [URL] = FolderAccessStore.defaultAlwaysReadableRoots(),
         alwaysWritableRoots: [URL] = FolderAccessStore.defaultAlwaysWritableRoots(),
         range: FolderAccessRange = .current,
+        imageSettleDelay: TimeInterval = 1,
         canOpenForReading: @escaping @MainActor (URL) -> Bool = FolderAccessStore.canOpenForReading
     ) {
         self.range = range
+        self.imageSettleDelay = imageSettleDelay
         self.defaults = defaults
         self.notificationCenter = notificationCenter
         self.bookmarks = bookmarks
@@ -371,7 +415,7 @@ final class FolderAccessStore {
             return grant
         } catch {
             Self.log.error("Could not remember access to \(path, privacy: .private): \(error.localizedDescription, privacy: .public)")
-            userSelections[path] = FileContainment(rootDirectory: folderURL)
+            addUserSelection(folderURL)
             return nil
         }
     }
@@ -393,8 +437,30 @@ final class FolderAccessStore {
     func noteUserSelected(_ urls: [URL]) {
         guard isSandboxed else { return }
         for url in urls where url.isFileURL {
-            userSelections[FileIdentity.identity(for: url)] = FileContainment(rootDirectory: url)
+            addUserSelection(url)
         }
+    }
+
+    /// Adds or refreshes a session selection, dropping the oldest beyond
+    /// `maximumUserSelections`.
+    private func addUserSelection(_ url: URL) {
+        let key = FileIdentity.identity(for: url)
+        if userSelections.updateValue(FileContainment(rootDirectory: url), forKey: key) != nil {
+            userSelectionOrder.removeAll { $0 == key }
+        }
+        userSelectionOrder.append(key)
+        while userSelectionOrder.count > Self.maximumUserSelections {
+            userSelections.removeValue(forKey: userSelectionOrder.removeFirst())
+        }
+    }
+
+    /// Returns true when there was a selection for `url`.
+    @discardableResult
+    private func removeUserSelection(_ url: URL) -> Bool {
+        let key = FileIdentity.identity(for: url)
+        guard userSelections.removeValue(forKey: key) != nil else { return false }
+        userSelectionOrder.removeAll { $0 == key }
+        return true
     }
 
     /// A document chosen from Open Recent. AppKit restores access to recent
@@ -413,8 +479,7 @@ final class FolderAccessStore {
     /// The sandbox refused to read `fileURL`, so a session selection for it
     /// no longer applies, whatever the store believed.
     func noteReadRefused(_ fileURL: URL) {
-        guard isSandboxed,
-              userSelections.removeValue(forKey: FileIdentity.identity(for: fileURL)) != nil else { return }
+        guard isSandboxed, removeUserSelection(fileURL) else { return }
         Self.log.info("Dropped the session access to \(fileURL.lastPathComponent, privacy: .private) after the sandbox refused a read")
     }
 
@@ -468,41 +533,92 @@ final class FolderAccessStore {
     // MARK: Needed files
 
     /// Replaces the linked documents `documentURL` shows that Wafer cannot
-    /// read (the Documents sidebar and its summaries).
+    /// read (the Documents sidebar and its summaries). This happens on every
+    /// render, so link targets recorded since the last one are dropped too.
     func recordLinkedFiles(_ fileURLs: [URL], forDocumentAt documentURL: URL) {
         guard isSandboxed else { return }
         let scope = self.scope
-        let key = FileIdentity.identity(for: documentURL)
         let unreadable = Set(fileURLs.filter { !scope.covers($0) }.map(FileIdentity.normalized))
-        guard linkNeeds[key, default: []] != unreadable else { return }
-        linkNeeds[key] = unreadable.isEmpty ? nil : unreadable
-        Self.log.info("\(documentURL.lastPathComponent, privacy: .private) links to \(unreadable.count, privacy: .public) files outside the granted folders")
-        postChange()
+        updateNeeds(of: documentURL) { needs in
+            needs.linked = unreadable
+            needs.targets = []
+        }
     }
 
-    /// Records a file `documentURL` failed to read: an image, a link target,
-    /// or the document itself on reload.
+    /// Records a file `documentURL` failed to read: a link target, or the
+    /// document itself on reload.
     func recordUnreadableFile(_ fileURL: URL, forDocumentAt documentURL: URL) {
         guard isSandboxed else { return }
         let file = FileIdentity.normalized(fileURL)
         // A read failed, so a session selection for this file no longer applies.
-        if userSelections.removeValue(forKey: FileIdentity.identity(for: file)) == nil, covers(file) {
+        if !removeUserSelection(file), covers(file) {
             return
         }
-        guard fileNeeds[FileIdentity.identity(for: documentURL), default: []].insert(file).inserted else { return }
-        Self.log.info("\(documentURL.lastPathComponent, privacy: .private) could not read \(file.lastPathComponent, privacy: .private) outside the granted folders")
+        let isOwnFile = FileIdentity.identity(for: file) == FileIdentity.identity(for: documentURL)
+        updateNeeds(of: documentURL) { needs in
+            if isOwnFile {
+                needs.ownFile = file
+            } else {
+                needs.targets.insert(file)
+            }
+        }
+    }
+
+    /// Records an image the reader refused for `documentURL`'s current page.
+    func recordRefusedImage(_ fileURL: URL, forDocumentAt documentURL: URL) {
+        guard isSandboxed else { return }
+        let file = FileIdentity.normalized(fileURL)
+        guard !covers(file) else { return }
+        updateNeeds(of: documentURL) { needs in
+            needs.images.insert(file)
+            needs.previousImages.remove(file)
+        }
+    }
+
+    /// The reader starts a new page for `documentURL`. The previous page's
+    /// refused images count until this page has had `imageSettleDelay` to
+    /// ask for them again; those it does not ask for are dropped, so an
+    /// image removed from the document stops the notice.
+    func beginReaderPage(forDocumentAt documentURL: URL) {
+        guard isSandboxed else { return }
+        let key = FileIdentity.identity(for: documentURL)
+        guard var documentNeeds = needs[key] else { return }
+        documentNeeds.previousImages.formUnion(documentNeeds.images)
+        documentNeeds.images = []
+        documentNeeds.page += 1
+        let page = documentNeeds.page
+        needs[key] = documentNeeds
+        guard !documentNeeds.previousImages.isEmpty else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + imageSettleDelay) { [weak self] in
+            guard let self, self.needs[key]?.page == page else { return }
+            self.updateNeeds(of: documentURL) { $0.previousImages = [] }
+        }
+    }
+
+    /// `documentURL` read successfully, so it no longer needs a grant for itself.
+    func noteReadSucceeded(_ documentURL: URL) {
+        guard isSandboxed, needs[FileIdentity.identity(for: documentURL)]?.ownFile != nil else { return }
+        updateNeeds(of: documentURL) { $0.ownFile = nil }
+    }
+
+    /// Releases everything recorded for `documentURL`; called once no open
+    /// document shows it (`FolderAccessFlow.documentStoppedShowing`).
+    func forgetDocument(at documentURL: URL) {
+        guard needs.removeValue(forKey: FileIdentity.identity(for: documentURL)) != nil else { return }
         postChange()
     }
 
     /// The files `documentURL` needs that Wafer still cannot read, by path.
     func unreadableFiles(neededByDocumentAt documentURL: URL) -> [URL] {
-        guard isSandboxed else { return [] }
-        let key = FileIdentity.identity(for: documentURL)
+        guard isSandboxed, let documentNeeds = needs[FileIdentity.identity(for: documentURL)] else { return [] }
         let scope = self.scope
-        return linkNeeds[key, default: []].union(fileNeeds[key, default: []])
-            .filter { !scope.covers($0) }
-            .sorted { $0.path < $1.path }
+        return documentNeeds.files.filter { !scope.covers($0) }.sorted { $0.path < $1.path }
     }
+
+    #if DEBUG
+    var recordedDocumentCountForTesting: Int { needs.count }
+    var userSelectionCountForTesting: Int { userSelections.count }
+    #endif
 
     /// The folder to offer for Grant Access… in the document's window: its
     /// own folder, widened within `range` to also hold the files it needs,
@@ -513,20 +629,30 @@ final class FolderAccessStore {
 
     // MARK: Private
 
+    /// Changes what `documentURL` needs, posting a change when the files it
+    /// still cannot read changed. A document that needs nothing is dropped.
+    private func updateNeeds(of documentURL: URL, _ change: (inout DocumentNeeds) -> Void) {
+        let key = FileIdentity.identity(for: documentURL)
+        let before = unreadableFiles(neededByDocumentAt: documentURL)
+        var documentNeeds = needs[key] ?? DocumentNeeds()
+        change(&documentNeeds)
+        needs[key] = documentNeeds.files.isEmpty ? nil : documentNeeds
+        let after = unreadableFiles(neededByDocumentAt: documentURL)
+        guard after != before else { return }
+        Self.log.info("\(documentURL.lastPathComponent, privacy: .private) needs \(after.count, privacy: .public) files outside the granted folders")
+        postChange()
+    }
+
     /// Drops needs that a new grant satisfied and returns their documents.
     private func pruneSatisfiedNeeds() -> Set<String> {
         let scope = self.scope
         var satisfied: Set<String> = []
-        func prune(_ needs: inout [String: Set<URL>]) {
-            for (key, files) in needs {
-                let remaining = files.filter { !scope.covers($0) }
-                guard remaining.count != files.count else { continue }
-                satisfied.insert(key)
-                needs[key] = remaining.isEmpty ? nil : remaining
-            }
+        for (key, documentNeeds) in needs {
+            var remaining = documentNeeds
+            guard remaining.removeCovered(by: scope) else { continue }
+            satisfied.insert(key)
+            needs[key] = remaining.files.isEmpty ? nil : remaining
         }
-        prune(&linkNeeds)
-        prune(&fileNeeds)
         postChange()
         return satisfied
     }
