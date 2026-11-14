@@ -96,6 +96,7 @@ final class LibraryController {
         pendingMonitorWorkItem?.cancel()
         pendingMonitorWorkItem = nil
         firstPendingMonitorChange = nil
+        scanGeneration += 1
         scanCancellation?.cancel()
         snapshot = LibrarySnapshot()
         skippedItemCount = 0
@@ -236,8 +237,6 @@ final class LibraryController {
             } else {
                 self.changedPaths = nil
             }
-            // Preserve dirty paths if the active scan finishes during the debounce window.
-            self.scanCancellation?.cancel()
             self.scheduleMonitorRescan()
         }
         self.monitor = monitor
@@ -261,26 +260,27 @@ final class LibraryController {
 
     private func performScan() {
         guard rootURL != nil else { return }
-        scanGeneration += 1
         pendingScan = true
         isScanning = true
         postLibraryDidChange(diff: nil, contentChanged: false)
-        if let scanCancellation {
-            scanCancellation.cancel()
-            return
-        }
+        guard scanCancellation == nil else { return }
         startPendingScan()
     }
 
     private func startPendingScan() {
-        guard pendingScan, let rootURL else { return }
+        guard pendingScan, scanCancellation == nil, let rootURL else { return }
         pendingScan = false
+        pendingMonitorWorkItem?.cancel()
+        pendingMonitorWorkItem = nil
+        firstPendingMonitorChange = nil
         let generation = scanGeneration
         let cancellation = WorkCancellation()
         scanCancellation = cancellation
         let previous = snapshot
         let previousSkippedItemCount = skippedItemCount
         let paths = changedPaths
+        // New events belong to the next scan, even while this one is publishing.
+        changedPaths = []
         let scanner = self.scanner
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -295,7 +295,12 @@ final class LibraryController {
                     if self.scanGeneration == generation, !cancellation.isCancelled {
                         let availabilityChanged = self.scanFailure != failure
                         self.scanFailure = failure
-                        self.isScanning = false
+                        if let paths, self.changedPaths != nil {
+                            self.changedPaths?.formUnion(paths)
+                        } else {
+                            self.changedPaths = nil
+                        }
+                        self.isScanning = self.pendingScan
                         self.postLibraryDidChange(diff: nil, contentChanged: false,
                             availabilityChanged: availabilityChanged)
                     }
@@ -318,8 +323,7 @@ final class LibraryController {
                     self.snapshot = snapshot
                     self.skippedItemCount = result.skippedItemCount
                     self.scanFailure = nil
-                    self.changedPaths = []
-                    self.isScanning = false
+                    self.isScanning = self.pendingScan
                     let completion = self.pendingFirstScanCompletion
                     self.pendingFirstScanCompletion = nil
                     self.postLibraryDidChange(diff: diff, contentChanged: contentChanged,

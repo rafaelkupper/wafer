@@ -186,6 +186,91 @@ final class LibraryControllerTests: XCTestCase {
         XCTAssertFalse(scanner.ranOnMainThread)
     }
 
+    func testContinuousChangesPublishEachActiveScanBeforeOneFollowUp() async throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let clock = ManualLibraryRescanClock()
+        let versions = ["First", "Second", "Third"].map {
+            libraryFile(url: directory.url.appendingPathComponent("\($0).md"), title: $0)
+        }
+        let started = versions.map { expectation(description: "\($0.displayTitle) scan started") }
+        let scanner = GatedLibraryScanner(files: versions, started: started)
+        defer { scanner.releaseAll() }
+        var monitor: FakeDirectoryMonitor?
+        let controller = LibraryController(
+            preferenceStore: LibraryPreferenceStore(defaults: makeTestUserDefaults()),
+            scanner: scanner.scan(rootURL:),
+            monitorFactory: { rootURL, onChange in
+                let fake = FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange)
+                monitor = fake
+                return fake
+            },
+            rescanScheduler: clock.scheduler
+        )
+        defer { controller.closeLibrary() }
+        var firstCompletions: [[LibraryFile]] = []
+        try controller.openLibrary(at: directory.url) { firstCompletions.append($0) }
+        await fulfillment(of: [started[0]], timeout: 2)
+
+        for index in 0..<2 {
+            if index == 0 { controller.refreshLibrary() }
+            // Simulate a scan taking longer than the maximum wait, with no quiet period.
+            for _ in 0..<12 {
+                monitor?.fire(paths: [versions[index].identity])
+                clock.advance(by: 0.25)
+            }
+            XCTAssertEqual(scanner.count, index + 1, "only one scan may run at a time")
+            scanner.release(index)
+            await fulfillment(of: [started[index + 1]], timeout: 2)
+            XCTAssertEqual(controller.files.map(\.displayTitle), [versions[index].displayTitle], "writes must not discard the active scan")
+            XCTAssertEqual(firstCompletions.map { $0.map(\.displayTitle) }, [["First"]], "the initial scan must publish before its follow-up")
+        }
+
+        let finished = expectation(description: "final scan published")
+        let token = NotificationCenter.default.addObserver(forName: .libraryDidChange, object: nil, queue: nil) { note in
+            if let change = LibraryChange.value(from: note), change.files == [versions[2]], !change.isScanning {
+                finished.fulfill()
+            }
+        }
+        defer { NotificationCenter.default.removeObserver(token) }
+        scanner.release(2)
+        await fulfillment(of: [finished], timeout: 2)
+        XCTAssertEqual(scanner.count, 3, "all intervening requests coalesce into one follow-up")
+        XCTAssertEqual(controller.files, [versions[2]])
+    }
+
+    func testChangeDuringDebounceSurvivesActiveScanPublication() async throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let clock = ManualLibraryRescanClock()
+        let file = libraryFile(url: directory.url.appendingPathComponent("Note.md"), title: "Note")
+        let started = [expectation(description: "initial scan"), expectation(description: "follow-up scan")]
+        let scanner = GatedLibraryScanner(files: [file, file], started: started)
+        defer { scanner.releaseAll() }
+        var monitor: FakeDirectoryMonitor?
+        let controller = LibraryController(
+            preferenceStore: LibraryPreferenceStore(defaults: makeTestUserDefaults()),
+            scanner: scanner.scan(rootURL:),
+            monitorFactory: { rootURL, onChange in
+                let fake = FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange)
+                monitor = fake
+                return fake
+            },
+            rescanScheduler: clock.scheduler
+        )
+        defer { controller.closeLibrary() }
+        let published = expectation(description: "initial scan published during debounce")
+        try controller.openLibrary(at: directory.url) { _ in published.fulfill() }
+        await fulfillment(of: [started[0]], timeout: 2)
+        monitor?.fire()
+        clock.advance(by: 0.25)
+        scanner.release(0)
+        await fulfillment(of: [published], timeout: 2)
+        XCTAssertEqual(scanner.count, 1)
+        clock.advance(by: 0.25)
+        await fulfillment(of: [started[1]], timeout: 2)
+    }
+
     func testOpenLibraryFirstScanCompletionFiresOnceWithScannedFiles() throws {
         let tempDirectory = try TemporaryTestDirectory()
         defer { tempDirectory.remove() }
@@ -642,6 +727,7 @@ private final class FakeDirectoryMonitor: DirectoryMonitoring {
     let onChange: () -> Void
     private(set) var startCount = 0
     private(set) var stopCount = 0
+    private(set) var changedPaths: Set<String>?
 
     init(rootURL: URL, onChange: @escaping () -> Void) {
         self.rootURL = rootURL
@@ -656,7 +742,8 @@ private final class FakeDirectoryMonitor: DirectoryMonitoring {
         stopCount += 1
     }
 
-    func fire() {
+    func fire(paths: Set<String>? = nil) {
+        changedPaths = paths
         onChange()
     }
 }
@@ -770,6 +857,36 @@ private final class SupersedingLibraryScanner: @unchecked Sendable {
     func releaseFirstScan() {
         releaseFirst.signal()
     }
+}
+
+private final class GatedLibraryScanner: @unchecked Sendable {
+    private let lock = NSLock()
+    private let files: [LibraryFile]
+    private let started: [XCTestExpectation]
+    private let gates: [DispatchSemaphore]
+    private var scanCount = 0
+
+    init(files: [LibraryFile], started: [XCTestExpectation]) {
+        self.files = files
+        self.started = started
+        self.gates = files.map { _ in DispatchSemaphore(value: 0) }
+    }
+
+    var count: Int { lock.withLock { scanCount } }
+
+    func scan(rootURL: URL) -> LibraryScanner.Result {
+        let index = lock.withLock { let index = scanCount; scanCount += 1; return index }
+        guard files.indices.contains(index) else {
+            XCTFail("unexpected extra scan")
+            return LibraryScanner.Result(files: [], truncated: false)
+        }
+        started[index].fulfill()
+        gates[index].wait()
+        return LibraryScanner.Result(files: [files[index]], truncated: false)
+    }
+
+    func release(_ index: Int) { gates[index].signal() }
+    func releaseAll() { gates.forEach { $0.signal() } }
 }
 
 @MainActor

@@ -1,14 +1,20 @@
+import Darwin
 import Foundation
 
 public struct LibraryFileFingerprint: Equatable, Hashable, Sendable {
     public let modificationDate: Date
     public let fileSize: UInt64
     public let contentDigest: String?
+    public let fileIdentifier: String?
+    public let statusChangeDate: Date?
 
-    public init(modificationDate: Date, fileSize: UInt64, contentDigest: String? = nil) {
+    public init(modificationDate: Date, fileSize: UInt64, contentDigest: String? = nil,
+                fileIdentifier: String? = nil, statusChangeDate: Date? = nil) {
         self.modificationDate = modificationDate
         self.fileSize = fileSize
         self.contentDigest = contentDigest
+        self.fileIdentifier = fileIdentifier
+        self.statusChangeDate = statusChangeDate
     }
 }
 
@@ -67,12 +73,14 @@ public enum LibraryScanner {
         public let truncated: Bool
         public let failure: Failure?
         public let skippedItemCount: Int
+        public let parsedFileCount: Int
 
-        public init(files: [LibraryFile], truncated: Bool, failure: Failure? = nil, skippedItemCount: Int = 0) {
+        public init(files: [LibraryFile], truncated: Bool, failure: Failure? = nil, skippedItemCount: Int = 0, parsedFileCount: Int = 0) {
             self.files = files
             self.truncated = truncated
             self.failure = failure
             self.skippedItemCount = skippedItemCount
+            self.parsedFileCount = parsedFileCount
         }
     }
 
@@ -109,6 +117,7 @@ public enum LibraryScanner {
             }
         }
         var skippedItemCount = traversal.skippedURLs.count
+        var parsedFileCount = 0
         var remainingBytes = max(0, maximumLibraryByteCount) - files.reduce(0) { $0 + Int(clamping: $1.contentFingerprint.fileSize) }
         for url in fileURLs {
             if cancellation?.isCancelled == true { break }
@@ -116,10 +125,12 @@ public enum LibraryScanner {
                 let metadata = try fingerprint(for: url)
                 let identity = FileIdentity.identity(for: url)
                 guard FileManager.default.isReadableFile(atPath: url.path) else { throw CocoaError(.fileReadNoPermission) }
-                if let previous = existing[identity], let changedPaths,
-                   !changedPaths.contains(identity),
+                if let previous = existing[identity],
+                   changedPaths?.contains(identity) != true,
                    previous.contentFingerprint.modificationDate == metadata.modificationDate,
-                   previous.contentFingerprint.fileSize == metadata.fileSize {
+                   previous.contentFingerprint.fileSize == metadata.fileSize,
+                   previous.contentFingerprint.fileIdentifier == metadata.fileIdentifier,
+                   previous.contentFingerprint.statusChangeDate == metadata.statusChangeDate {
                     if previous.contentFingerprint.fileSize > UInt64(max(0, min(maximumFileByteCount, remainingBytes))) { skippedItemCount += 1 }
                     remainingBytes -= Int(clamping: previous.contentFingerprint.fileSize)
                     files.append(previous)
@@ -132,6 +143,7 @@ public enum LibraryScanner {
                     try makeLibraryFile(for: url, rootURL: normalizedRootURL, parser: parser, data: data, source: source, before: metadata)
                 }
                 files.append(file)
+                parsedFileCount += 1
             } catch {
                 skippedItemCount += 1
                 WaferLog.library.info("Skipped library item \(url.path, privacy: .private): \(error.localizedDescription, privacy: .public)")
@@ -142,7 +154,7 @@ public enum LibraryScanner {
             }
         }
         files.sort { $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending }
-        return Result(files: files, truncated: traversal.truncated, skippedItemCount: skippedItemCount)
+        return Result(files: files, truncated: traversal.truncated, skippedItemCount: skippedItemCount, parsedFileCount: parsedFileCount)
     }
 
     private static func makeLibraryFile(for fileURL: URL, rootURL: URL, parser: MarkdownParser, data: Data, source: String, before: LibraryFileFingerprint) throws -> LibraryFile {
@@ -159,7 +171,10 @@ public enum LibraryScanner {
             outlineItems: DocumentSidebarDataBuilder.outlineItems(from: document),
             plainText: plainText,
             searchableText: plainText.libraryFoldedSearchText,
-            contentFingerprint: LibraryFileFingerprint(modificationDate: date, fileSize: UInt64(data.count), contentDigest: document.fingerprint),
+            contentFingerprint: LibraryFileFingerprint(
+                modificationDate: date, fileSize: UInt64(data.count), contentDigest: document.fingerprint,
+                fileIdentifier: after.fileIdentifier, statusChangeDate: after.statusChangeDate
+            ),
             outgoingReferences: OutgoingReferenceCollector.collect(from: document, assetResolver: AssetResolver())
         )
     }
@@ -173,10 +188,15 @@ public enum LibraryScanner {
     }
 
     private static func fingerprint(for fileURL: URL) throws -> LibraryFileFingerprint {
-        let values = try URL(fileURLWithPath: fileURL.path).resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+        var metadata = stat()
+        guard stat(fileURL.path, &metadata) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
         return LibraryFileFingerprint(
-            modificationDate: values.contentModificationDate ?? Date(timeIntervalSince1970: 0),
-            fileSize: UInt64(max(values.fileSize ?? 0, 0))
+            modificationDate: Date(timeIntervalSince1970: Double(metadata.st_mtimespec.tv_sec) + Double(metadata.st_mtimespec.tv_nsec) / 1_000_000_000),
+            fileSize: UInt64(max(metadata.st_size, 0)),
+            fileIdentifier: "\(metadata.st_dev):\(metadata.st_ino)",
+            statusChangeDate: Date(timeIntervalSince1970: Double(metadata.st_ctimespec.tv_sec) + Double(metadata.st_ctimespec.tv_nsec) / 1_000_000_000)
         )
     }
 
