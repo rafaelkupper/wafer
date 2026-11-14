@@ -43,12 +43,10 @@ final class DocumentHostWindowControllerTests: XCTestCase {
         let scrollStore = makeTestScrollStateStore()
         scrollStore.save(fraction: 0.42, for: noteURL, fingerprint: FileFingerprint.sha256Hex(for: Data(text.utf8)))
 
-        let suiteName = "dev.wafer.tests.host-library.\(UUID())"
-        let defaults = UserDefaults(suiteName: suiteName)!
+        let defaults = makeTestUserDefaults()
         let library = LibraryController(preferenceStore: LibraryPreferenceStore(defaults: defaults))
         defer {
             library.closeLibrary()
-            defaults.removePersistentDomain(forName: suiteName)
         }
         try library.openLibrary(at: directory.url)
         let scanDeadline = Date().addingTimeInterval(5)

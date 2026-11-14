@@ -378,13 +378,11 @@ final class DocumentWindowControllerTests: XCTestCase {
     }
 
     func testWindowRoutesLibrarySearchCommandWhenLibraryOpen() throws {
-        let suiteName = "dev.wafer.tests.window-library.\(UUID())"
-        let defaults = UserDefaults(suiteName: suiteName)!
+        let defaults = makeTestUserDefaults()
         let library = LibraryController(preferenceStore: LibraryPreferenceStore(defaults: defaults))
         let tempDirectory = try TemporaryTestDirectory()
         defer {
             library.closeLibrary()
-            defaults.removePersistentDomain(forName: suiteName)
             tempDirectory.remove()
         }
         let windowController = testWindowController(
