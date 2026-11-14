@@ -21,7 +21,9 @@ public struct LibraryFile: Equatable, Sendable {
     public let displayTitle: String
     public let outlineItems: [DocumentOutlineItem]
     public let plainText: String
-    public var searchableText: String { plainText.libraryFoldedSearchText }
+    public var searchableText: String {
+        plainText.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).lowercased()
+    }
     public let contentFingerprint: LibraryFileFingerprint
     public let outgoingReferences: [OutgoingReference]
 
