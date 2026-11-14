@@ -181,7 +181,7 @@ struct FolderAccessDeniedError: LocalizedError, CustomNSError, RecoverableError 
 /// Grant Access…. It never blocks the window.
 @MainActor
 final class FolderAccessNoticeViewController: NSTitlebarAccessoryViewController, ThemeApplying {
-    static let height: CGFloat = 34
+    static let height: CGFloat = 36
 
     var onGrantAccess: (() -> Void)?
     var onDismiss: (() -> Void)?

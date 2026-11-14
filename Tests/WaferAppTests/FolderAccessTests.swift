@@ -429,10 +429,17 @@ final class FolderAccessNoticeTests: XCTestCase {
         let (document, host, _) = try makeHostedDocument(fileURL)
         defer { document.close() }
         XCTAssertFalse(host.isFolderAccessNoticeVisibleForTesting)
+        let window = try XCTUnwrap(host.window)
+        let contentHeight = window.contentLayoutRect.height
 
         access.store.recordUnreadableFile(directory.url.appendingPathComponent("image.png"), forDocumentAt: fileURL)
+        window.layoutIfNeeded()
 
         XCTAssertTrue(host.isFolderAccessNoticeVisibleForTesting)
+        let noticeHeight = try XCTUnwrap(host.folderAccessNoticeForTesting?.view.frame.height)
+        XCTAssertGreaterThanOrEqual(noticeHeight, FolderAccessNoticeViewController.height - 2, "an accessory with no height would be invisible")
+        XCTAssertEqual(window.contentLayoutRect.height, contentHeight - noticeHeight, accuracy: 1,
+                       "the bar takes its height below the titlebar instead of covering the reader")
         XCTAssertEqual(
             host.folderAccessNoticeForTesting?.message,
             "Allow Wafer to read the folder “\(directory.url.lastPathComponent)” to show linked files and images."
