@@ -79,6 +79,8 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         let contentController = WKUserContentController()
         configuration.userContentController = contentController
         configuration.preferences.isTextInteractionEnabled = true
+        // The reader only loads HTML it generates; Safe Browsing lookups are a sandbox denial with no benefit.
+        configuration.preferences.isFraudulentWebsiteWarningEnabled = false
         configuration.setURLSchemeHandler(localAssetSchemeHandler, forURLScheme: "wafer-local")
         configuration.setURLSchemeHandler(remoteImageSchemeHandler, forURLScheme: "wafer-remote")
 
