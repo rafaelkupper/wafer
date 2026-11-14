@@ -1,0 +1,8 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>WaferCore library measurement</title>
+<style>body{font-family:var(--font-sans);color:var(--foreground);margin:0}
+section{margin:0 0 24px}h3{font-size:16px;font-weight:600;margin:0 0 10px}small{font-weight:400;color:var(--muted-foreground)}
+.row{display:grid;grid-template-columns:55px minmax(60px,1fr) 68px;gap:12px;align-items:center;margin:9px 0;font-size:14px}
+.row b{text-align:right;font-variant-numeric:tabular-nums;font-weight:500}.bar{height:19px;border-radius:3px}
+.before{background:var(--chart-1)}.after{background:var(--chart-2)}
+p{font-size:13px;line-height:1.5;color:var(--muted-foreground);margin:0}
+</style><section><h3>Post-scan footprint increase <small>MiB</small></h3><div class="row"><span>Before</span><div class="track"><div class="bar before" style="width:100.00%"></div></div><b>137.2</b></div><div class="row"><span>After</span><div class="track"><div class="bar after" style="width:69.38%"></div></div><b>95.2</b></div></section><section><h3>Full-text query, needle without snippets <small>ms</small></h3><div class="row"><span>Before</span><div class="track"><div class="bar before" style="width:65.51%"></div></div><b>630.9</b></div><div class="row"><span>After</span><div class="track"><div class="bar after" style="width:100.00%"></div></div><b>963.1</b></div></section><p>Five alternating fresh processes per side. Each scans 2,000 Markdown files totaling 40 MB. Medians; lower is better. Zero scan or query failures. Background work overlapped timings.</p></html>
