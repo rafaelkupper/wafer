@@ -9,7 +9,7 @@ import WaferCore
 final class ReaderThemeCurrentTests: XCTestCase {
     override func setUp() {
         super.setUp()
-        ReaderTheme.resetToDefaultForTesting()
+        MainActor.assumeIsolated { ReaderTheme.resetToDefaultForTesting() }
     }
 
     func testSidebarThemeUsesFixedDarkerSurfaceTokens() {

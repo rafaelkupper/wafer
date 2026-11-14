@@ -149,7 +149,7 @@ final class WikiLinkAppIntegrationTests: XCTestCase {
         NotificationCenter.default.post(name: .libraryDidChange, object: nil)
         XCTAssertEqual(renderCount, 2, "unchanged index must not re-render")
 
-        currentIndex = WikiLinkIndex(entries: [(fileA, "A"), (fileA.deletingLastPathComponent().appendingPathComponent("Guide.md"), "Guide")])
+        MainActor.assumeIsolated { currentIndex = WikiLinkIndex(entries: [(fileA, "A"), (fileA.deletingLastPathComponent().appendingPathComponent("Guide.md"), "Guide")]) }
         NotificationCenter.default.post(name: .libraryDidChange, object: nil)
         XCTAssertEqual(renderCount, 3, "changed index with wiki-bearing output re-renders")
     }
