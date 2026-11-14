@@ -112,12 +112,8 @@ final class ReaderLivePreviewController {
         let script = liveHelpersInstalled ? ReaderLivePreviewScript.installedScrollCall : ReaderLivePreviewScript.scrollCall
         liveHelpersInstalled = true
         evaluate(script, arguments: Self.scriptArguments(for: position), world: .reader) { [weak self] _ in
-            guard let self else { return }
+            guard let self, self.generation == expectedNavigationID else { return }
             self.scrollSyncInFlight = false
-            guard self.generation == expectedNavigationID else {
-                self.pendingScrollSync = nil
-                return
-            }
             if let next = self.pendingScrollSync {
                 self.pendingScrollSync = nil
                 self.syncScroll(to: next)
@@ -200,6 +196,7 @@ final class ReaderLivePreviewController {
         livePatchStateReady = false
         pageHasMermaid = renderOutput?.hasMermaidDiagrams ?? false
         pageHasMath = renderOutput?.hasMathDisplays ?? false
+        scrollSyncInFlight = false
         pendingScrollSync = nil
         lastSyncedMetrics = nil
     }
