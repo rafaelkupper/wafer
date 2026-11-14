@@ -735,6 +735,9 @@ final class FolderAccessFlowTests: XCTestCase {
             URL(fileURLWithPath: "\(home)/Library/Mobile Documents/iCloud~com~someapp/Documents/x.md"),
             URL(fileURLWithPath: "\(home)/Library/Mobile Documents/com~apple~CloudDocs/x.md"),
             URL(fileURLWithPath: "\(home)/Library/CloudStorage/Dropbox/x.md"),
+            URL(fileURLWithPath: "/Library/Keychains/System.keychain"),
+            URL(fileURLWithPath: "/Library/Application Support/SomeApp/data.md"),
+            URL(fileURLWithPath: "/Users/other/Library/Application Support/SomeApp/data.md"),
         ]
         XCTAssertEqual(hostile[0].path, "\(home)/.ssh/config")
 
@@ -749,7 +752,7 @@ final class FolderAccessFlowTests: XCTestCase {
                            "a panel the user asks for anyway opens at the document's folder, not \(target.path)")
             XCTAssertTrue(request.message.contains("(\(target.path)) is outside the folders Wafer offers"), request.message)
         }
-        XCTAssertTrue(try XCTUnwrap(requests.first).message.contains("a hidden folder, or a folder in your Library"))
+        XCTAssertTrue(try XCTUnwrap(requests.first).message.contains("a hidden folder, or a Library folder"))
 
         // The window's notice offers none of them either.
         let store = FolderAccessStore.shared

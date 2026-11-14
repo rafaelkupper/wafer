@@ -61,12 +61,22 @@ struct FolderAccessRange: Sendable {
         return homeComponents.starts(with: components)
     }
 
-    /// A hidden folder or one inside a hidden folder, or the home folder's
-    /// Library or anything in it, except folders inside its cloud drives.
+    /// A hidden folder or one inside a hidden folder, or a Library folder
+    /// or anything in it: the real home's, any other user's, and the
+    /// system-wide `/Library`. Folders inside a home's cloud drives are fine.
     private func holdsSettings(_ components: [String]) -> Bool {
         if components.contains(where: { $0.hasPrefix(".") }) { return true }
-        let library = homeComponents + ["library"]
-        guard components.starts(with: library) else { return false }
+        let library: [String]
+        if components.starts(with: homeComponents + ["library"]) {
+            library = homeComponents + ["library"]
+        } else if components.count >= 4, components[1] == "users", components[3] == "library" {
+            library = Array(components.prefix(4))
+        } else if components.count >= 2, components[1] == "library" {
+            // The system Library holds no documents.
+            return true
+        } else {
+            return false
+        }
         // Both cloud roots are two levels down; only folders below them hold documents.
         let inLibrary = components.dropFirst(library.count)
         let isInsideCloudDrive = inLibrary.count > 2

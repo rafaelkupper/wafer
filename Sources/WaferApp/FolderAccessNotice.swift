@@ -212,7 +212,7 @@ enum FolderAccessFlow {
             ? " To read only this document, open it with File > Open…." : ""
         return FolderAccessRequest(
             suggestedFolder: nil,
-            message: "“\(name)” (\(file.path)) is outside the folders Wafer offers. Wafer never offers your home folder, a whole disk or cloud drive, a folder above them, a hidden folder, or a folder in your Library, because a document's links decide which file is asked for.\(alternative) To allow it anyway, choose a folder that contains it yourself.",
+            message: "“\(name)” (\(file.path)) is outside the folders Wafer offers. Wafer never offers your home folder, a whole disk or cloud drive, a folder above them, a hidden folder, or a Library folder, because a document's links decide which file is asked for.\(alternative) To allow it anyway, choose a folder that contains it yourself.",
             outOfRange: .init(
                 title: "“\(name)” is outside the folders Wafer offers",
                 panelMessage: "Choose a folder that contains “\(name)” (\(file.path)).",

@@ -248,6 +248,55 @@ final class AsyncSaveFlushTests: XCTestCase {
         XCTAssertEqual(gate.writes, [])
     }
 
+    func testUseDiskVersionKeepsTheDiskTextWhenTypingRacedTheConflict() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let url = try directory.createTextFile(named: "Note.md", contents: "old")
+        let gate = ControlledSaveWriter()
+        gate.release()
+        var document: MarkdownReaderDocument?
+        var conflicts = 0
+        let created = try makeDocument(at: url, gate: gate, resolveConflict: { _, _ in
+            conflicts += 1
+            // Typing that landed while the conflicting write was on the worker.
+            if conflicts == 1 { document?.editorControllerForTesting?.replaceAllUndoably(with: "mine, then more") }
+            return .discardMine
+        })
+        document = created
+        defer { gate.release(); created.close() }
+        created.editorControllerForTesting?.replaceAllUndoably(with: "mine")
+        try Data("theirs".utf8).write(to: url)
+
+        XCTAssertTrue(created.flushEditsAndWait(interactive: true))
+        XCTAssertEqual(conflicts, 1)
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "theirs",
+                       "the disk version the user chose must not be overwritten")
+        XCTAssertEqual(created.editorControllerForTesting?.text, "theirs")
+        XCTAssertEqual(gate.writes, [])
+    }
+
+    func testUnsupportedNavigationLeavesAnInFlightNavigationAlone() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let url = try directory.createTextFile(named: "Note.md", contents: "old")
+        let target = try directory.createTextFile(named: "Target.md", contents: "target")
+        let picture = try directory.createTextFile(named: "Picture.png", contents: "not markdown")
+        let gate = ControlledSaveWriter()
+        let navigated = expectation(description: "the first navigation still completes")
+        let document = try makeDocument(at: url, gate: gate, onRender: { source in
+            if source == "target" { navigated.fulfill() }
+        })
+        defer { gate.release(); document.close() }
+        document.editorControllerForTesting?.replaceAllUndoably(with: "new")
+        document.navigateInCurrentWindow(to: target)
+        wait(for: [gate.entered], timeout: 5)
+
+        document.navigateInCurrentWindow(to: picture)
+        gate.release()
+        wait(for: [navigated], timeout: 5)
+        XCTAssertEqual(document.fileURL, target)
+    }
+
     func testRepeatedFlushesCompleteOnlyAfterNewestRevision() throws {
         let directory = try TemporaryTestDirectory()
         defer { directory.remove() }

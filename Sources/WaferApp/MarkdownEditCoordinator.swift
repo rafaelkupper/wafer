@@ -189,12 +189,17 @@ final class MarkdownEditCoordinator {
             case .unchanged, .saved:
                 break
             case .reverted(let text):
-                // Do not discard text typed after the snapshot was taken.
+                // The user chose the disk version. Text typed while the save
+                // or copy was on the worker belongs to the discarded edits; it
+                // must not be saved over the disk version, so it stays one
+                // Undo away instead.
                 if editor.revision == snapshot.revision {
                     editor.replaceTextPreservingPosition(text)
-                    session.editorShowsSavedText(revision: editor.revision)
-                    self.renderLive()
+                } else {
+                    editor.replaceAllUndoably(with: text)
                 }
+                session.editorShowsSavedText(revision: editor.revision)
+                self.renderLive()
             case .keptInMemory:
                 self.completeFlush(false)
                 return

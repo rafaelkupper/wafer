@@ -16,6 +16,13 @@ public struct LibraryFileFingerprint: Equatable, Hashable, Sendable {
         self.fileIdentifier = fileIdentifier
         self.statusChangeDate = statusChangeDate
     }
+
+    /// True when both describe the same text. The file identity and status
+    /// change time only decide whether a recovery scan may skip the read; a
+    /// tag or another metadata change alone is not a content change.
+    public func describesSameContent(as other: LibraryFileFingerprint) -> Bool {
+        modificationDate == other.modificationDate && fileSize == other.fileSize && contentDigest == other.contentDigest
+    }
 }
 
 public struct LibraryFile: Equatable, Sendable {
@@ -94,7 +101,7 @@ public enum LibraryScanner {
 
     public static func scan(
         rootURL: URL, fileLimit: Int = WaferLimits.libraryFileCount, existingFiles: [LibraryFile] = [],
-        changedPaths: Set<String>? = [], cancellation: WorkCancellation? = nil,
+        changedPaths: Set<String>? = [], reusesUnchangedFiles: Bool = true, cancellation: WorkCancellation? = nil,
         maximumFileByteCount: Int = WaferLimits.libraryFileByteCount, maximumLibraryByteCount: Int = WaferLimits.libraryByteCount
     ) -> Result {
         guard fileLimit > 0 else {
@@ -125,7 +132,7 @@ public enum LibraryScanner {
                 let metadata = try fingerprint(for: url)
                 let identity = FileIdentity.identity(for: url)
                 guard FileManager.default.isReadableFile(atPath: url.path) else { throw CocoaError(.fileReadNoPermission) }
-                if let previous = existing[identity],
+                if reusesUnchangedFiles, let previous = existing[identity],
                    changedPaths?.contains(identity) != true,
                    previous.contentFingerprint.modificationDate == metadata.modificationDate,
                    previous.contentFingerprint.fileSize == metadata.fileSize,

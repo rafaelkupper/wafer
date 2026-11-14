@@ -778,14 +778,15 @@ final class MarkdownReaderDocument: NSDocument {
 
     private func navigate(to url: URL, anchorID: String?, historyAfterNavigation: WindowNavigationHistory?) {
         guard !closeInFlight, !didClose else { return }
-        navigationGeneration += 1
-        let generation = navigationGeneration
         let normalizedURL = MarkdownDocumentOpener.normalizedFileURL(for: url)
+        // A request that goes nowhere (unsupported, or waiting for a folder
+        // grant) leaves an in-flight navigation and its cleanup alone.
         guard MarkdownDocumentOpener.supports(url: normalizedURL) else {
             return
         }
 
         guard fileURL != normalizedURL else {
+            navigationGeneration += 1
             // Selecting the opening document again must keep its initial read.
             if source == nil {
                 if sourceLoading.state.url != normalizedURL, let initialSourceFailureHandler {
@@ -817,6 +818,8 @@ final class MarkdownReaderDocument: NSDocument {
         }) else {
             return
         }
+        navigationGeneration += 1
+        let generation = navigationGeneration
 
         // Save before reading, then again before replacing the editable
         // source. A newer navigation or close invalidates both continuations.

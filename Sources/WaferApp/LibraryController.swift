@@ -35,6 +35,9 @@ final class LibraryController {
     private var scanCancellation: WorkCancellation?
     private var pendingScan = false
     private var changedPaths: Set<String>? = []
+    /// Retry Library re-reads every file, even ones whose metadata looks
+    /// unchanged (coarse timestamps on some volumes can hide an edit).
+    private var rereadsAllFiles = false
     private var scanGeneration = 0
 
     private(set) var rootURL: URL?
@@ -131,7 +134,7 @@ final class LibraryController {
         postLibraryDidChange(diff: nil, contentChanged: true)
     }
 
-    func refreshLibrary() {
+    func refreshLibrary(rereadingAllFiles: Bool = false) {
         // A rescan cannot read a folder the App Sandbox has no grant for; ask for it.
         if let rootURL, needsFolderAccess(rootURL) {
             requestLibraryAccess(for: rootURL, explainFirst: false)
@@ -139,6 +142,7 @@ final class LibraryController {
         }
         // A manual retry also recovers changes missed while the folder was offline.
         changedPaths = nil
+        rereadsAllFiles = rereadsAllFiles || rereadingAllFiles
         if let rootURL { startMonitoring(rootURL: rootURL) }
         performScan()
     }
@@ -292,14 +296,16 @@ final class LibraryController {
         let previous = snapshot
         let previousSkippedItemCount = skippedItemCount
         let paths = changedPaths
+        let reusesUnchangedFiles = !rereadsAllFiles
         // New events belong to the next scan, even while this one is publishing.
         changedPaths = []
+        rereadsAllFiles = false
         let scanner = self.scanner
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let result = scanner?(rootURL) ?? LibraryScanner.scan(
                 rootURL: rootURL, existingFiles: previous.files,
-                changedPaths: paths, cancellation: cancellation
+                changedPaths: paths, reusesUnchangedFiles: reusesUnchangedFiles, cancellation: cancellation
             )
             if let failure = result.failure {
                 DispatchQueue.main.async { [weak self] in
@@ -313,6 +319,7 @@ final class LibraryController {
                         } else {
                             self.changedPaths = nil
                         }
+                        self.rereadsAllFiles = self.rereadsAllFiles || !reusesUnchangedFiles
                         self.isScanning = self.pendingScan
                         self.postLibraryDidChange(diff: nil, contentChanged: false,
                             availabilityChanged: availabilityChanged)
@@ -326,7 +333,9 @@ final class LibraryController {
                 || result.truncated != previous.truncated
                 || result.skippedItemCount != previousSkippedItemCount
                 || diff.files.map(\.identity) != previous.files.map(\.identity)
-            let snapshot = contentChanged && !cancellation.isCancelled
+            // Metadata-only updates are stored without announcing a content change.
+            let metadataChanged = diff.files.map(\.contentFingerprint) != previous.files.map(\.contentFingerprint)
+            let snapshot = (contentChanged || metadataChanged) && !cancellation.isCancelled
                 ? LibrarySnapshot(files: diff.files, truncated: diff.truncated) : previous
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }

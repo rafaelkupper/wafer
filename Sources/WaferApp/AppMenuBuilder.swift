@@ -407,7 +407,7 @@ final class LibraryMenuController: NSObject, NSMenuItemValidation {
     }
 
     @objc func retryLibrary(_ sender: NSMenuItem) {
-        libraryController.refreshLibrary()
+        libraryController.refreshLibrary(rereadingAllFiles: true)
     }
 }
 

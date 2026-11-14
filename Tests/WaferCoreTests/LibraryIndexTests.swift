@@ -48,6 +48,38 @@ final class LibraryIndexTests: XCTestCase {
         XCTAssertEqual(recovery.parsedFileCount, 1)
     }
 
+    func testMetadataOnlyChangeIsStoredWithoutCountingAsAContentChange() throws {
+        let directory = try CoreLibraryTemporaryDirectory()
+        defer { directory.remove() }
+        let file = try directory.createTextFile(named: "Note.md", contents: "# Note")
+        let initial = LibraryScanner.scan(rootURL: directory.url)
+        // Like a Finder tag: only the status-change time moves.
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+
+        let recovery = LibraryScanner.scan(rootURL: directory.url, existingFiles: initial.files, changedPaths: nil)
+        XCTAssertEqual(recovery.parsedFileCount, 1)
+        let diff = LibraryIndexDiff.apply(scan: recovery, to: initial.files)
+        XCTAssertEqual(diff.changed, [], "the text is identical")
+        XCTAssertEqual(diff.files.map(\.contentFingerprint), recovery.files.map(\.contentFingerprint),
+                       "the fresher metadata is kept")
+
+        let next = LibraryScanner.scan(rootURL: directory.url, existingFiles: diff.files, changedPaths: nil)
+        XCTAssertEqual(next.parsedFileCount, 0, "the next recovery scan reuses the entry")
+    }
+
+    func testFullRereadParsesFilesWhoseMetadataLooksUnchanged() throws {
+        let directory = try CoreLibraryTemporaryDirectory()
+        defer { directory.remove() }
+        _ = try directory.createTextFile(named: "A.md", contents: "# A")
+        _ = try directory.createTextFile(named: "B.md", contents: "# B")
+        let initial = LibraryScanner.scan(rootURL: directory.url)
+
+        let reread = LibraryScanner.scan(rootURL: directory.url, existingFiles: initial.files,
+                                         changedPaths: nil, reusesUnchangedFiles: false)
+        XCTAssertEqual(reread.parsedFileCount, 2)
+        XCTAssertEqual(reread.files.map(\.displayTitle), initial.files.map(\.displayTitle))
+    }
+
     private let parser = MarkdownParser()
 
     func testScanFindsMarkdownFilesAndSkipsUnsupportedHiddenAndJunkPaths() throws {
