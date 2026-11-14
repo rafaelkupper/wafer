@@ -140,7 +140,7 @@ flowchart LR
 
 ## Build from source
 
-You need macOS 14 or later and Swift 6.2 or later (Xcode 26 or a matching toolchain). Wafer and the pinned swift-markdown dependency both require Swift 6.2.
+You need macOS 14 or later and Swift 6.2.3 or later (Xcode 26.3 or a matching toolchain). The checks also require Python 3 and Node.js 22 or later. Wafer and the pinned swift-markdown dependency both require Swift tools 6.2.
 
 ```sh
 scripts/check.sh
@@ -148,7 +148,7 @@ scripts/build-app.sh release
 open build/Wafer.app
 ```
 
-`scripts/check.sh --perf` enables the optional performance assertions. Release builds retain matching dSYMs in `build` and strip the shipping executables before signing. Release packaging requires committed source and a notarytool Keychain profile.
+`scripts/check.sh --release` tests optimized Core and Quick Look code. `scripts/check.sh --perf` enables the optional performance assertions; the options can be combined. Release builds retain matching dSYMs in `build` and strip the shipping executables before signing. Release packaging requires committed source and a notarytool Keychain profile.
 
 A source build is not signed with a Developer ID. The screenshots on this page use the small vault in [`docs/demo`](docs/demo); open it with File > Open Folder... to try the library, wiki links, diagrams, and math. See [Development](docs/DEVELOPMENT.md) for tests and packaging.
 
