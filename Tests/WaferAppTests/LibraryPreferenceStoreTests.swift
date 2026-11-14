@@ -5,13 +5,13 @@ import XCTest
 
 final class LibraryPreferenceStoreTests: XCTestCase {
     func testLibraryFolderURLDefaultsToNilWhenUnset() {
-        let store = LibraryPreferenceStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        let store = LibraryPreferenceStore(defaults: makeTestUserDefaults())
 
         XCTAssertNil(store.libraryFolderURL)
     }
 
     func testLibraryFolderURLPersistsNormalizedPathAndBroadcastsChange() {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let notificationCenter = NotificationCenter()
         let store = LibraryPreferenceStore(defaults: defaults, notificationCenter: notificationCenter)
         let url = URL(fileURLWithPath: "/tmp/../tmp/WaferLibrary", isDirectory: true)
@@ -32,7 +32,7 @@ final class LibraryPreferenceStoreTests: XCTestCase {
     }
 
     func testClearingLibraryFolderURLRemovesPersistedPath() {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let store = LibraryPreferenceStore(defaults: defaults)
         store.libraryFolderURL = URL(fileURLWithPath: "/tmp/WaferLibrary", isDirectory: true)
 

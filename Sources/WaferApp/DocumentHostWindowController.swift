@@ -1,4 +1,5 @@
 import AppKit
+import WaferCore
 
 /// The window controller documents actually use: hosts an ordered list of
 /// `DocumentTab`s in one window, with a themed tab strip that appears from
@@ -15,6 +16,7 @@ final class DocumentHostWindowController: DocumentWindowController {
     private(set) var activeTabIndex = 0
 
     private let tabStripView = DocumentTabStripView()
+    private let scrollStateStore: ScrollStateStore
     // NotificationCenter observer removal is thread-safe; unsafe-nonisolated so
     // the nonisolated deinit can clean up.
     nonisolated(unsafe) private var windowWillCloseObserver: NSObjectProtocol?
@@ -38,14 +40,18 @@ final class DocumentHostWindowController: DocumentWindowController {
 
     init(
         tab: DocumentTab,
+        libraryController: LibraryController = .shared,
+        scrollStateStore: ScrollStateStore = AppDelegate.sharedScrollStateStore,
         cascadeFrom sourceWindow: NSWindow? = nil,
         statisticPreferenceStore: DocumentStatisticPreferenceStore = .shared,
         appearancePreferenceStore: AppearancePreferenceStore = .shared,
         exportController: DocumentExportControlling = DocumentExportController()
     ) {
         self.tabs = [tab]
+        self.scrollStateStore = scrollStateStore
         super.init(
             contentViewController: tab.readerController,
+            libraryController: libraryController,
             cascadeFrom: sourceWindow,
             statisticPreferenceStore: statisticPreferenceStore,
             appearancePreferenceStore: appearancePreferenceStore,
@@ -300,7 +306,10 @@ final class DocumentHostWindowController: DocumentWindowController {
         }
         #endif
 
-        let document = MarkdownReaderDocument(scrollStateStore: .init())
+        let document = MarkdownReaderDocument(
+            librarySnapshotProvider: { [libraryController] in libraryController.snapshot },
+            scrollStateStore: scrollStateStore
+        )
         document.fileURL = url
         return document
     }

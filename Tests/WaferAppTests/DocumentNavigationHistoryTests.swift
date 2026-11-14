@@ -16,6 +16,7 @@ final class DocumentNavigationHistoryTests: XCTestCase {
         let reader = RecordingReaderViewController()
         var renderExpectations: [String: XCTestExpectation] = [:]
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, baseURL, _, _, _ in
                 if let name = baseURL?.lastPathComponent {
@@ -83,6 +84,7 @@ final class DocumentNavigationHistoryTests: XCTestCase {
         var renderCount = 0
         let secondRender = expectation(description: "reload render scheduled")
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, _, _, _ in
                 renderCount += 1
@@ -119,6 +121,7 @@ final class DocumentNavigationHistoryTests: XCTestCase {
         let reader = RecordingReaderViewController()
         var renderExpectations: [String: XCTestExpectation] = [:]
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, baseURL, _, _, _ in
                 if let name = baseURL?.lastPathComponent {
@@ -186,6 +189,7 @@ final class DocumentNavigationHistoryTests: XCTestCase {
         var completions: [(name: String, completion: (WebKitRenderOutput) -> Void)] = []
         var renderExpectations: [String: XCTestExpectation] = [:]
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: scrollStore,
             renderScheduler: { _, baseURL, _, _, completion in
                 let name = baseURL?.lastPathComponent ?? ""

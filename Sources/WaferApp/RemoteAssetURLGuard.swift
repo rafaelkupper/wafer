@@ -64,6 +64,21 @@ struct RemoteAssetURLGuard: Sendable {
         if bytes.prefix(10).allSatisfy({ $0 == 0 }), bytes[10] == 255, bytes[11] == 255 {
             return isPublicIPv4(Array(bytes.suffix(4)))
         }
+        // RFC 6052 well-known /96: the final 32 bits are the IPv4 destination.
+        if bytes.prefix(12) == [0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0] {
+            return isPublicIPv4(Array(bytes.suffix(4)))
+        }
+        // The RFC 8215 local-use /48 can contain several RFC 6052 prefix
+        // lengths. Reject it as local rather than guessing the site's layout.
+        if bytes.prefix(6) == [0x00, 0x64, 0xff, 0x9b, 0, 1] { return false }
+        // 6to4 embeds the destination IPv4 immediately after 2002::/16.
+        if bytes.prefix(2) == [0x20, 0x02] {
+            return isPublicIPv4(Array(bytes[2..<6]))
+        }
+        // Teredo embeds a server IPv4 and an obfuscated client IPv4.
+        if bytes.prefix(4) == [0x20, 0x01, 0, 0] {
+            return isPublicIPv4(Array(bytes[4..<8])) && isPublicIPv4(bytes.suffix(4).map { $0 ^ 0xff })
+        }
         // IPv4-compatible, unspecified and loopback addresses share ::/96.
         if bytes.prefix(12).allSatisfy({ $0 == 0 }) { return false }
         if bytes[0] & 0xfe == 0xfc || bytes[0] == 0xff { return false }

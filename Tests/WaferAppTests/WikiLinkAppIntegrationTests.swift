@@ -15,6 +15,7 @@ final class WikiLinkAppIntegrationTests: XCTestCase {
         let reader = RecordingReaderViewController()
         var renderExpectations: [String: XCTestExpectation] = [:]
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, baseURL, _, _, _ in
                 if let name = baseURL?.lastPathComponent {
@@ -53,6 +54,7 @@ final class WikiLinkAppIntegrationTests: XCTestCase {
         let reader = RecordingReaderViewController()
         var externalTargets: [LinkTarget] = []
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, _, _, _ in DispatchWorkItem {} },
             linkTargetHandler: { externalTargets.append($0) },
@@ -66,6 +68,7 @@ final class WikiLinkAppIntegrationTests: XCTestCase {
         host.tabDocumentFactoryForTesting = { url in
             let tabReader = RecordingReaderViewController()
             let tabDocument = MarkdownReaderDocument(
+                librarySnapshotProvider: emptyTestLibrarySnapshot,
                 scrollStateStore: makeTestScrollStateStore(),
                 renderScheduler: { _, _, _, _, _ in DispatchWorkItem {} },
                 readerControllerFactory: { tabReader }
@@ -108,6 +111,7 @@ final class WikiLinkAppIntegrationTests: XCTestCase {
         var completions: [(WebKitRenderOutput) -> Void] = []
         var currentIndex: WikiLinkIndex? = nil
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, _, _, completion in
                 renderCount += 1
@@ -145,7 +149,7 @@ final class WikiLinkAppIntegrationTests: XCTestCase {
         NotificationCenter.default.post(name: .libraryDidChange, object: nil)
         XCTAssertEqual(renderCount, 2, "unchanged index must not re-render")
 
-        currentIndex = WikiLinkIndex(entries: [(fileA, "A"), (fileA.deletingLastPathComponent().appendingPathComponent("Guide.md"), "Guide")])
+        MainActor.assumeIsolated { currentIndex = WikiLinkIndex(entries: [(fileA, "A"), (fileA.deletingLastPathComponent().appendingPathComponent("Guide.md"), "Guide")]) }
         NotificationCenter.default.post(name: .libraryDidChange, object: nil)
         XCTAssertEqual(renderCount, 3, "changed index with wiki-bearing output re-renders")
     }

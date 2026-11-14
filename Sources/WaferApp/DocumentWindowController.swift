@@ -112,6 +112,7 @@ class DocumentWindowController: NSWindowController, ThemeApplying, NSUserInterfa
     static let minimumWindowSize = NSSize(width: 520, height: 360)
     static let cascadeOffset: CGFloat = 28
 
+    let libraryController: LibraryController
     private let chromeViewController: DocumentChromeViewController
     private let statisticsAccessoryController: DocumentStatisticsAccessoryViewController
     private let navigationAccessoryController = NavigationHistoryAccessoryViewController()
@@ -135,6 +136,7 @@ class DocumentWindowController: NSWindowController, ThemeApplying, NSUserInterfa
 
     init(
         contentViewController: NSViewController,
+        libraryController: LibraryController = LibraryController(),
         cascadeFrom sourceWindow: NSWindow? = nil,
         statisticPreferenceStore: DocumentStatisticPreferenceStore = .shared,
         appearancePreferenceStore: AppearancePreferenceStore = .shared,
@@ -144,9 +146,11 @@ class DocumentWindowController: NSWindowController, ThemeApplying, NSUserInterfa
         let initialContentSize = Self.initialContentSize(for: visibleFrame)
         let appearancePreferenceStore = appearancePreferenceStore
         self.appearancePreferenceStore = appearancePreferenceStore
+        self.libraryController = libraryController
         self.exportController = exportController
         self.chromeViewController = DocumentChromeViewController(
             contentViewController: contentViewController,
+            libraryController: libraryController,
             onEffectiveAppearanceChange: {
                 appearancePreferenceStore.applySystemAppearanceIfNeeded()
             }
@@ -456,7 +460,7 @@ class DocumentWindowController: NSWindowController, ThemeApplying, NSUserInterfa
     }
 
     var canFocusLibrarySearch: Bool {
-        LibraryController.shared.hasLibrary
+        libraryController.hasLibrary
     }
 
     @objc

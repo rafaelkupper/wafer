@@ -4,21 +4,21 @@ import XCTest
 
 final class ReaderBehaviorPreferenceStoreTests: XCTestCase {
     func testAutomaticallyReloadsDocumentsDefaultsToTrueWhenUnset() {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let store = ReaderBehaviorPreferenceStore(defaults: defaults)
 
         XCTAssertTrue(store.automaticallyReloadsDocuments)
     }
 
     func testLoadsRemoteImagesDefaultsToTrueWhenUnset() {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let store = ReaderBehaviorPreferenceStore(defaults: defaults)
 
         XCTAssertTrue(store.loadsRemoteImages)
     }
 
     func testPersistsAutomaticallyReloadsDocumentsAndBroadcastsChange() {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let notificationCenter = NotificationCenter()
         let store = ReaderBehaviorPreferenceStore(defaults: defaults, notificationCenter: notificationCenter)
         let expectation = expectation(description: "reader behavior preference change")
@@ -42,7 +42,7 @@ final class ReaderBehaviorPreferenceStoreTests: XCTestCase {
     }
 
     func testPersistsLoadsRemoteImagesAndBroadcastsChange() {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let notificationCenter = NotificationCenter()
         let store = ReaderBehaviorPreferenceStore(defaults: defaults, notificationCenter: notificationCenter)
         let expectation = expectation(description: "remote image preference change")

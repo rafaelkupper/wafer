@@ -243,6 +243,7 @@ final class DocumentEditModeTests: XCTestCase {
     ) throws -> (MarkdownReaderDocument, RecordingReaderViewController) {
         let reader = RecordingReaderViewController()
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { [weak self] source, baseURL, _, _, completion in
                 self?.renderedSources.append(source)
@@ -886,10 +887,11 @@ final class ReaderLivePreviewTests: XCTestCase {
         reader.onNavigationFinished = nil
     }
 
-    private func evaluate(_ script: String, in reader: WebKitReaderViewController) -> Any? {
+    private func evaluate(_ script: String, in reader: WebKitReaderViewController, isolated: Bool = false) -> Any? {
         let finished = expectation(description: "evaluate")
         let box = ResultBox()
-        reader.evaluateJavaScriptForTesting(script) { value, _ in
+        let evaluation = isolated ? reader.evaluateReaderContentJavaScriptForTesting : reader.evaluateJavaScriptForTesting
+        evaluation(script) { value, _ in
             box.value = value
             finished.fulfill()
         }
@@ -1088,7 +1090,7 @@ final class ReaderLivePreviewTests: XCTestCase {
               var root = document.scrollingElement;
               return [offsets[0], offsets[offsets.length - 1], root.scrollHeight - window.innerHeight, largest, backwards];
             })()
-            """, in: reader) as? [Double])
+            """, in: reader, isolated: true) as? [Double])
 
         XCTAssertEqual(result[0], 0, "starts at the top")
         XCTAssertEqual(result[1], result[2], accuracy: 1.5, "ends at the bottom")
@@ -1177,6 +1179,7 @@ final class EditModeEndToEndTests: XCTestCase {
         defer { directory.remove() }
         let url = try directory.createTextFile(named: "Live.md", contents: "# Title\n\nPara one\n\nPara two\n")
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             fileMonitorFactory: { _, _ in EditTestFileMonitor(onChange: {}) },
             autosaveDelay: 0.2,
@@ -1243,6 +1246,7 @@ extension EditModeEndToEndTests {
         let source = (1...300).map { "Paragraph \($0) with enough words to be a real line." }.joined(separator: "\n\n")
         let url = try directory.createTextFile(named: "Long.md", contents: source)
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             fileMonitorFactory: { _, _ in EditTestFileMonitor(onChange: {}) },
             autosaveDelay: 60,
@@ -1316,6 +1320,7 @@ extension EditModeEndToEndTests {
         defer { directory.remove() }
         let url = try directory.createFile(named: "Showcase.md", contents: Data(contentsOf: showcase))
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             fileMonitorFactory: { _, _ in EditTestFileMonitor(onChange: {}) },
             autosaveDelay: 60

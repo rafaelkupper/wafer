@@ -50,6 +50,7 @@ function fixture(html = '<p data-source-line="1">A</p><p data-source-line="10">B
         getBoundingClientRect() { measurements++; return { top: item.top - context.window.scrollY, height: item.height }; }
       })) },
     performance: { now: () => 0 },
+    MutationObserver: class { constructor(callback) { events.set('mutation', callback); } observe() {} },
   };
   vm.runInNewContext(source, context);
   return { live: context.window.waferLive, container, context, events, annotations, measurements: () => measurements };
@@ -91,6 +92,8 @@ const a = '<p data-source-line="1">A</p>', b = '<p data-source-line="10">B</p>';
   assert.equal(f.measurements(), 4, 'mapping reuses cached geometry');
   f.annotations[1].top = 500; f.events.get('resize')();
   assert.equal(f.measurements(), 8, 'resize invalidates geometry');
+  f.annotations[1].line = 25; f.events.get('mutation')();
+  assert.equal(f.measurements(), 12, 'page-world patches invalidate isolated scroll geometry');
   assert.equal(f.live.scrollToLine(1, 1, 1, 10, 5), false, 'non-scrolling editor has no mapping');
 }
 console.log('live-preview: patch reuse, edits, line attributes, renderer fallback, scroll endpoints, monotonicity, inverse and cache passed');

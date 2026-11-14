@@ -104,11 +104,14 @@ final class MarkdownReaderDocument: NSDocument {
     }
 
     override convenience init() {
-        // Every dependency takes its production default.
-        self.init(scrollStateStore: ScrollStateStore())
+        self.init(
+            librarySnapshotProvider: MarkdownDocumentOpener.librarySnapshot,
+            scrollStateStore: MarkdownDocumentOpener.scrollStateStore
+        )
     }
 
     init(
+        librarySnapshotProvider: @escaping LibrarySnapshotProvider,
         assetResolver: AssetResolver = AssetResolver(),
         scrollStateStore: ScrollStateStore,
         renderScheduler: RenderScheduler? = nil,
@@ -124,7 +127,6 @@ final class MarkdownReaderDocument: NSDocument {
         },
         scrollPersistenceDebounceInterval: TimeInterval = 1.0,
         wikiLinkIndexProvider: WikiLinkIndexProvider? = nil,
-        librarySnapshotProvider: @escaping LibrarySnapshotProvider = { LibraryController.shared.snapshot },
         sourceLoadErrorHandler: @escaping @MainActor (Error) -> Void = { NSApp.presentError($0) },
         editConflictResolver: @escaping EditConflictResolver = MarkdownEditSession.presentConflict,
         editFileWriter: @escaping MarkdownEditSession.FileWriter = MarkdownEditSession.replaceContents,
@@ -140,19 +142,23 @@ final class MarkdownReaderDocument: NSDocument {
         self.statisticPreferenceStore = statisticPreferenceStore
         self.appearancePreferenceStore = appearancePreferenceStore
         self.readerBehaviorPreferenceStore = readerBehaviorPreferenceStore
-        self.sourceLoading = MarkdownSourceLoader(load: sourceLoader)
         self.fileMonitorFactory = fileMonitorFactory
         self.scrollPersistenceDebounceInterval = scrollPersistenceDebounceInterval
         self.wikiLinkIndexProvider = wikiLinkIndexProvider ?? {
             MarkdownReaderDocument.wikiLinkIndex(in: librarySnapshotProvider())
         }
         self.sourceLoadErrorHandler = sourceLoadErrorHandler
-        self.editMode = MarkdownEditCoordinator(configuration: .init(
+        let diskState = MarkdownDiskState()
+        let editMode = MarkdownEditCoordinator(configuration: .init(
             resolveConflict: editConflictResolver,
             autosaveDelay: autosaveDelay,
             liveRenderInterval: liveRenderInterval,
             fileWriter: editFileWriter
-        ))
+        ), diskState: diskState)
+        self.editMode = editMode
+        self.sourceLoading = MarkdownSourceLoader(
+            load: sourceLoader, diskState: diskState, finishPendingSave: { editMode.finishPendingSave() }
+        )
         super.init()
         editMode.delegate = self
         observeLibraryChanges()
@@ -386,7 +392,6 @@ final class MarkdownReaderDocument: NSDocument {
         let palette = ReaderTheme.current
         let wikiLinkIndex = wikiLinkIndexProvider()
         lastRenderedWikiLinkIndex = wikiLinkIndex
-        renderedPalette = palette
         let workItem = scheduleRender(source.sourceText, fileURL, palette, wikiLinkIndex) { [weak self] output in
             guard let self, self.renderToken == token else {
                 return
@@ -417,6 +422,7 @@ final class MarkdownReaderDocument: NSDocument {
             if let anchorID = self.pendingAnchor.id {
                 self.pendingAnchor = .afterPageLoad(anchorID)
             }
+            self.renderedPalette = palette
             self.readerController?.apply(renderOutput: output, initialScrollFraction: restoreFraction)
         }
         if renderToken == token, isRendering { renderWorkItem = workItem }

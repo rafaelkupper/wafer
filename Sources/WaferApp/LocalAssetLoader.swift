@@ -12,7 +12,7 @@ enum LocalAssetLoader {
     static func load(
         from requestURL: URL,
         allowedRootDirectories: [URL],
-        maximumByteCount: Int = 25 * 1024 * 1024
+        maximumByteCount: Int = WaferLimits.assetByteCount
     ) throws -> LocalAssetResponse {
         let fileURL = try fileURL(for: requestURL, allowedRootDirectories: allowedRootDirectories)
         let data = try read(fileURL, allowedRootDirectories: allowedRootDirectories, maximumByteCount: maximumByteCount)
@@ -86,34 +86,19 @@ enum LocalAssetLoader {
         guard isAllowed(fileURL: openedURL, in: roots) else { throw CocoaError(.fileReadNoPermission) }
         guard info.st_size <= maximumByteCount else { throw BoundedFileReader.ReadError.tooLarge }
         var data = Data()
-        while let chunk = try handle.read(upToCount: min(maximumByteCount - data.count + 1, 64 * 1024)), !chunk.isEmpty {
+        while let chunk = try handle.read(upToCount: min(maximumByteCount - data.count + 1, WaferLimits.fileReadChunkByteCount)), !chunk.isEmpty {
             guard chunk.count <= maximumByteCount - data.count else { throw BoundedFileReader.ReadError.tooLarge }
             data.append(chunk)
         }
         return data
     }
 
-    private static func allowedRoots(_ directories: [URL]) -> [(url: URL, caseSensitive: Bool)] {
-        directories.map { directory in
-            let root = resolvedFileURL(forPath: directory.path)
-            let caseSensitive = (try? root.resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey]))?
-                .volumeSupportsCaseSensitiveNames ?? true
-            return (root, caseSensitive)
-        }
+    private static func allowedRoots(_ directories: [URL]) -> [FileContainment] {
+        directories.map { FileContainment(rootDirectory: $0) }
     }
 
-    private static func isAllowed(fileURL: URL, in roots: [(url: URL, caseSensitive: Bool)]) -> Bool {
-        roots.contains { contains(fileURL, in: $0.url, caseSensitive: $0.caseSensitive) }
-    }
-
-    static func contains(_ file: URL, in root: URL, caseSensitive: Bool) -> Bool {
-        let fileParts = file.standardizedFileURL.pathComponents
-        let rootParts = root.standardizedFileURL.pathComponents
-        guard fileParts.count >= rootParts.count else { return false }
-        return zip(fileParts, rootParts).allSatisfy { filePart, rootPart in
-            caseSensitive ? filePart == rootPart
-                : filePart.compare(rootPart, options: [.caseInsensitive], locale: Locale(identifier: "en_US_POSIX")) == .orderedSame
-        }
+    private static func isAllowed(fileURL: URL, in roots: [FileContainment]) -> Bool {
+        roots.contains { $0.contains(fileURL) }
     }
 
     private static func resolvedFileURL(forPath path: String) -> URL {

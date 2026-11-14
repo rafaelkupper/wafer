@@ -11,6 +11,7 @@ final class DocumentHostWindowControllerTests: XCTestCase {
     func testDocumentCreatesSingleTabHostWithUnchangedSurface() throws {
         let reader = RecordingReaderViewController()
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, _, _, _ in DispatchWorkItem {} },
             readerControllerFactory: { reader }
@@ -33,6 +34,62 @@ final class DocumentHostWindowControllerTests: XCTestCase {
         XCTAssertFalse(host.isTabStripVisible)
     }
 
+    func testNewTabUsesInjectedScrollStoreAndLibrarySnapshot() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let targetURL = try directory.createTextFile(named: "Target.md", contents: "# Target")
+        let text = "# Note\n\n[[Target]]\n\n" + String(repeating: "A paragraph to scroll.\n\n", count: 200)
+        let noteURL = try directory.createTextFile(named: "Note.md", contents: text)
+        let scrollStore = makeTestScrollStateStore()
+        scrollStore.save(fraction: 0.42, for: noteURL, fingerprint: FileFingerprint.sha256Hex(for: Data(text.utf8)))
+
+        let defaults = makeTestUserDefaults()
+        let library = LibraryController(preferenceStore: LibraryPreferenceStore(defaults: defaults))
+        defer {
+            library.closeLibrary()
+        }
+        try library.openLibrary(at: directory.url)
+        let scanDeadline = Date().addingTimeInterval(5)
+        while library.isScanning, Date() < scanDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        XCTAssertFalse(library.isScanning)
+        XCTAssertEqual(library.files.count, 2)
+
+        let firstDocument = MarkdownReaderDocument(librarySnapshotProvider: { library.snapshot }, scrollStateStore: scrollStore)
+        let host = DocumentHostWindowController(
+            tab: DocumentTab(document: firstDocument, readerController: RecordingReaderViewController()),
+            libraryController: library,
+            scrollStateStore: scrollStore
+        )
+        firstDocument.addWindowController(host)
+        defer { closeAllTabs(of: host) }
+        host.showWindow(nil)
+        host.openTab(for: noteURL)
+        XCTAssertEqual(host.tabs.count, 2)
+        let reader = host.activeTab.readerController
+        let renderDeadline = Date().addingTimeInterval(5)
+        while (!reader.isContentReadyForExport || abs(reader.currentScrollFraction - 0.42) > 0.02),
+              Date() < renderDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        XCTAssertTrue(reader.isContentReadyForExport)
+        XCTAssertEqual(reader.currentScrollFraction, 0.42, accuracy: 0.02)
+
+        let exported = expectation(description: "new tab rendered with the injected wiki index")
+        reader.exportDOMSnapshot { result in
+            do {
+                let html = try result.get()
+                let wikiURL = try XCTUnwrap(WikiLinkURL.url(for: targetURL, anchorID: nil))
+                XCTAssertTrue(html.contains(wikiURL.absoluteString))
+            } catch {
+                XCTFail("Could not inspect the tab render: \(error)")
+            }
+            exported.fulfill()
+        }
+        wait(for: [exported], timeout: 5)
+    }
+
     // MARK: - W4 multi-tab engine
 
     private final class StubTabFactory {
@@ -45,6 +102,7 @@ final class DocumentHostWindowControllerTests: XCTestCase {
             let name = url.lastPathComponent
             readers[name] = reader
             let document = MarkdownReaderDocument(
+                librarySnapshotProvider: emptyTestLibrarySnapshot,
                 scrollStateStore: makeTestScrollStateStore(),
                 renderScheduler: { [weak self] _, baseURL, _, _, completion in
                     let key = baseURL?.lastPathComponent ?? ""

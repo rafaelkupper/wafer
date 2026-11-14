@@ -417,7 +417,7 @@ final class DocumentSidebarViewControllerTests: XCTestCase {
         let notificationCenter = NotificationCenter()
         let controller = LibraryController(
             preferenceStore: LibraryPreferenceStore(
-                defaults: UserDefaults(suiteName: UUID().uuidString)!,
+                defaults: makeTestUserDefaults(),
                 notificationCenter: notificationCenter
             ),
             notificationCenter: notificationCenter,

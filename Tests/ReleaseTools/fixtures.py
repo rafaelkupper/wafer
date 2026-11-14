@@ -43,8 +43,15 @@ if command == 'codesign':
     elif '-dv' in args:
         print('Authority=' + os.environ.get('SIGNING_IDENTITY', 'Developer ID Application: Fixture Publisher (FIXTURE)'))
         print('TeamIdentifier=FIXTURE\nTimestamp=fixture\nflags=runtime')
-elif command == 'swift' and args == ['test']:
+elif command == 'node' and args[:1] == ['-e']:
+    version = os.environ.get('NODE_VERSION', '22.0.0')
+    if int(version.split('.')[0]) < 22:
+        sys.exit('error: Node.js 22 or newer is required; found ' + version)
+elif command == 'swift' and '--show-bin-path' in args:
+    print(os.environ['FIXTURE_PRODUCTS_DIR'])
+elif command == 'swift' and args[:1] == ['test']:
     (root / 'perf-test-mode.txt').write_text(os.environ.get('WAFER_PERF_TESTS', '0'))
+    (root / 'release-test-mode.txt').write_text(os.environ.get('WAFER_RELEASE_TESTS', '0'))
 elif command == 'ditto':
     if '-c' in args:
         app, archive = map(Path, args[-2:])
@@ -58,7 +65,9 @@ elif command == 'ditto':
             for info in z.infolist():
                 (Path(args[-1]) / info.filename).chmod(info.external_attr >> 16)
 elif command == 'xcrun':
-    if args[0] == 'dsymutil':
+    if args == ['swift', '--version']:
+        print('Apple Swift version ' + os.environ.get('XCODE_SWIFT_VERSION', '6.2.4'))
+    elif args[0] == 'dsymutil':
         symbols = Path(args[args.index('-o') + 1]) / 'Contents/Resources/DWARF'
         symbols.mkdir(parents=True, exist_ok=True)
         (symbols / Path(args[1]).name).write_text('fixture symbols')
@@ -71,6 +80,13 @@ elif command == 'otool':
     print('\t/System/Library/Frameworks/QuickLookUI.framework/Versions/A/QuickLookUI (compatibility version 1.0.0)')
     if os.environ.get('LINK_WEBKIT'):
         print('\t/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit (compatibility version 1.0.0)')
+elif command == 'xcode-select':
+    print(root / 'Selected Xcode.app/Contents/Developer')
+elif command == 'xcodebuild':
+    if os.environ.get('DEVELOPER_DIR') == str(root / 'Selected Xcode.app/Contents/Developer'):
+        print('Xcode ' + os.environ.get('XCODE_VERSION', '26.3'))
+    else:
+        sys.exit(1)
 elif command == 'generate_appcast':
     (Path(args[-1]) / 'appcast.xml').write_text(os.environ['NEW_FEED'])
 elif command == 'git':
@@ -128,7 +144,7 @@ class Fixture:
         self.root = Path(self.temporary.name).resolve()
         (self.root / 'scripts').mkdir()
         for name in ('build-app.sh', 'verify-appex.sh', 'package-release.sh', 'release.py', 'verify-update.swift',
-                     'check.sh', 'check-source.py', 'verify-vendored-assets.py'):
+                     'check.sh', 'check-source.py', 'verify-vendored-assets.py', 'select-xcode.sh'):
             shutil.copy2(ROOT / 'scripts' / name, self.root / 'scripts' / name)
         shutil.copytree(ROOT / 'App', self.root / 'App')
         version = {'CFBundleShortVersionString': '1.0.0', 'CFBundleVersion': '2'}
@@ -139,7 +155,7 @@ class Fixture:
             if name == 'Info.plist':
                 info.update(SUFeedURL='https://updates.example.org/appcast.xml', SUPublicEDKey='fixture-key')
             path.write_bytes(plistlib.dumps(info))
-        self.products = self.root / '.build/release'
+        self.products = self.root / '.build/fixture-triple/release'
         self.products.mkdir(parents=True)
         for name in ('Wafer', 'WaferQuickLook'):
             path = self.products / name
@@ -162,13 +178,14 @@ class Fixture:
         (self.root / 'docs/vendored-assets.json').write_text(json.dumps(dict(assets=assets)))
         bindir = self.root / 'bin'
         bindir.mkdir()
-        for name in ('swift', 'codesign', 'ditto', 'xcrun', 'security', 'spctl', 'pluginkit', 'lsregister', 'gh', 'git', 'generate_appcast', 'otool', 'strip', 'node'):
+        for name in ('swift', 'codesign', 'ditto', 'xcrun', 'security', 'spctl', 'pluginkit', 'lsregister', 'gh', 'git', 'generate_appcast', 'otool', 'strip', 'node', 'xcode-select', 'xcodebuild'):
             path = bindir / name
             path.write_text('#!' + sys.executable + '\n' + STUB)
             path.chmod(0o755)
         (self.root / 'remote.json').write_text(json.dumps({'feed': BASE_FEED.decode(), 'release': None}))
         self.env = dict(os.environ, PATH=str(bindir) + os.pathsep + os.environ['PATH'],
                         FIXTURE_ROOT=str(self.root), NEW_FEED=NEW_FEED.decode(),
+                        FIXTURE_PRODUCTS_DIR=str(self.products),
                         WAFER_SIGN_IDENTITY=IDENTITY, WAFER_NOTARY_PROFILE='fixture',
                         WAFER_LSREGISTER=str(bindir / 'lsregister'), WAFER_REGISTER_APP='0')
 

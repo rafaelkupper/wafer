@@ -29,6 +29,8 @@ class PackagingTests(unittest.TestCase):
                         shutil.rmtree(bundle)
                     self.fixture.make_resources(nested=False)
                 self.assert_success(self.run_script('build-app.sh', 'release'))
+                self.assertTrue(any(c[:2] == ['swift', 'build'] and '--show-bin-path' in c
+                                    for c in self.fixture.calls()))
                 app = self.root / 'build/Wafer.app'
                 info = plistlib.loads((app / 'Contents/PlugIns/WaferQuickLook.appex/Contents/Info.plist').read_bytes())
                 self.assertNotIn('QLIsDataBasedPreview', info)
@@ -87,6 +89,17 @@ class PackagingTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('unexpected resource bundle: ' + extra, result.stderr)
             path.rmdir()
+
+    def test_verifiers_use_unique_temporary_entitlement_files(self):
+        self.assert_success(self.run_script('build-app.sh', 'release'))
+        temporary = self.root / 'temporary'
+        temporary.mkdir()
+        old_template = temporary / 'wafer-appex-entitlements.XXXXXX.plist'
+        old_template.write_text('preserve another invocation')
+        for _ in range(2):
+            self.assert_success(self.run_script('verify-appex.sh', TMPDIR=str(temporary)))
+        self.assertEqual(old_template.read_text(), 'preserve another invocation')
+        self.assertEqual(list(temporary.iterdir()), [old_template])
 
     def test_release_generates_symbols_then_strips_shipping_copies_before_signing(self):
         self.assert_success(self.run_script('package-release.sh'))

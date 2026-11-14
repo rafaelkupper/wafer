@@ -1,5 +1,9 @@
 # WaferCore review-fix measurements, 2026-11-13
 
+The single-body follow-up and default performance budgets are recorded in
+[2026-11-13-round-4.md](2026-11-13-round-4.md). The measurements below describe
+the earlier removal of the snippet copy and body-word dictionary.
+
 Optimized synthetic fixture: 2,000 actual Markdown files, exactly 20,000 bytes each (40,000,000 total bytes), varied words per file and within each file. The runner invokes `LibraryScanner.scan`, retains its result, and runs the public full-text query API. Every scan checks the file count, truncation, failures and skipped items. Every query checks its expected match count and checks that requested snippets are populated. Fixture generation is outside both timed regions. Temporary input directories are removed by the runner.
 
 Five fresh processes per side, strictly alternating before/after. Before uses the index/search implementation from `b5431a4`; after removes the duplicate snippet text and body-word dictionary. Both use Swift 6.4.2 release core objects and `swiftc -O -whole-module-optimization`, targeting arm64 macOS 14. The same fixture runner is linked to each side. This controller has 14 logical CPUs; initial load average was about 5. Background desktop, indexing and backup processes were active, and a full test run overlapped early pairs. Interleaving limits drift but these are synthetic workstation measurements, not a production latency guarantee.
@@ -26,9 +30,9 @@ Footprint fell about 62%. The all-match `needle` query without snippets improved
 To build the runner on each revision:
 
 ```sh
-python3 Tests/Fixtures/WaferCore/Benchmarks/library-index.py /tmp/wafer-index-before
+python3 docs/benchmarks/library-index.py /tmp/wafer-index-before
 # After applying the index change:
-python3 Tests/Fixtures/WaferCore/Benchmarks/library-index.py /tmp/wafer-index-after
+python3 docs/benchmarks/library-index.py /tmp/wafer-index-after
 ```
 
 Run those binaries in alternating fresh processes five times; each prints one JSON record. The build helper supports both SwiftPM native and Swift Build output layouts. The initial standalone compilation needed that layout adjustment; its failed compilation is excluded from measurements.
@@ -37,6 +41,6 @@ To check missing-resource degradation with the release core, put the binary in a
 
 ```sh
 mkdir -p /tmp/wafer-missing-resources
-python3 Tests/Fixtures/WaferCore/Benchmarks/library-index.py /tmp/wafer-missing-resources/check Tests/Fixtures/WaferCore/Benchmarks/missing-resources.swift
+python3 docs/benchmarks/library-index.py /tmp/wafer-missing-resources/check docs/benchmarks/missing-resources.swift
 /tmp/wafer-missing-resources/check
 ```

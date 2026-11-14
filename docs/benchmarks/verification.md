@@ -14,7 +14,7 @@ Scope: WaferCore sources/tests, test fixtures, and WaferCore architecture docume
 
 - `swift test`, run 1: PASSED. Quick Look tests 7, core tests 257, app tests 379; zero failures. One app test skipped: `EditSavePerformanceTests.testKeystrokeTriggeredSaveMainThreadTimeOnLargeDocument`, requires `WAFER_PERF_TESTS=1`. Core 6.182 s, app 26.369 s. Run ended 2026-11-13 20:36:55 local time.
 - `swift test`, run 2: PASSED. Same counts, same one opt-in skip, zero failures. Core 6.053 s, app 26.089 s. Run ended 2026-11-13 20:38:00 local time.
-- Release core and standalone fixture build: PASSED via `python3 Tests/Fixtures/WaferCore/Benchmarks/library-index.py <output> [source]`.
+- Release core and standalone fixture build: PASSED via `python3 docs/benchmarks/library-index.py <output> [source]`.
 - Missing-resource release probe: PASSED via `/tmp/wafer-k-resource-fallback-2026-11-13/check`. The runner was built from `missing-resources.swift`, with no adjacent core bundle. Output: `PASS: missing resources preserve reader CSS, literal emoji, and code fences without waiting for scripts`.
 - `git diff --check`: PASSED.
 - App bundle assembly/packaging and opt-in app performance test: UNRUN, outside this core-only assignment. Required index performance measurement ran separately with optimized core code.

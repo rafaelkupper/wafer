@@ -4,7 +4,7 @@ import pathlib
 import platform
 import subprocess
 import sys
-root = pathlib.Path(__file__).resolve().parents[4]
+root = pathlib.Path(__file__).resolve().parents[2]
 subprocess.run(['swift', 'build', '-c', 'release', '--target', 'WaferCore'], cwd=root, check=True)
 build = pathlib.Path(subprocess.check_output(['swift', 'build', '-c', 'release', '--show-bin-path'], cwd=root, text=True).strip())
 objects = []

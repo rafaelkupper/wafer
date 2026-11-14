@@ -4,6 +4,12 @@ import WaferCore
 
 @MainActor
 enum MarkdownDocumentOpener {
+    static var scrollStateStore: ScrollStateStore { AppDelegate.sharedScrollStateStore }
+
+    static func librarySnapshot() -> LibrarySnapshot {
+        LibraryController.shared.snapshot
+    }
+
     static func open(urls: [URL]) {
         for url in urls {
             do {
@@ -16,7 +22,9 @@ enum MarkdownDocumentOpener {
 
     static func open(
         url: URL, anchorID: String? = nil,
-        documentFactory: () -> MarkdownReaderDocument = { MarkdownReaderDocument(scrollStateStore: ScrollStateStore()) }
+        documentFactory: () -> MarkdownReaderDocument = {
+            MarkdownReaderDocument(librarySnapshotProvider: librarySnapshot, scrollStateStore: scrollStateStore)
+        }
     ) throws {
         let normalizedURL = normalizedFileURL(for: url)
         guard supports(url: normalizedURL) else {
@@ -114,8 +122,7 @@ enum MarkdownDocumentOpener {
             document.makeWindowControllers()
         }
 
-        let windowControllers = document.windowControllers.isEmpty ? [] : document.windowControllers
-        for windowController in windowControllers {
+        for windowController in document.windowControllers {
             windowController.showWindow(nil)
         }
 

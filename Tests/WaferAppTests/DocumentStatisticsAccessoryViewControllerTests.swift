@@ -6,7 +6,7 @@ import XCTest
 @MainActor
 final class DocumentStatisticsAccessoryViewControllerTests: XCTestCase {
     func testAccessoryStartsHiddenAndShowsWordCountByDefault() {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let notificationCenter = NotificationCenter()
         let store = DocumentStatisticPreferenceStore(defaults: defaults, notificationCenter: notificationCenter)
         let controller = DocumentStatisticsAccessoryViewController(
@@ -50,7 +50,7 @@ final class DocumentStatisticsAccessoryViewControllerTests: XCTestCase {
     }
 
     func testSelectingDifferentMetricUpdatesDisplayImmediately() {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let notificationCenter = NotificationCenter()
         let store = DocumentStatisticPreferenceStore(defaults: defaults, notificationCenter: notificationCenter)
         let controller = DocumentStatisticsAccessoryViewController(
@@ -69,7 +69,7 @@ final class DocumentStatisticsAccessoryViewControllerTests: XCTestCase {
     }
 
     func testChangingMetricBroadcastUpdatesMultipleOpenWindows() {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let notificationCenter = NotificationCenter()
         let store = DocumentStatisticPreferenceStore(defaults: defaults, notificationCenter: notificationCenter)
         let first = DocumentStatisticsAccessoryViewController(

@@ -1,4 +1,5 @@
 import Foundation
+import WaferCore
 import WebKit
 
 struct RemoteImageResponse: Sendable {
@@ -36,7 +37,7 @@ extension RemoteImageFetching {
 
 @MainActor
 final class RemoteImageSchemeHandler: NSObject, WKURLSchemeHandler {
-    nonisolated static let defaultMaximumByteCount = 25 * 1024 * 1024
+    nonisolated static let defaultMaximumByteCount = WaferLimits.assetByteCount
 
     var remoteImagesEnabled: Bool {
         get {
@@ -153,19 +154,7 @@ final class RemoteImageSchemeHandler: NSObject, WKURLSchemeHandler {
     }
 
     static func remoteImageURL(from proxyURL: URL?) throws -> URL {
-        guard
-            let proxyURL,
-            proxyURL.scheme == "wafer-remote",
-            proxyURL.host == "image",
-            let components = URLComponents(url: proxyURL, resolvingAgainstBaseURL: false),
-            let rawURL = components.queryItems?.first(where: { $0.name == "url" })?.value,
-            let remoteURL = URL(string: rawURL),
-            remoteURL.scheme?.lowercased() == "https"
-        else {
-            throw RemoteImageError.invalidURL
-        }
-
-        return remoteURL
+        try RemoteImageURL.parse(proxyURL)
     }
 }
 
@@ -240,7 +229,15 @@ final class RemoteImageURLSessionFetcher: NSObject, RemoteImageFetching {
 }
 
 /// The session owns this delegate; NSLock protects all mutable request state.
-private final class RemoteImageSessionDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+final class RemoteImageSessionDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private static let validationQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "dev.wafer.remote-asset-validation"
+        queue.qualityOfService = .utility
+        queue.maxConcurrentOperationCount = 2
+        return queue
+    }()
+
     let maximumByteCount: Int
     private let urlGuard: RemoteAssetURLGuard
     private let lock = NSLock()
@@ -253,7 +250,7 @@ private final class RemoteImageSessionDelegate: NSObject, URLSessionDataDelegate
 
     func start(_ task: URLSessionDataTask) {
         // DNS lookup must not block the main actor. No connection starts until it passes.
-        DispatchQueue.global(qos: .utility).async { [self] in
+        Self.validationQueue.addOperation { [self] in
             do {
                 try urlGuard.validate(task.originalRequest?.url)
                 task.resume()
@@ -331,14 +328,21 @@ extension RemoteImageSessionDelegate {
         newRequest request: URLRequest,
         completionHandler: @escaping @Sendable (URLRequest?) -> Void
     ) {
-        do {
-            // Preserve the reader/export HTTPS-only transport policy.
-            guard request.url?.scheme?.lowercased() == "https" else { throw RemoteImageError.invalidURL }
-            try urlGuard.validate(request.url)
-            completionHandler(request)
-        } catch {
-            completionHandler(nil)
-            fail(task: task, error: error)
+        // Keep DNS off the serial URLSession delegate queue so other images
+        // can continue receiving data while a redirect's destination resolves.
+        Self.validationQueue.addOperation { [self] in
+            do {
+                guard request.url?.scheme?.lowercased() == "https" else { throw RemoteImageError.invalidURL }
+                try urlGuard.validate(request.url)
+                guard task.state != .canceling, task.state != .completed else {
+                    completionHandler(nil)
+                    return
+                }
+                completionHandler(request)
+            } catch {
+                completionHandler(nil)
+                fail(task: task, error: error)
+            }
         }
     }
 

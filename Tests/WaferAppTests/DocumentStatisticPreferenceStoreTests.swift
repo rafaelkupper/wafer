@@ -5,7 +5,7 @@ import XCTest
 
 final class DocumentStatisticPreferenceStoreTests: XCTestCase {
     func testDefaultsToWordsWhenUnsetOrInvalid() {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         defaults.set("invalid", forKey: "documentStatisticKind")
         let store = DocumentStatisticPreferenceStore(defaults: defaults)
 
@@ -13,7 +13,7 @@ final class DocumentStatisticPreferenceStoreTests: XCTestCase {
     }
 
     func testPersistsSelectedKindAndBroadcastsChange() {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let notificationCenter = NotificationCenter()
         let store = DocumentStatisticPreferenceStore(defaults: defaults, notificationCenter: notificationCenter)
         let expectation = expectation(description: "statistic kind change")

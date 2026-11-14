@@ -44,9 +44,17 @@ final class MarkdownSourceLoader {
     /// A reload requested during a read; true if any request was explicit.
     var deferredReload: Bool?
     private let load: Load
+    private let diskState: MarkdownDiskState
+    private let finishPendingSave: @MainActor () -> Void
 
-    init(load: @escaping Load) {
+    init(
+        load: @escaping Load,
+        diskState: MarkdownDiskState = MarkdownDiskState(),
+        finishPendingSave: @escaping @MainActor () -> Void = {}
+    ) {
         self.load = load
+        self.diskState = diskState
+        self.finishPendingSave = finishPendingSave
     }
 
     /// All app-driven source reads, decoding, and hashing run off the main
@@ -59,12 +67,21 @@ final class MarkdownSourceLoader {
         guard let url = state.url else { return }
         loadGeneration += 1
         let generation = loadGeneration
+        let diskRevision = diskState.revision
         self.state = state
         let loader = load
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let result = Result { try loader(url) }
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.loadGeneration == generation else { return }
+                // Applying a read may wait for a save. Finish it before
+                // checking the revision, including its undelivered result.
+                self.finishPendingSave()
+                guard self.loadGeneration == generation else { return }
+                guard self.diskState.revision == diskRevision else {
+                    self.read(state, completion: completion)
+                    return
+                }
                 self.state = .idle
                 completion(result)
             }
@@ -100,7 +117,7 @@ final class MarkdownSourceLoader {
     /// above real notes and generated references, and small enough that
     /// parsing, rendering, and the editor stay usable. Larger files are
     /// refused as a whole, never read, shown, or edited in part.
-    nonisolated static let maximumSourceByteCount = 32_000_000
+    nonisolated static let maximumSourceByteCount = WaferLimits.documentSourceByteCount
 
     /// The production source loader: reads, decodes, and fingerprints a file.
     nonisolated static func loadSource(from fileURL: URL) throws -> LoadedMarkdownSource {
@@ -145,4 +162,15 @@ struct LoadedMarkdownSource: Sendable {
     var sourceText: String
     var fingerprint: String
     var format: MarkdownTextFormat = .default
+}
+
+/// Shared by a document's reads and save sessions. Only completed writes
+/// advance it, so an older read cannot replace text saved in the meantime.
+@MainActor
+final class MarkdownDiskState {
+    private(set) var revision = 0
+
+    func didSave() {
+        revision += 1
+    }
 }

@@ -2,6 +2,63 @@ import XCTest
 @testable import WaferCore
 
 final class MarkdownPerformanceTests: XCTestCase {
+    // These budgets exercise 20 passes through the four compatibility fixtures.
+    // Use a median of three warm samples to tolerate isolated scheduler stalls.
+    // See docs/benchmarks/2026-11-13-round-4.md for calibration and scope.
+    func testCorpusParseBudget() throws {
+        let fixtures = try corpusFixtures()
+        let parser = MarkdownParser()
+        var parsedBytes = 0
+        let median = medianDuration {
+            parsedBytes = 0
+            for _ in 0..<20 {
+                for (url, source) in fixtures {
+                    let document = parser.parse(source: source, baseURL: url)
+                    parsedBytes += document.source.utf8.count
+                }
+            }
+        }
+        XCTAssertEqual(parsedBytes, 20 * fixtures.reduce(0) { $0 + $1.1.utf8.count })
+        print("Corpus parse median: \(median) s")
+        XCTAssertLessThan(median, 0.3, "Gross parse regression on the compatibility corpus")
+    }
+
+    func testCorpusRenderBudget() throws {
+        let parser = MarkdownParser()
+        let documents = try corpusFixtures().map { parser.parse(source: $0.1, baseURL: $0.0) }
+        let renderer = WebKitHTMLRenderer()
+        var renderedBytes = 0
+        let median = medianDuration {
+            renderedBytes = 0
+            for _ in 0..<20 {
+                for document in documents {
+                    let output = renderer.render(document: document)
+                    renderedBytes += output.bodyHTML?.utf8.count ?? 0
+                }
+            }
+        }
+        XCTAssertGreaterThan(renderedBytes, 20 * documents.reduce(0) { $0 + $1.source.utf8.count })
+        print("Corpus render median: \(median) s")
+        XCTAssertLessThan(median, 0.75, "Gross render regression on the compatibility corpus")
+    }
+
+    private func corpusFixtures() throws -> [(URL, String)] {
+        try ["github-readme", "obsidian-note", "commonmark-edges", "kitchen-sink"].map {
+            let url = Bundle.module.resourceURL!.appendingPathComponent("Fixtures/WaferCore/\($0).md")
+            return (url, try String(contentsOf: url, encoding: .utf8))
+        }
+    }
+
+    private func medianDuration(_ work: () -> Void) -> TimeInterval {
+        work()
+        let samples = (0..<3).map { _ in
+            let start = ProcessInfo.processInfo.systemUptime
+            work()
+            return ProcessInfo.processInfo.systemUptime - start
+        }
+        return samples.sorted()[1]
+    }
+
     func testParseAndRenderMediumDocumentPerformance() {
         let parser = MarkdownParser()
         let renderer = WebKitHTMLRenderer()
