@@ -11,6 +11,11 @@ final class LibraryController {
     typealias Scanner = @Sendable (_ rootURL: URL) -> LibraryScanner.Result
     typealias MonitorFactory = @MainActor (_ rootURL: URL, _ onChange: @escaping () -> Void) -> DirectoryMonitoring
     typealias FirstScanCompletion = @MainActor (_ files: [LibraryFile]) -> Void
+    /// Asks the user to choose `folder` (or another) as the library, after an
+    /// explanation when `explainFirst`; nil when cancelled.
+    typealias FolderChooser = @MainActor (
+        _ folder: URL, _ explainFirst: Bool, _ completion: @escaping @MainActor (URL?) -> Void
+    ) -> Void
 
     static let shared = LibraryController()
 
@@ -22,6 +27,7 @@ final class LibraryController {
     private let monitorMaximumWait: TimeInterval
     private var firstPendingMonitorChange: TimeInterval?
     private let rescanScheduler: LibraryRescanScheduler
+    private let chooseLibraryFolder: FolderChooser
 
     private var monitor: DirectoryMonitoring?
     private var pendingMonitorWorkItem: DispatchWorkItem?
@@ -51,7 +57,8 @@ final class LibraryController {
         },
         monitorDebounceInterval: TimeInterval = 0.5,
         monitorMaximumWait: TimeInterval = 2,
-        rescanScheduler: LibraryRescanScheduler = .main
+        rescanScheduler: LibraryRescanScheduler = .main,
+        chooseLibraryFolder: @escaping FolderChooser = LibraryController.askToChooseLibraryFolder
     ) {
         self.preferenceStore = preferenceStore
         self.notificationCenter = notificationCenter
@@ -60,6 +67,7 @@ final class LibraryController {
         self.monitorDebounceInterval = monitorDebounceInterval
         self.monitorMaximumWait = monitorMaximumWait
         self.rescanScheduler = rescanScheduler
+        self.chooseLibraryFolder = chooseLibraryFolder
     }
 
     var hasLibrary: Bool {
@@ -74,6 +82,9 @@ final class LibraryController {
         guard Self.isDirectory(normalizedURL) else {
             throw CocoaError(.fileReadNoSuchFile)
         }
+        // Under the App Sandbox the folder chosen in the open panel or dropped
+        // on the app stays readable in later launches as a folder grant.
+        FolderAccessFlow.refreshDocuments(FolderAccessStore.shared.grantAccess(to: url))
         selectLibrary(at: normalizedURL, onFirstScanCompletion: onFirstScanCompletion)
     }
 
@@ -115,6 +126,11 @@ final class LibraryController {
     }
 
     func refreshLibrary() {
+        // A rescan cannot read a folder the App Sandbox has no grant for; ask for it.
+        if let rootURL, needsFolderAccess(rootURL) {
+            requestLibraryAccess(for: rootURL, explainFirst: false)
+            return
+        }
         // A manual retry also recovers changes missed while the folder was offline.
         changedPaths = nil
         if let rootURL { startMonitoring(rootURL: rootURL) }
@@ -129,6 +145,54 @@ final class LibraryController {
         // An unavailable mount is still the user's selected library. Let the
         // background scan report availability without forgetting its path.
         selectLibrary(at: persistedURL)
+
+        // Before the App Sandbox, Wafer saved only the library's path. Unless a
+        // folder grant covers it, ask once (after launch) to choose it again.
+        guard needsFolderAccess(persistedURL), !preferenceStore.hasAskedForLibraryAccess else { return }
+        preferenceStore.hasAskedForLibraryAccess = true
+        DispatchQueue.main.async { [weak self] in
+            self?.requestLibraryAccess(for: persistedURL, explainFirst: true)
+        }
+    }
+
+    private func needsFolderAccess(_ folderURL: URL) -> Bool {
+        let store = FolderAccessStore.shared
+        return store.isSandboxed && !store.covers(folderURL)
+    }
+
+    private func requestLibraryAccess(for folderURL: URL, explainFirst: Bool) {
+        chooseLibraryFolder(folderURL, explainFirst) { [weak self] chosen in
+            guard let self, let chosen else { return }
+            do {
+                try self.openLibrary(at: chosen)
+            } catch {
+                NSApp.presentError(error)
+            }
+        }
+    }
+
+    /// The default chooser: an optional explanation, then an open panel that
+    /// starts inside the saved folder, so Choose picks it.
+    static func askToChooseLibraryFolder(
+        _ folderURL: URL, explainFirst: Bool, completion: @escaping @MainActor (URL?) -> Void
+    ) {
+        let name = folderURL.lastPathComponent
+        if explainFirst {
+            let alert = NSAlert()
+            alert.messageText = "Choose your library folder again"
+            alert.informativeText = "Wafer now runs in the macOS App Sandbox, which lets it read only the folders you choose. Choose “\(name)” once to keep it as your library."
+            alert.addButton(withTitle: "Choose Folder…")
+            alert.addButton(withTitle: "Not Now")
+            guard alert.runModal() == .alertFirstButtonReturn else {
+                completion(nil)
+                return
+            }
+        }
+        FolderAccessFlow.chooseFolder(FolderAccessRequest(
+            suggestedFolder: folderURL,
+            message: "Choose “\(name)” to keep reading it as your library. Wafer can read only the folders you choose.",
+            prompt: "Choose"
+        ), nil, completion)
     }
 
     func backlinks(for fileURL: URL) -> [Backlink] {

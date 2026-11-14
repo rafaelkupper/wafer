@@ -344,6 +344,132 @@ final class LibraryControllerTests: XCTestCase {
         XCTAssertThrowsError(try controller.openLibrary(at: URL(fileURLWithPath: "/tmp/DefinitelyMissing-\(UUID())")))
     }
 
+    func testOpeningALibraryUnderTheSandboxStoresAFolderGrant() throws {
+        let tempDirectory = try TemporaryTestDirectory()
+        defer { tempDirectory.remove() }
+        _ = try tempDirectory.createTextFile(named: "Guide.md", contents: "# Guide")
+        let access = installSandboxedFolderAccess()
+        let controller = LibraryController(
+            preferenceStore: LibraryPreferenceStore(defaults: makeTestUserDefaults()),
+            monitorFactory: { rootURL, onChange in FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange) },
+            chooseLibraryFolder: { _, _, _ in XCTFail("A chosen library needs no second choice") }
+        )
+
+        try controller.openLibrary(at: tempDirectory.url)
+        waitForLibraryIdle(controller)
+
+        XCTAssertEqual(access.store.grantedFolders.map(\.path), [tempDirectory.url.path])
+        XCTAssertEqual(controller.files.map(\.displayTitle), ["Guide"])
+        controller.closeLibrary()
+    }
+
+    func testASavedLibraryPathWithoutAGrantAsksOnceToChooseTheFolderAgain() throws {
+        let tempDirectory = try TemporaryTestDirectory()
+        defer { tempDirectory.remove() }
+        _ = try tempDirectory.createTextFile(named: "Guide.md", contents: "# Guide")
+        let access = installSandboxedFolderAccess()
+        let defaults = makeTestUserDefaults()
+        let store = LibraryPreferenceStore(defaults: defaults)
+        store.libraryFolderURL = tempDirectory.url
+        var requests: [(folder: String, explainFirst: Bool)] = []
+        let asked = expectation(description: "asked to choose the library folder again")
+        let controller = LibraryController(
+            preferenceStore: store,
+            monitorFactory: { rootURL, onChange in FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange) },
+            chooseLibraryFolder: { folder, explainFirst, completion in
+                requests.append((folder.path, explainFirst))
+                asked.fulfill()
+                completion(folder)
+            }
+        )
+
+        controller.reopenPersistedLibraryIfAvailable()
+        XCTAssertTrue(requests.isEmpty, "the prompt waits until launch finishes")
+        wait(for: [asked], timeout: 5)
+        waitForLibraryIdle(controller)
+
+        XCTAssertEqual(requests.map(\.folder), [tempDirectory.url.path])
+        XCTAssertEqual(requests.map(\.explainFirst), [true])
+        XCTAssertTrue(store.hasAskedForLibraryAccess)
+        XCTAssertTrue(access.store.covers(tempDirectory.url.appendingPathComponent("Guide.md")))
+        XCTAssertEqual(controller.files.map(\.displayTitle), ["Guide"])
+
+        let relaunched = LibraryController(
+            preferenceStore: LibraryPreferenceStore(defaults: defaults),
+            monitorFactory: { rootURL, onChange in FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange) },
+            chooseLibraryFolder: { _, _, _ in XCTFail("asked twice") }
+        )
+        relaunched.reopenPersistedLibraryIfAvailable()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+        waitForLibraryIdle(relaunched)
+        relaunched.closeLibrary()
+        controller.closeLibrary()
+    }
+
+    func testASavedLibraryCoveredByAGrantReopensWithoutAsking() throws {
+        let tempDirectory = try TemporaryTestDirectory()
+        defer { tempDirectory.remove() }
+        let library = tempDirectory.url.appendingPathComponent("Notes", isDirectory: true)
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        try Data("# Guide".utf8).write(to: library.appendingPathComponent("Guide.md"))
+        let access = installSandboxedFolderAccess()
+        access.store.grantAccess(to: tempDirectory.url)
+        let store = LibraryPreferenceStore(defaults: makeTestUserDefaults())
+        store.libraryFolderURL = library
+        let controller = LibraryController(
+            preferenceStore: store,
+            monitorFactory: { rootURL, onChange in FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange) },
+            chooseLibraryFolder: { _, _, _ in XCTFail("asked although a grant covers the library") }
+        )
+
+        controller.reopenPersistedLibraryIfAvailable()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+        waitForLibraryIdle(controller)
+
+        XCTAssertFalse(store.hasAskedForLibraryAccess)
+        XCTAssertEqual(controller.files.map(\.displayTitle), ["Guide"])
+        controller.closeLibrary()
+    }
+
+    func testRetryingALibraryWithoutAccessOffersTheFolderPanel() throws {
+        let tempDirectory = try TemporaryTestDirectory()
+        defer { tempDirectory.remove() }
+        _ = installSandboxedFolderAccess()
+        let store = LibraryPreferenceStore(defaults: makeTestUserDefaults())
+        store.libraryFolderURL = tempDirectory.url
+        store.hasAskedForLibraryAccess = true
+        var requests: [(folder: String, explainFirst: Bool)] = []
+        let controller = LibraryController(
+            preferenceStore: store,
+            scanner: { _ in LibraryScanner.Result(files: [], truncated: false) },
+            monitorFactory: { rootURL, onChange in FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange) },
+            chooseLibraryFolder: { folder, explainFirst, completion in
+                requests.append((folder.path, explainFirst))
+                completion(nil)
+            }
+        )
+        controller.reopenPersistedLibraryIfAvailable()
+        waitForLibraryIdle(controller)
+        XCTAssertTrue(requests.isEmpty)
+
+        controller.refreshLibrary()
+
+        XCTAssertEqual(requests.map(\.folder), [tempDirectory.url.path])
+        XCTAssertEqual(requests.map(\.explainFirst), [false])
+        XCTAssertTrue(controller.hasLibrary, "a cancelled panel keeps the saved library")
+        controller.closeLibrary()
+    }
+
+    func testChoosingAnotherLibraryClearsTheOneTimePrompt() {
+        let store = LibraryPreferenceStore(defaults: makeTestUserDefaults())
+        store.libraryFolderURL = URL(fileURLWithPath: "/tmp/WaferLibraryA", isDirectory: true)
+        store.hasAskedForLibraryAccess = true
+        store.libraryFolderURL = URL(fileURLWithPath: "/tmp/WaferLibraryA", isDirectory: true)
+        XCTAssertTrue(store.hasAskedForLibraryAccess)
+        store.libraryFolderURL = URL(fileURLWithPath: "/tmp/WaferLibraryB", isDirectory: true)
+        XCTAssertFalse(store.hasAskedForLibraryAccess)
+    }
+
     private func waitForLibraryIdle(_ controller: LibraryController, timeout: TimeInterval = 2) {
         waitUntil(timeout: timeout) {
             !controller.isScanning
