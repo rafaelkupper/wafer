@@ -19,7 +19,7 @@ enum EditConflictResolution: Equatable {
     case discardMine
     /// Write the editor text to another file; the original keeps its disk state.
     case saveCopy(URL)
-    /// Keep the edits in memory without saving (only offered for write failures).
+    /// Keep the edits in memory without saving and cancel the pending action.
     case cancel
 }
 
@@ -346,36 +346,51 @@ final class MarkdownEditSession {
 
     // MARK: Conflict UI
 
-    /// Default conflict UI: an app-modal alert, plus a save panel for copies.
-    static func presentConflict(_ kind: EditConflictKind, fileURL: URL) -> EditConflictResolution {
-        let name = fileURL.lastPathComponent
+    @MainActor
+    struct ConflictAlert {
         let alert = NSAlert()
-        alert.alertStyle = .warning
-        let choices: [(String, EditConflictResolution?)]
-        switch kind {
-        case .changedOnDisk:
-            alert.messageText = "\(name) changed on disk while you were editing it."
-            alert.informativeText = "Keep your version and overwrite the file, use the version on disk, or save your version as a separate file."
-            choices = [("Keep My Edits", .overwrite), ("Use Disk Version", .discardMine), ("Save a Copy…", nil)]
-        case .missingOnDisk:
-            alert.messageText = "\(name) was moved or deleted while you were editing it."
-            alert.informativeText = "Save it again at its original location, save your version somewhere else, or discard your unsaved edits."
-            choices = [("Save", .overwrite), ("Save a Copy…", nil), ("Discard My Edits", .discardMine)]
-        case .writeFailed(let message):
-            alert.messageText = "Wafer couldn't save \(name)."
-            alert.informativeText = message
-            choices = [("Save a Copy…", nil), ("Discard My Edits", .discardMine), ("Cancel", .cancel)]
-        }
-        for choice in choices {
-            alert.addButton(withTitle: choice.0)
+        private let resolutions: [EditConflictResolution?]
+
+        init(_ kind: EditConflictKind, fileURL: URL) {
+            let name = fileURL.lastPathComponent
+            alert.alertStyle = .warning
+            let choices: [(String, EditConflictResolution?)]
+            switch kind {
+            case .changedOnDisk:
+                alert.messageText = "\(name) changed on disk while you were editing it."
+                alert.informativeText = "Keep your version and overwrite the file, use the version on disk, or save your version as a separate file. Cancel keeps your unsaved edits open without changing the file."
+                choices = [("Keep My Edits", .overwrite), ("Use Disk Version", .discardMine), ("Save a Copy…", nil), ("Cancel", .cancel)]
+            case .missingOnDisk:
+                alert.messageText = "\(name) was moved or deleted while you were editing it."
+                alert.informativeText = "Save it again at its original location, save your version somewhere else, or discard your unsaved edits. Cancel keeps your unsaved edits open without recreating the file."
+                choices = [("Save", .overwrite), ("Save a Copy…", nil), ("Discard My Edits", .discardMine), ("Cancel", .cancel)]
+            case .writeFailed(let message):
+                alert.messageText = "Wafer couldn't save \(name)."
+                alert.informativeText = message
+                choices = [("Save a Copy…", nil), ("Discard My Edits", .discardMine), ("Cancel", .cancel)]
+            }
+            for choice in choices {
+                let button = alert.addButton(withTitle: choice.0)
+                if choice.1 == .cancel {
+                    button.keyEquivalent = "\u{1b}"
+                }
+            }
+            resolutions = choices.map(\.1)
         }
 
+        /// Nil opens the copy panel; an unrecognized response cancels the save.
+        func resolution(for response: NSApplication.ModalResponse) -> EditConflictResolution? {
+            let index = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+            guard resolutions.indices.contains(index) else { return .cancel }
+            return resolutions[index]
+        }
+    }
+
+    /// Default conflict UI: an app-modal alert, plus a save panel for copies.
+    static func presentConflict(_ kind: EditConflictKind, fileURL: URL) -> EditConflictResolution {
+        let prompt = ConflictAlert(kind, fileURL: fileURL)
         while true {
-            let index = alert.runModal().rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
-            guard choices.indices.contains(index) else {
-                return .cancel
-            }
-            if let resolution = choices[index].1 {
+            if let resolution = prompt.resolution(for: prompt.alert.runModal()) {
                 return resolution
             }
 

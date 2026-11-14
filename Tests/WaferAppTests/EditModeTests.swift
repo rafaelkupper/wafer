@@ -239,7 +239,8 @@ final class DocumentEditModeTests: XCTestCase {
         autosaveDelay: TimeInterval = 0.05,
         makesWindow: Bool = true,
         sourceLoader: @escaping MarkdownReaderDocument.SourceLoader = MarkdownReaderDocument.loadSource,
-        fileWriter: @escaping MarkdownEditSession.FileWriter = MarkdownEditSession.replaceContents
+        fileWriter: @escaping MarkdownEditSession.FileWriter = MarkdownEditSession.replaceContents,
+        resolveConflict: EditConflictResolver? = nil
     ) throws -> (MarkdownReaderDocument, RecordingReaderViewController) {
         let reader = RecordingReaderViewController()
         let document = MarkdownReaderDocument(
@@ -258,10 +259,10 @@ final class DocumentEditModeTests: XCTestCase {
                 return monitor
             },
             sourceLoadErrorHandler: { [weak self] in self?.loadErrors.append($0) },
-            editConflictResolver: { [weak self] kind, _ in
+            editConflictResolver: { [weak self] kind, fileURL in
                 self?.conflicts.append(kind)
                 self?.duringConflictPrompt?()
-                return self?.conflictResolution ?? .cancel
+                return resolveConflict?(kind, fileURL) ?? self?.conflictResolution ?? .cancel
             },
             editFileWriter: fileWriter,
             autosaveDelay: autosaveDelay,
@@ -408,25 +409,66 @@ final class DocumentEditModeTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "one\nmine")
     }
 
-    func testCancelledConflictBlocksClosingAndNavigation() throws {
+    func testCancelledChangedFileConflictBlocksClosingAndNavigation() throws {
+        try assertCancelBlocksClosingAndNavigation(fileIsMissing: false)
+    }
+
+    func testCancelledMissingFileConflictBlocksClosingAndNavigation() throws {
+        try assertCancelBlocksClosingAndNavigation(fileIsMissing: true)
+    }
+
+    private func assertCancelBlocksClosingAndNavigation(fileIsMissing: Bool) throws {
         let url = try directory.createTextFile(named: "Doc.md", contents: "one\n")
         let other = try directory.createTextFile(named: "Other.md", contents: "other\n")
-        let (document, _) = try makeDocument(for: url, autosaveDelay: 60)
-        defer {
-            conflictResolution = .discardMine
-            document.close()
-        }
+        let (document, _) = try makeDocument(for: url, autosaveDelay: 60, resolveConflict: { kind, fileURL in
+            let prompt = MarkdownEditSession.ConflictAlert(kind, fileURL: fileURL)
+            guard let index = prompt.alert.buttons.firstIndex(where: { $0.title == "Cancel" }) else {
+                XCTFail("The production conflict alert must offer Cancel")
+                return .cancel
+            }
+            let response = NSApplication.ModalResponse(rawValue: NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + index)
+            return prompt.resolution(for: response) ?? .cancel
+        })
+        defer { document.close() }
         let host = try XCTUnwrap(document.windowControllers.first as? DocumentHostWindowController)
+        let window = try XCTUnwrap(host.window)
         document.beginEditing()
         try type("mine", in: document)
-        try Data("theirs\n".utf8).write(to: url)
-        conflictResolution = .cancel
+        let editor = try XCTUnwrap(document.editorControllerForTesting)
+        let revision = editor.revision
+        if fileIsMissing {
+            try FileManager.default.moveItem(at: url, to: directory.url.appendingPathComponent("Moved.md"))
+        } else {
+            try Data("theirs\n".utf8).write(to: url)
+        }
 
-        XCTAssertFalse(host.prepareToCloseWindow())
+        window.performClose(nil)
+        let expectedConflict: EditConflictKind = fileIsMissing ? .missingOnDisk : .changedOnDisk
+        XCTAssertEqual(conflicts, [expectedConflict])
+        XCTAssertTrue(host.tabs.contains { $0.document === document })
+        XCTAssertEqual(document.windowControllers.count, 1)
+        XCTAssertEqual(editor.text, "one\nmine")
+        XCTAssertEqual(editor.revision, revision)
         document.navigateInCurrentWindow(to: other)
         XCTAssertEqual(document.fileURL, url)
         XCTAssertTrue(document.isEditing)
-        XCTAssertEqual(conflicts, [.changedOnDisk, .changedOnDisk])
+        XCTAssertTrue(document.editorControllerForTesting === editor)
+        XCTAssertEqual(editor.text, "one\nmine")
+        XCTAssertEqual(editor.revision, revision)
+        let revert = NSMenuItem(title: "Revert Edits", action: #selector(MarkdownReaderDocument.revertEdits(_:)), keyEquivalent: "")
+        XCTAssertTrue(document.validateUserInterfaceItem(revert))
+        XCTAssertTrue(document.navigationHistory.backEntries.isEmpty)
+        XCTAssertTrue(document.navigationHistory.forwardEntries.isEmpty)
+        XCTAssertEqual(conflicts, [expectedConflict, expectedConflict])
+        XCTAssertEqual(try String(contentsOf: other, encoding: .utf8), "other\n")
+        if fileIsMissing {
+            XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+            XCTAssertEqual(try String(contentsOf: directory.url.appendingPathComponent("Moved.md"), encoding: .utf8), "one\n")
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.url.path).sorted(), ["Moved.md", "Other.md"])
+        } else {
+            XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "theirs\n")
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.url.path).sorted(), ["Doc.md", "Other.md"])
+        }
     }
 
     func testNavigationSavesFirstAndKeepsEditingTheNextFile() throws {
