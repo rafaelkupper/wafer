@@ -67,8 +67,8 @@ Findings:
 - [x] Each finding is fixed, or its resolution is recorded under Decisions.
 - [x] `swift test` passes five consecutive runs, with no constraint warnings and no test preference files left.
 - [x] `scripts/check.sh`, `--release`, the release build, `verify-appex.sh`, `verify-app.sh` and `sandbox-smoke.sh run` (fresh smoke ID) all pass.
-- [ ] One reviewer checks the diff from `f14abb3` and finds no blocking issue.
-- [ ] Merge into local `main`.
+- [x] One reviewer checks the diff from `f14abb3` and finds no blocking issue (after the fixes in `d3d7b6d`, `8135054` and `bd517bc`).
+- [x] Merge into local `main`.
 
 ## Decisions
 
@@ -114,3 +114,11 @@ Branch `sandbox-and-render-split`, 2026-11-14, after merging N, L, S and F:
 - The streams verified that their regression tests fail without the fixes: F1, F2a, F2b, F3, L1, S1 (explicit save), N1 and N2.
 - Stream L's perf run (`scripts/check.sh --perf`) passed.
 - Not run: click-driven checks, hosted CI, Developer ID packaging, notarization.
+
+Final state `bd517bc`, after the review-check fixes:
+
+- `swift test`: five consecutive passing runs. Each ran 819 tests: 271 core, 535 app (2 opt-in perf tests skipped) and 13 Quick Look. 0 failures and 0 constraint-conflict messages. The Wafer file count in `~/Library/Preferences` stayed at 18.
+- `scripts/check.sh` and `scripts/check.sh --release`: passed.
+- `scripts/build-app.sh release` built `dev.wafer.app.dev` with 0 `ForTesting` symbols. `verify-appex.sh` and `verify-app.sh` passed.
+- `scripts/sandbox-smoke.sh run` with fresh ID `dev.wafer.app.focused3-smoke-20261114` passed all four phases. `clean` passed.
+- An intermediate run at `d3d7b6d` failed two `LibraryIndexDiffTests`, fixed in `8135054`.
