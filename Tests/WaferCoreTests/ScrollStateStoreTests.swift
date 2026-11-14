@@ -3,6 +3,26 @@ import XCTest
 @testable import WaferCore
 
 final class ScrollStateStoreTests: XCTestCase {
+    func testConstructionDoesNotEnumerateDefaultsAndMigrationIsExplicit() throws {
+        let suite = "dev.wafer.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(CountingDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("obsolete", forKey: "scroll-state:legacy")
+        defaults.set("keep", forKey: "unrelated")
+        for _ in 0..<20 { _ = ScrollStateStore(defaults: defaults) }
+        XCTAssertEqual(defaults.enumerationCount, 0)
+        XCTAssertEqual(defaults.string(forKey: "scroll-state:legacy"), "obsolete")
+        let store = ScrollStateStore(defaults: defaults)
+        store.save(fraction: 0.5, for: URL(fileURLWithPath: "/tmp/note.md"), fingerprint: "v2")
+        store.pruneLegacyEntries()
+        XCTAssertEqual(defaults.enumerationCount, 1)
+        XCTAssertNil(defaults.object(forKey: "scroll-state:legacy"))
+        XCTAssertEqual(defaults.string(forKey: "unrelated"), "keep")
+        XCTAssertEqual(store.load(for: URL(fileURLWithPath: "/tmp/note.md"), fingerprint: "v2")?.fraction, 0.5)
+        store.pruneLegacyEntries()
+        XCTAssertEqual(defaults.enumerationCount, 2)
+    }
+
     func testSavesAndLoadsScrollFraction() {
         let defaults = UserDefaults(suiteName: UUID().uuidString)!
         let store = ScrollStateStore(defaults: defaults)
@@ -52,5 +72,14 @@ final class ScrollStateStoreTests: XCTestCase {
         XCTAssertEqual(store.load(for: fileURL, fingerprint: "fresh")?.fraction ?? -1, 0.8, accuracy: 0.0001)
         XCTAssertNil(defaults.object(forKey: "scroll-state:invalid"))
         XCTAssertEqual(defaults.string(forKey: "unrelated"), "keep me")
+    }
+}
+
+private final class CountingDefaults: UserDefaults, @unchecked Sendable {
+    var enumerationCount = 0
+
+    override func dictionaryRepresentation() -> [String: Any] {
+        enumerationCount += 1
+        return super.dictionaryRepresentation()
     }
 }

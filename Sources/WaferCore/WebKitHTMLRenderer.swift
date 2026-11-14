@@ -144,6 +144,7 @@ private struct WebKitHTMLRenderVisitor: MarkupVisitor {
     let wikiLinkIndex: WikiLinkIndex?
     private(set) var hasWikiLinks = false
     private let footnoteDefinitionsByLabel: [String: FootnoteDefinition]
+    private let knownFootnoteLabels: Set<String>
     private let previewAttachmentStore = PreviewAttachmentStore()
     private let allowsPreviewLocalImages: Bool
     private var htmlState = HTMLSanitizer.State()
@@ -188,7 +189,9 @@ private struct WebKitHTMLRenderVisitor: MarkupVisitor {
         self.baseURL = baseURL
         self.assetResolver = assetResolver
         self.codeSyntaxHighlighter = codeSyntaxHighlighter
-        self.footnoteDefinitionsByLabel = MarkdownFootnoteSupport.definitionMap(from: footnotes)
+        let definitions = MarkdownFootnoteSupport.definitionMap(from: footnotes)
+        self.footnoteDefinitionsByLabel = definitions
+        self.knownFootnoteLabels = Set(definitions.keys)
         self.headingSlugger = HeadingAnchorSlugger(reservedPrimaryIDs: reservedHeadingAnchorIDs)
         self.target = target
         self.wikiLinkIndex = wikiLinkIndex
@@ -367,8 +370,7 @@ private struct WebKitHTMLRenderVisitor: MarkupVisitor {
         }
 
         let references = MarkdownFootnoteSupport.references(in: text)
-        let knownLabels = Set(footnoteDefinitionsByLabel.keys)
-        guard references.contains(where: { knownLabels.contains($0.normalizedLabel) }) else {
+        guard references.contains(where: { knownFootnoteLabels.contains($0.normalizedLabel) }) else {
             return nil
         }
 
@@ -490,7 +492,7 @@ private struct WebKitHTMLRenderVisitor: MarkupVisitor {
     mutating func visitHeading(_ heading: Heading) -> String {
         let title = MarkdownSemanticSupport
             .strippedHTMLText(from: heading.plainText)
-            .strippingKnownFootnoteReferences(knownLabels: Set(footnoteDefinitionsByLabel.keys))
+            .strippingKnownFootnoteReferences(knownLabels: knownFootnoteLabels)
             .collapsingWhitespace
         let idAttribute: String
         let aliasHTML: String
