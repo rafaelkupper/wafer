@@ -72,4 +72,20 @@ No behavior change. Extract:
 
 ## Decisions
 
+- The library folder is stored as an ordinary folder grant in `FolderAccessStore`, so there is one bookmark store and one coverage rule; Close Library keeps the grant (documented in GUIDE).
+- Saving keeps `itemReplacementDirectory` plus `replaceItemAt`: a sandboxed probe confirmed it works on a user-opened file on the startup volume and on `/Volumes/Pegasus`.
+- Sparkle: `SUEnableInstallerLauncherService` on; the Downloader XPC service stays off because the app has `network.client` (Sparkle sandboxing guide). Mach-lookup exceptions `dev.wafer.app-spks` and `dev.wafer.app-spki`.
+- Local builds are ad-hoc signed with the sandbox entitlements but without the hardened runtime (library validation needs a team identity); release builds use Developer ID with the hardened runtime.
+- The reader disables WebKit Safe Browsing lookups; they were the only sandbox denial and add nothing for generated HTML.
+- `MarkdownReaderDocument` shrank only 1,058 to 1,020 lines because link navigation, history and load/save stayed put while the sandbox stream edited them; the render state machine is now `DocumentRenderCoordinator` with direct tests. `WebKitReaderViewController` went from 1,027 to 730 lines (`ReaderNavigationState`, `ReaderFindController`, `ReaderLivePreviewController`).
+- HTML export still omits images it cannot read, without a grant prompt (`ExportAssetInliner` was outside the sandbox stream).
+
 ## Verification
+
+Branch `sandbox-and-render-split`, 2026-11-14:
+
+- `swift test`: five consecutive runs passed, each 759 tests (266 core, 480 app with 1 opt-in perf test skipped, 13 Quick Look), 0 failures, 0 constraint-conflict messages, 0 new Wafer test files in `~/Library/Preferences`.
+- `scripts/check.sh` (55 release-tool tests) and `scripts/check.sh --release`: passed.
+- `scripts/build-app.sh release`, `scripts/verify-appex.sh` and `scripts/verify-app.sh`: passed. Entitlements are exactly `app-sandbox`, `files.user-selected.read-write`, `files.bookmarks.app-scope`, `network.client`, `print`, and the two Sparkle mach-lookup names. 0 `ForTesting` symbols.
+- Sandboxed smoke test by the sandbox stream, using a renamed copy with bundle ID `dev.wafer.app.sandbox-smoke` so the user's real preferences were not migrated: container created and preferences and themes migrated; a single file outside any grant logged the refused reads and showed the notice; a granted folder served the sibling image without reopening; grants restored after relaunch and after re-signing; remote image loaded; only sandbox denial was Safe Browsing (now disabled). Evidence in `/tmp/wafer-sandbox-work/evidence`.
+- Not run: click-driven steps (desktop control failed with `Computer Use server error -10005: codex app-server exited before returning a response` for both the stream and the integrator; window capture needs Screen Recording permission), Sparkle update against a published feed, Developer ID packaging, notarization.
