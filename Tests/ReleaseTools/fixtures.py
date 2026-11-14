@@ -155,7 +155,7 @@ class Fixture:
         self.temporary = tempfile.TemporaryDirectory(prefix='wafer-release-test-')
         self.root = Path(self.temporary.name).resolve()
         (self.root / 'scripts').mkdir()
-        for name in ('build-app.sh', 'verify-appex.sh', 'verify-app.sh', 'sandbox-smoke.sh', 'package-release.sh', 'release.py', 'verify-update.swift',
+        for name in ('build-app.sh', 'verify-appex.sh', 'verify-app.sh', 'sandbox-smoke.sh', 'sandbox-smoke-check.py', 'sandbox-access-probe.m', 'package-release.sh', 'release.py', 'verify-update.swift',
                      'check.sh', 'check-source.py', 'verify-vendored-assets.py', 'select-xcode.sh'):
             shutil.copy2(ROOT / 'scripts' / name, self.root / 'scripts' / name)
         shutil.copytree(ROOT / 'App', self.root / 'App')
