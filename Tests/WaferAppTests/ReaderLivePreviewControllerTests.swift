@@ -110,6 +110,33 @@ final class ReaderLivePreviewControllerTests: XCTestCase {
         XCTAssertEqual(h.calls[1].arguments["line"] as? Double, 30)
     }
 
+    func testNewPageScrollBeforeOldCompletionPreservesCurrentRequests() {
+        let h = Harness()
+        h.preview.reset(for: output())
+        h.preview.syncScroll(to: position(10))
+        h.preview.reset(for: output("next"))
+        h.preview.syncScroll(to: position(30))
+        h.preview.syncScroll(to: position(40))
+        XCTAssertEqual(h.calls.count, 2, "The new page must not wait for the old page's callback")
+        guard h.calls.count == 2 else { return }
+        XCTAssertEqual(h.calls[1].script, ReaderLivePreviewScript.scrollCall)
+        XCTAssertEqual(h.calls[1].arguments["line"] as? Double, 30)
+
+        h.calls[0].complete(.success(true))
+        XCTAssertEqual(h.calls.count, 2, "A stale callback must not drain the new page's pending request")
+        h.calls[1].complete(.success(true))
+        XCTAssertEqual(h.calls.count, 3, "The current callback must drain its pending request")
+        guard h.calls.count == 3 else { return }
+        XCTAssertEqual(h.calls[2].arguments["line"] as? Double, 40)
+        XCTAssertEqual(h.calls[2].script, ReaderLivePreviewScript.installedScrollCall)
+
+        h.preview.syncScroll(to: position(50))
+        XCTAssertEqual(h.calls.count, 3)
+        h.calls[2].complete(.success(true))
+        XCTAssertEqual(h.calls.count, 4)
+        XCTAssertEqual(h.calls.last?.arguments["line"] as? Double, 50)
+    }
+
     func testMetricsOnlyUpdateWhenRangeChangesAndEditExitDropsPendingScroll() {
         let h = Harness()
         h.preview.reset(for: output())
