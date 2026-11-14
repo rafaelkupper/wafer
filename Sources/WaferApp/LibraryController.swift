@@ -156,29 +156,42 @@ final class LibraryController {
         let store = FolderAccessStore.shared
         // The library's grant resolves to the folder's new place when it was
         // moved or renamed; the saved path follows it.
-        if let grantID = preferenceStore.libraryGrantID, let folder = store.folderURL(forGrantID: grantID) {
-            persistedURL = FileIdentity.normalized(folder)
+        let grantFolder = preferenceStore.libraryGrantID.flatMap(store.folderURL(forGrantID:))
+        if let grantFolder {
+            persistedURL = FileIdentity.normalized(grantFolder)
         }
 
         // An unavailable mount is still the user's selected library. Let the
         // background scan report availability without forgetting its path.
         selectLibrary(at: persistedURL)
 
+        // The library has its grant: it is readable now, or it is on a drive
+        // that is not connected, and the grant resolves when the drive mounts
+        // (`AppDelegate.retryUnavailableAccess`). Choosing it again would not help.
+        guard store.isSandboxed, grantFolder == nil else { return }
+
         // A library writable through a broader grant gets a grant of its own,
         // so that a later move is followed too.
-        if store.isSandboxed, store.allowsWriting(persistedURL),
-           preferenceStore.libraryGrantID.flatMap(store.folderURL(forGrantID:)) == nil {
+        if store.allowsWriting(persistedURL) {
             preferenceStore.libraryGrantID = store.grantLibraryAccess(to: persistedURL).grantID
+            return
         }
 
         // Before the App Sandbox, Wafer saved only the library's path. Unless a
         // read-write folder grant covers it, ask once (after launch) to choose
         // it again.
-        guard needsFolderAccess(persistedURL), !preferenceStore.hasAskedForLibraryAccess else { return }
+        guard !preferenceStore.hasAskedForLibraryAccess else { return }
         preferenceStore.hasAskedForLibraryAccess = true
         DispatchQueue.main.async { [weak self] in
             self?.requestLibraryAccess(for: persistedURL, explainFirst: true)
         }
+    }
+
+    /// Wafer > Folder Access… removed the grant `id`. Removing the library's
+    /// own grant closes the library, since Wafer may no longer use its folder.
+    func folderGrantRemoved(id: String) {
+        guard hasLibrary, id == preferenceStore.libraryGrantID else { return }
+        closeLibrary()
     }
 
     /// Library documents are edited in place, so the library needs a grant

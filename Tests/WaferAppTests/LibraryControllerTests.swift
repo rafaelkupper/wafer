@@ -500,7 +500,10 @@ final class LibraryControllerTests: XCTestCase {
         XCTAssertNil(preferences.libraryGrantID)
     }
 
-    func testALibraryOnADriveConnectedAfterLaunchIsScannedOnceItsGrantResolves() throws {
+    /// The one-time prompt to choose the library again is for libraries saved
+    /// before the App Sandbox. A library whose grant waits for its drive is
+    /// not asked for; it stays selected and is scanned once the drive mounts.
+    func testALibraryOnADisconnectedDriveIsNotAskedForAndIsScannedOnceItsGrantResolves() throws {
         let tempDirectory = try TemporaryTestDirectory()
         defer { tempDirectory.remove() }
         let library = tempDirectory.url.appendingPathComponent("Drive/Library", isDirectory: true)
@@ -515,14 +518,17 @@ final class LibraryControllerTests: XCTestCase {
         let preferences = LibraryPreferenceStore(defaults: makeTestUserDefaults())
         preferences.libraryFolderURL = library
         preferences.libraryGrantID = "library-grant"
-        preferences.hasAskedForLibraryAccess = true
         let controller = LibraryController(
             preferenceStore: preferences,
             monitorFactory: { rootURL, onChange in FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange) },
             chooseLibraryFolder: { _, _, _ in XCTFail("asked although the library has its grant") }
         )
         controller.reopenPersistedLibraryIfAvailable()
+        flushMainQueue()
         waitForLibraryIdle(controller)
+        XCTAssertFalse(preferences.hasAskedForLibraryAccess, "the one-time prompt is not used up")
+        XCTAssertEqual(controller.rootURL, FileIdentity.normalized(library), "the library stays selected")
+        XCTAssertEqual(preferences.libraryGrantID, "library-grant")
         XCTAssertNotNil(controller.scanFailure, "the drive is not connected")
         controller.retryIfUnavailable()
         XCTAssertNotNil(controller.scanFailure, "nothing to retry before the grant resolves")
@@ -537,6 +543,45 @@ final class LibraryControllerTests: XCTestCase {
         XCTAssertNil(controller.scanFailure)
         XCTAssertEqual(controller.files.map(\.displayTitle), ["Guide"])
         controller.closeLibrary()
+    }
+
+    func testRemovingTheLibrarysFolderInFolderAccessClosesTheLibrary() throws {
+        let library = try TemporaryTestDirectory()
+        defer { library.remove() }
+        let notes = try TemporaryTestDirectory()
+        defer { notes.remove() }
+        let access = installSandboxedFolderAccess()
+        access.store.grantAccess(to: notes.url)
+        let preferences = LibraryPreferenceStore(defaults: makeTestUserDefaults())
+        let controller = LibraryController(
+            preferenceStore: preferences,
+            scanner: { _ in LibraryScanner.Result(files: [], truncated: false) },
+            monitorFactory: { rootURL, onChange in FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange) }
+        )
+        try controller.openLibrary(at: library.url)
+        waitForLibraryIdle(controller)
+        let window = FolderAccessWindowController(library: { controller })
+        defer { window.windowForTesting?.close() }
+        window.showFolderAccess(nil)
+        func select(_ folder: URL) throws {
+            window.selectRowForTesting(try XCTUnwrap(window.rowsForTesting.firstIndex { $0[0] == folder.path }))
+        }
+        XCTAssertTrue(window.rowsForTesting.contains([library.url.path, "Read and write", "Your library"]))
+        XCTAssertTrue(window.summaryForTesting.contains("Removing your library's folder also closes the library."))
+
+        try select(notes.url)
+        window.removeSelectedForTesting()
+        XCTAssertTrue(controller.hasLibrary, "removing another folder keeps the library")
+
+        try select(library.url)
+        window.removeSelectedForTesting()
+
+        XCTAssertFalse(controller.hasLibrary, "the library closes with its grant")
+        XCTAssertNil(preferences.libraryFolderURL)
+        XCTAssertNil(preferences.libraryGrantID, "no dangling grant identity is left for the next launch")
+        XCTAssertTrue(access.store.folderGrants.isEmpty)
+        XCTAssertTrue(window.rowsForTesting.isEmpty)
+        XCTAssertFalse(access.store.covers(library.url.appendingPathComponent("Guide.md")))
     }
 
     func testALibraryCoveredOnlyByAReadOnlyGrantAsksOnceForAccessThatAllowsSaving() throws {
@@ -604,6 +649,14 @@ final class LibraryControllerTests: XCTestCase {
         XCTAssertTrue(store.hasAskedForLibraryAccess)
         store.libraryFolderURL = URL(fileURLWithPath: "/tmp/WaferLibraryB", isDirectory: true)
         XCTAssertFalse(store.hasAskedForLibraryAccess)
+    }
+
+    /// Runs the work already queued on the main queue, such as the prompt
+    /// `reopenPersistedLibraryIfAvailable()` defers until launch finishes.
+    private func flushMainQueue() {
+        let flushed = expectation(description: "queued main-queue work ran")
+        DispatchQueue.main.async { flushed.fulfill() }
+        wait(for: [flushed], timeout: 5)
     }
 
     private func waitForLibraryIdle(_ controller: LibraryController, timeout: TimeInterval = 2) {

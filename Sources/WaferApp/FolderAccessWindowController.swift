@@ -3,7 +3,8 @@ import WaferCore
 
 /// Wafer > Folder Access…: the folders Wafer remembers, whether it may
 /// change them, and Remove, which stops access and deletes the bookmark.
-/// The window is built the first time it is shown.
+/// Removing the library's folder, marked "Your library", also closes the
+/// library. The window is built the first time it is shown.
 @MainActor
 final class FolderAccessWindowController: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     private enum Column {
@@ -13,14 +14,19 @@ final class FolderAccessWindowController: NSObject, NSTableViewDataSource, NSTab
     }
 
     private let store: @MainActor () -> FolderAccessStore
+    private let library: @MainActor () -> LibraryController
     private var window: NSWindow?
     private let tableView = NSTableView()
     private let summaryLabel = NSTextField(wrappingLabelWithString: "")
     private let removeButton = NSButton(title: "Remove", target: nil, action: nil)
     private var grants: [FolderGrantInfo] = []
 
-    init(store: @escaping @MainActor () -> FolderAccessStore = { FolderAccessStore.shared }) {
+    init(
+        store: @escaping @MainActor () -> FolderAccessStore = { FolderAccessStore.shared },
+        library: @escaping @MainActor () -> LibraryController = { LibraryController.shared }
+    ) {
         self.store = store
+        self.library = library
         super.init()
         NotificationCenter.default.addObserver(
             self, selector: #selector(folderAccessDidChange(_:)), name: .folderAccessDidChange, object: nil
@@ -39,7 +45,7 @@ final class FolderAccessWindowController: NSObject, NSTableViewDataSource, NSTab
         guard isSandboxed else {
             return "This copy of Wafer is not sandboxed, so it can read every file your account can. No folders need to be granted."
         }
-        let summary = "Wafer remembers these folders so that documents can show their images and linked files. It only reads folders marked Read only; it can also save in your library and in folders granted while editing. Removing a folder stops Wafer from using it, and a document that needs it asks again."
+        let summary = "Wafer remembers these folders so that documents can show their images and linked files. It only reads folders marked Read only; it can also save in your library and in folders granted while editing. Removing a folder stops Wafer from using it, and a document that needs it asks again. Removing your library's folder also closes the library."
         return isEmpty ? summary + "\n\nNo folders are granted." : summary
     }
 
@@ -50,7 +56,7 @@ final class FolderAccessWindowController: NSObject, NSTableViewDataSource, NSTab
         case Column.access:
             grant.mode == .readOnly ? "Read only" : "Read and write"
         default:
-            [grant.isLibrary ? "Library" : nil, grant.isAvailable ? nil : "Not available"].compactMap { $0 }.joined(separator: ", ")
+            [grant.isLibrary ? "Your library" : nil, grant.isAvailable ? nil : "Not available"].compactMap { $0 }.joined(separator: ", ")
         }
     }
 
@@ -187,7 +193,10 @@ final class FolderAccessWindowController: NSObject, NSTableViewDataSource, NSTab
     @objc private func removeSelected(_ sender: Any?) {
         let row = tableView.selectedRow
         guard grants.indices.contains(row) else { return }
-        store().revoke(grantID: grants[row].id)
+        let id = grants[row].id
+        store().revoke(grantID: id)
+        // The library cannot stay selected without its grant.
+        library().folderGrantRemoved(id: id)
         reload()
     }
 
