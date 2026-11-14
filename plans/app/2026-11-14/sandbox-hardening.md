@@ -55,11 +55,29 @@ Owns `MarkdownEditSession.swift`, `MarkdownEditCoordinator.swift` and their test
 
 ## Done when
 
-- [ ] Each finding is fixed, or its resolution is recorded under Decisions.
-- [ ] `swift test` passes five consecutive runs, with no constraint warnings and no test preference files left.
-- [ ] `scripts/check.sh`, `--release`, the release build, `verify-appex.sh`, `verify-app.sh` and a failing-then-passing `sandbox-smoke.sh check` pass.
+- [x] Each finding is fixed, or its resolution is recorded under Decisions.
+- [x] `swift test` passes five consecutive runs, with no constraint warnings and no test preference files left.
+- [x] `scripts/check.sh`, `--release`, the release build, `verify-appex.sh`, `verify-app.sh` and a failing-then-passing `sandbox-smoke.sh check` pass.
 - [ ] Astra, Fable and Muse (xhigh) run the scored review.
 
 ## Decisions
 
+- A1: `FolderAccessRange` never offers `/`, top-level folders, `/Users/*`, `/Volumes/*`, the real home folder (from `getpwuid`) or its Library, or a mounted volume root. The notice widens at most two levels above the document's folder. Files whose own folder is too broad get an explanatory alert (default OK) instead of a panel. Prompts show the full path.
+- A2: grants from the image and link notice are read-only bookmarks. The library and grants requested while editing are read-write. A sandboxed probe showed edit saves fail under a read-only grant, so starting edit mode offers a read-write "Grant Access…". During the session the folder panel itself keeps read-write access until quit; read-only applies from the next launch (documented). Wafer > Folder Access… lists grants with Remove.
+- A4: the library refers to its grant by `libraryGrantID` and reopens where the grant resolves.
+- A5: `userSelections` is capped at the 512 most recent; images removed during edit mode stop counting at the next full page load.
+- A8: covers query 1.048 ms to 0.142 ms (debug, 10 grants, 30 opened files).
+- B2: Sparkle 2.10.1 rejects `file://` feeds; the update smoke uses a loopback HTTP feed with `NSAllowsLocalNetworking` confined to smoke copies and a smoke-only host executable, because the production updater disables automatic downloads. The sandboxed `Installer.xpc` installed build 900002 over 900001 on quit.
+- B3: `scripts/build-app.sh` builds `dev.wafer.app.dev` by default; only `package-release.sh` builds `dev.wafer.app`.
+- Empty container shells left by smoke runs (`~/Library/Containers/dev.wafer.app.*smoke*`, `dev.wafer.*probe*`) cannot be deleted from the shell; the user can remove them in Finder.
+
 ## Verification
+
+Branch `sandbox-and-render-split`, 2026-11-14, after merging C, B and A:
+
+- `swift test`: five consecutive runs passed, each 794 tests (267 core, 514 app with 2 opt-in perf tests skipped, 13 Quick Look), 0 failures, 0 constraint-conflict messages, 0 new Wafer test files in `~/Library/Preferences`.
+- `scripts/check.sh` (61 release-tool tests) and `scripts/check.sh --release`: passed.
+- `scripts/build-app.sh release`: passed; built bundle ID `dev.wafer.app.dev`. `verify-appex.sh` and `verify-app.sh`: passed. 0 `ForTesting` symbols.
+- `scripts/sandbox-smoke.sh run` with fresh ID `dev.wafer.app.integration-smoke-20261114`: phases 20 (container), 21 (migration), 22 (bookmark persisted and restored, document reopened) and 23 (no sandbox violations) passed; `clean` passed. Stream B showed phase 21 fails (exit 21) without the migration manifest.
+- Streams verified their regression tests fail without the fixes: A1, A3, A4, A6, A7, C1.
+- Not run: click-driven checks (desktop control failed with `Computer Use server error -10005` for stream A and the integrator), hosted CI, Developer ID packaging, notarization, the production "Check for Updates" menu path.
