@@ -12,10 +12,11 @@ enum LocalAssetLoader {
     static func load(
         from requestURL: URL,
         allowedRootDirectories: [URL],
-        maximumByteCount: Int = WaferLimits.assetByteCount
+        maximumByteCount: Int = WaferLimits.assetByteCount,
+        scope: FolderAccessScope = .unrestricted
     ) throws -> LocalAssetResponse {
         let fileURL = try fileURL(for: requestURL, allowedRootDirectories: allowedRootDirectories)
-        let data = try read(fileURL, allowedRootDirectories: allowedRootDirectories, maximumByteCount: maximumByteCount)
+        let data = try read(fileURL, allowedRootDirectories: allowedRootDirectories, maximumByteCount: maximumByteCount, scope: scope)
         let response = URLResponse(
             url: requestURL,
             mimeType: mimeType(for: fileURL),
@@ -62,13 +63,17 @@ enum LocalAssetLoader {
         return "application/octet-stream"
     }
 
+    /// `scope` is what the App Sandbox lets Wafer read. A file outside it is
+    /// refused with `FolderAccessDeniedError` before it is opened, so the
+    /// sandbox never logs a violation for it.
     static func read(
         _ fileURL: URL, allowedRootDirectories: [URL], maximumByteCount: Int,
-        beforeOpening: () throws -> Void = {}
+        scope: FolderAccessScope = .unrestricted, beforeOpening: () throws -> Void = {}
     ) throws -> Data {
         let roots = allowedRoots(allowedRootDirectories)
         let resolved = resolvedFileURL(forPath: fileURL.path)
         guard isAllowed(fileURL: resolved, in: roots) else { throw CocoaError(.fileReadNoPermission) }
+        guard scope.covers(resolved) else { throw FolderAccessDeniedError(fileURL: resolved) }
         // The hook lets tests swap a parent directory at the check/open boundary.
         try beforeOpening()
         let descriptor = open(resolved.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)

@@ -11,6 +11,7 @@ final class LibraryPreferenceStore: @unchecked Sendable {
 
     private enum DefaultsKey {
         static let libraryFolderPath = "libraryFolderPath"
+        static let libraryAccessPromptShown = "libraryAccessPromptShown"
     }
 
     private let defaults: UserDefaults
@@ -43,12 +44,27 @@ final class LibraryPreferenceStore: @unchecked Sendable {
             } else {
                 defaults.removeObject(forKey: DefaultsKey.libraryFolderPath)
             }
+            defaults.removeObject(forKey: DefaultsKey.libraryAccessPromptShown)
 
             notificationCenter.post(
                 name: .libraryPreferenceDidChange,
                 object: self,
                 userInfo: LibraryPreferenceChange(folderURL: normalizedURL).userInfo
             )
+        }
+    }
+
+    /// Whether Wafer already asked, once, to choose the saved library folder
+    /// again because the App Sandbox could not read it. A new library choice
+    /// clears it.
+    var hasAskedForLibraryAccess: Bool {
+        get { defaults.bool(forKey: DefaultsKey.libraryAccessPromptShown) }
+        set {
+            if newValue {
+                defaults.set(true, forKey: DefaultsKey.libraryAccessPromptShown)
+            } else {
+                defaults.removeObject(forKey: DefaultsKey.libraryAccessPromptShown)
+            }
         }
     }
 }

@@ -25,6 +25,9 @@ public final class DocumentSummaryCache: Sendable {
         }
         if let cached = state.withLock({ cachedSummary(in: $0) }) { return cached }
         let summary = DocumentSidebarDataBuilder.summary(for: url)
+        // A failed read is not kept: access granted later (or a file that
+        // appears) can make the same, unchanged file readable.
+        guard summary.isAvailable else { return summary }
         return state.withLock { state in
             if let cached = cachedSummary(in: state) { return cached }
             if state.entries[identity] == nil { state.order.append(identity) }

@@ -10,6 +10,7 @@ QUICKLOOK_NAME=WaferQuickLook
 APP_BUNDLE="$ROOT_DIR/build/$APP_NAME.app"
 RESOURCE_BUNDLES=(Wafer_WaferCore.bundle Wafer_WaferApp.bundle)
 QUICKLOOK_APPEX="$APP_BUNDLE/Contents/PlugIns/$QUICKLOOK_NAME.appex"
+APP_ENTITLEMENTS="$ROOT_DIR/App/$APP_NAME.entitlements"
 LSREGISTER=${WAFER_LSREGISTER:-"/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"}
 
 resource_directory() {
@@ -64,6 +65,8 @@ for resource in reader-theme.css gemoji-shortcodes.json gemoji-LICENSE.txt \
 done
 APP_RESOURCES=$(resource_directory "$BUILD_PRODUCTS_DIR/Wafer_WaferApp.bundle")
 require_resource "$APP_RESOURCES/Themes/GitHub Light.json"
+require_resource "$APP_ENTITLEMENTS"
+require_resource "$ROOT_DIR/App/container-migration.plist"
 
 rm -rf "$APP_BUNDLE"
 mkdir -p \
@@ -76,6 +79,8 @@ mkdir -p \
 cp "$ROOT_DIR/App/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
 cp "$EXECUTABLE_PATH" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 cp "$ROOT_DIR/App/Resources/$APP_NAME.icns" "$APP_BUNDLE/Contents/Resources/$APP_NAME.icns"
+# Read by macOS once, when the first sandboxed launch creates the container.
+cp "$ROOT_DIR/App/container-migration.plist" "$APP_BUNDLE/Contents/Resources/container-migration.plist"
 cp "$ROOT_DIR/App/QuickLook-Info.plist" "$QUICKLOOK_APPEX/Contents/Info.plist"
 cp "$QUICKLOOK_EXECUTABLE_PATH" "$QUICKLOOK_APPEX/Contents/MacOS/$QUICKLOOK_NAME"
 
@@ -109,6 +114,11 @@ if [[ "$MODE" == "release" ]]; then
 fi
 
 codesign --force --sign - --entitlements "$ROOT_DIR/App/QuickLook.entitlements" "$QUICKLOOK_APPEX"
+# The app is signed last, after the nested code it seals, so local builds run
+# in the App Sandbox with the shipping entitlements. Ad hoc signing has no team
+# identity, so the hardened runtime's library validation is left to the
+# Developer ID release signing in package-release.sh.
+codesign --force --sign - --entitlements "$APP_ENTITLEMENTS" "$APP_BUNDLE"
 
 if [[ "${WAFER_REGISTER_APP:-0}" == "1" ]]; then
   if [[ -x "$LSREGISTER" ]]; then

@@ -41,3 +41,6 @@ jobs:
       - name: Verify Quick Look extension
         if: matrix.configuration == 'debug'
         run: scripts/verify-appex.sh build/Wafer.app
+      - name: Verify app signature and sandbox entitlements
+        if: matrix.configuration == 'debug'
+        run: scripts/verify-app.sh build/Wafer.app

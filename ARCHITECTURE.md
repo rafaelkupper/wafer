@@ -14,6 +14,8 @@ Wafer is a SwiftPM-based macOS document viewer for Markdown files. The app is sp
 `scripts/build-app.sh` builds the SwiftPM executable product in debug or release mode, then assembles `build/Wafer.app` with:
 
 - `App/Info.plist`
+- `App/Wafer.entitlements`, the app's App Sandbox entitlements
+- `App/container-migration.plist`, copied to `Contents/Resources` (see [file access](#file-access))
 - `App/QuickLook-Info.plist`
 - `App/QuickLook.entitlements`
 - `App/Resources/Wafer.icns`
@@ -21,6 +23,8 @@ Wafer is a SwiftPM-based macOS document viewer for Markdown files. The app is sp
 - the Quick Look extension executable from `.build/<configuration>/WaferQuickLook`
 - exactly the SwiftPM resource bundles `Wafer_WaferCore.bundle` and `Wafer_WaferApp.bundle` (the appex gets only `Wafer_WaferCore.bundle`); a missing bundle fails assembly, and `scripts/verify-appex.sh` fails on any other bundle, so test-fixture bundles from the shared build directory never ship
 - `Sparkle.framework` from `.build/<configuration>`, copied whole into `Contents/Frameworks`
+
+The script signs the Quick Look extension and then the app ad hoc, each with its entitlements, so a local build runs in the App Sandbox exactly as a release does. Ad hoc signatures have no team identity, so the hardened runtime (whose library validation needs one) is added only by the Developer ID signing in `scripts/package-release.sh`. `scripts/verify-app.sh` checks the signature, the exact entitlement set, Sparkle's sandbox keys, and the bundled migration manifest.
 
 The bundle identifier is `dev.wafer.app`, and the minimum macOS version is 14.0.
 `CFBundleShortVersionString` follows a three-component marketing version format.
@@ -424,7 +428,20 @@ document when a library is open.
 
 ## Security Model
 
-The containing app is currently unsandboxed. Its only network use besides remote images is Sparkle: it fetches the update feed, and an update archive once the user chooses to install. Archives are accepted only with a valid EdDSA signature from the key in `App/Info.plist`. The Quick Look extension is sandboxed with `com.apple.security.app-sandbox=true` in `App/QuickLook.entitlements` and intentionally has no network-client entitlement. Preview rendering strips remote image URLs before presentation, so Finder previews do not fetch remote images. Release verification fails if the sandbox entitlement is missing or if the appex requests network client access.
+The containing app runs in the App Sandbox. A bug in Wafer's own process (the parser, the sanitizers, the file and asset loaders) can reach only the app's container and the files and folders the user granted. WebKit's web content process is sandboxed separately by Apple. `App/Wafer.entitlements` is the complete set, and `scripts/verify-app.sh` fails on any difference:
+
+| Entitlement | Why |
+| --- | --- |
+| `com.apple.security.app-sandbox` | Runs the app in the sandbox. |
+| `com.apple.security.files.user-selected.read-write` | Read and save files the user opens, and read folders the user grants. |
+| `com.apple.security.files.bookmarks.app-scope` | Remember granted folders across launches as app-scoped security bookmarks. |
+| `com.apple.security.network.client` | Remote images, export prefetch, the Sparkle feed and update downloads. |
+| `com.apple.security.print` | File > Print and Export as PDF. |
+| `com.apple.security.temporary-exception.mach-lookup.global-name` = `dev.wafer.app-spks`, `dev.wafer.app-spki` | Sparkle's sandboxed installer reports status and accepts the installer connection through these services. |
+
+No other temporary exceptions are used. Sparkle follows its [sandboxing guide](https://sparkle-project.org/documentation/sandboxing/): `SUEnableInstallerLauncherService` is true in `App/Info.plist`, so installs go through the framework's `Installer.xpc`. The Downloader service stays disabled (`SUEnableDownloaderService` is absent) because the guide advises against it when the app already has `network.client`; its unused `Downloader.xpc` remains in the framework and is still signed, with its own entitlements preserved, during packaging. A live update cannot be tested without a published feed, so this configuration is verified statically.
+
+The app's only network use besides remote images is Sparkle: it fetches the update feed, and an update archive once the user chooses to install. Archives are accepted only with a valid EdDSA signature from the key in `App/Info.plist`. The Quick Look extension is sandboxed with `com.apple.security.app-sandbox=true` in `App/QuickLook.entitlements` and intentionally has no network-client entitlement. Preview rendering strips remote image URLs before presentation, so Finder previews do not fetch remote images. Release verification fails if the sandbox entitlement is missing or if the appex requests network client access.
 
 The WebKit reader is built around a deny-by-default render shell plus narrow local schemes:
 
@@ -440,6 +457,31 @@ The WebKit reader is built around a deny-by-default render shell plus narrow loc
 `WebKitReaderViewController` registers all six native message handlers in the named reader content world. Scroll mapping runs there too. Page-world code handles DOM patches and bundled Mermaid and KaTeX renderers. An app-owned page script relays the renderer's readiness API through a DOM event; an isolated document-start script attaches the load's UUID before posting to native code. Native code still checks that UUID. This avoids scanning or modifying the rendered HTML. No page-world handler accepts scroll-sync payloads.
 
 Each app-owned `loadHTMLString` has a unique base-URL query identifier and one pending navigation authorization. The policy cancels other main-frame loads, including script, form, and meta-refresh navigations. Same-document fragment changes remain available, and activated links route through the document. Heading IDs are JSON-encoded before JavaScript evaluation, and scroll-restoration fractions travel through `callAsyncJavaScript` arguments. WebKit background styling uses the public `underPageBackgroundColor` API.
+
+## File access
+
+Under the App Sandbox Wafer reads its container, its bundle, and what the user chose. A Markdown file opened from Finder, the Dock, File > Open..., or Open Recent grants that file only (AppKit restores access to recent documents from its own bookmarks). Folders are granted explicitly:
+
+- `FolderAccessStore` keeps each granted folder as an app-scoped security bookmark (`folderAccessGrants` in the app's preferences). `AppDelegate` restores them in `applicationWillFinishLaunching`, because documents opened at launch arrive before `applicationDidFinishLaunching`. Restoring resolves each bookmark without UI or mounting, starts its access, and keeps it for the session; a stale bookmark is made again, and one that cannot be resolved (a disconnected drive) is kept for a later launch. A grant inside an existing one adds nothing; a grant that contains existing ones replaces them and stops their access. Access stops when the app terminates.
+- `covers(_:)` answers whether a URL is readable: `FileContainment` against the granted folders, the files the user opened this session, the container, the temporary folder, and the app bundle. `scope` is a `Sendable` snapshot of the same roots for work off the main thread. Outside the sandbox (tests, `swift run`) every path is covered and nothing is stored.
+- The store also records, per document, the files it needed but could not read: the linked documents in its sidebar entries (replaced on every render), images the asset handler refused, link targets, and its own file when a reload is refused.
+
+`FolderAccessFlow` asks for a grant. `ensureAccess(to:requestedBy:window:onGranted:)` returns true when the file is readable; otherwise it shows a folder-only `NSOpenPanel` (a sheet when the window is free) that starts at the file's folder and explains that a parent folder covers more documents, then calls `onGranted` once the chosen folder covers the file. After any grant, documents whose needed files became readable reload like File > Reload, so images, previews, and links work without reopening.
+
+Where each case is handled:
+
+- **Window notice.** `DocumentWindowController` shows `FolderAccessNoticeViewController`, a bottom titlebar accessory (never part of the WebKit page), while the active document has unreadable needed files: "Allow Wafer to read the folder … to show linked files and images", with Grant Access… and a close button. Grant Access… offers the document's folder, widened to the closest folder that also holds the needed files (never a folder just below the root, such as `/Users`). Closing the notice hides it for that document in that window. The window records linked documents from `apply(sidebarEntries:outlineItems:)` and attributes refused images to the tab whose web view requested them.
+- **Images.** `WebKitLocalAssetSchemeHandler` checks the scope before scheduling a read. A file outside it fails the request at once with `FolderAccessDeniedError` and posts `.localAssetAccessDenied` with the web view; `LocalAssetLoader.read` checks the same scope again after resolving symlinks, before it opens the file, so no read is attempted outside the scope and no request is left pending. HTML export reads through the loader without a scope; an unreadable image is omitted as before.
+- **Links.** In-window navigation (relative links, wiki links, sidebar, history), Cmd-click tabs, links that open a new window (`MarkdownDocumentOpener.open(url:)`), and links to other files (`LinkTargetOpener`, before opening or revealing them) call `ensureAccess` first and continue after the grant. Another app can open, and Finder can reveal, only files the sandbox lets Wafer read.
+- **Linked-document summaries.** The Documents sidebar does not read linked notes outside the scope; their rows say "Needs folder access", and selecting one asks for the grant. `DocumentSummaryCache` no longer caches failed summaries, because a grant can make an unchanged file readable.
+- **Document reads.** `MarkdownSourceLoader` turns a read the sandbox refused outside the scope (POSIX `EPERM`; plain `EACCES` file permissions are left alone) into `FolderAccessDeniedError`, a recoverable error whose alert offers Grant Access…. A refused automatic reload is silent as before, but records the file so the window shows the notice.
+- **Library.** Opening a library from the panel or a drop stores the folder as a grant, so scanning, the directory monitor, and Quick Open work in later launches. Installs that saved only `libraryFolderPath` keep it selected (shown as unavailable) and are asked once, after launch, to choose the folder again: an alert, then a panel that opens inside the saved folder. When a grant already covers the path, the library reopens silently. File > Retry Library offers the panel while the folder is not readable. Close Library forgets the library choice; the folder grant stays.
+
+Saving in the sandbox keeps the existing path (`itemReplacementDirectory` plus `replaceItemAt`). This was verified on 2026-11-13 with a sandboxed, ad hoc signed probe app using the same calls and entitlements: a file opened through LaunchServices was replaced on the startup volume (the replacement directory is inside the container) and on a separate APFS volume (`/Volumes/<volume>/.TemporaryItems`), kept its access after another app replaced it atomically, and a file inside a resolved folder bookmark could be replaced as well. In the `scripts/sandbox-smoke.sh` run on 2026-11-14, a folder grant made by one ad hoc signature resolved after the app was re-signed with a different code directory hash.
+
+Container migration: on the first sandboxed launch macOS reads `Contents/Resources/container-migration.plist` and moves `~/Library/Preferences/dev.wafer.app.plist`, `~/Library/Preferences/dev.wafer.scroll-state.plist`, and `~/Library/Application Support/Wafer` (the themes) into `~/Library/Containers/dev.wafer.app/Data`, keeping their relative paths. It runs only when the container is created. `ThemeLibrary` and the preference stores then resolve inside the container without code changes, and Reveal Themes Folder in Finder opens the container's themes folder.
+
+The `access` log category records restored and new grants, files a document could not read, and the notice showing or hiding; served local assets are logged at debug level.
 
 ## In-App Updates
 
@@ -459,8 +501,8 @@ Direct distribution outside the Mac App Store is handled by `scripts/package-rel
 2. Build `build/Wafer.app` in release mode with build paths remapped, keep matching dSYMs, and strip the shipping executables before signing.
 3. Sign Sparkle's helpers and framework inside out with a `Developer ID Application` identity, hardened runtime, and secure timestamp, never with `--deep`. Then sign `Contents/PlugIns/WaferQuickLook.appex` the same way with `App/QuickLook.entitlements`.
 4. Verify the appex layout, bundled WaferCore resources, signature, sandbox entitlement, and absence of preview network entitlement with `scripts/verify-appex.sh`.
-5. Sign the containing app with the same Developer ID identity, hardened runtime, and secure timestamp.
-6. Verify the signed app with `codesign --verify --deep --strict` and re-run the appex verifier.
+5. Sign the containing app with the same Developer ID identity, hardened runtime, and secure timestamp, and with `App/Wafer.entitlements`.
+6. Verify the signed app with `codesign --verify --deep --strict`, re-run the appex verifier, and run `scripts/verify-app.sh --distribution`, which also requires the Developer ID authority and the hardened runtime.
 7. Create a ZIP archive for Apple notarization.
 8. Submit the ZIP with `xcrun notarytool`.
 9. Staple the notarization ticket to the app bundle.
@@ -481,4 +523,4 @@ Quick Look reads only a bounded 2 MiB source prefix, preserving complete UTF-8/U
 
 ## Logging
 
-Failures that are handled without user interaction go to unified logging through `WaferLog` (subsystem `dev.wafer.app`; categories `editing`, `library`, `rendering`, `export`, `resources`). File paths are logged as private values. Errors the user must act on are still presented in the UI.
+Failures that are handled without user interaction go to unified logging through `WaferLog` (subsystem `dev.wafer.app`; categories `editing`, `library`, `rendering`, `export`, `resources`), and folder grants under the App Sandbox through the `access` category of the same subsystem. File paths are logged as private values. Errors the user must act on are still presented in the UI.

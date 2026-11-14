@@ -291,6 +291,15 @@ final class DocumentSidebarViewController: NSViewController, NSTextFieldDelegate
         sidebarEntries.map(\.displayTitle)
     }
 
+    var documentPreviewTextsForTesting: [String] {
+        sidebarEntries.map(\.previewText)
+    }
+
+    func activateDocumentRowForTesting(_ url: URL) {
+        guard let row = rows.first(where: { if case .document(let entry) = $0 { entry.fileURL == url } else { false } }) else { return }
+        activate(row)
+    }
+
     var backlinkTitlesForTesting: [String] {
         rowViewsForTesting.compactMap { ($0 as? SidebarBacklinkRowView)?.titleForTesting }
     }
@@ -558,6 +567,7 @@ final class DocumentSidebarViewController: NSViewController, NSTextFieldDelegate
             }
             guard !pending.isEmpty else { return }
             let library = self.libraryController.snapshot.filesByIdentity
+            let scope = FolderAccessStore.shared.scope
             self.summaryWork.submit(pending, work: { entries, cancellation in
                 var summaries: [DocumentSidebarEntry] = []
                 for entry in entries {
@@ -565,6 +575,12 @@ final class DocumentSidebarViewController: NSViewController, NSTextFieldDelegate
                     if let file = library[FileIdentity.identity(for: entry.fileURL)] {
                         summaries.append(DocumentSidebarEntry(fileURL: entry.fileURL,
                             displayTitle: file.displayTitle, previewText: String(file.plainText.prefix(140)),
+                            isCurrent: false, isAvailable: true))
+                    } else if !scope.covers(entry.fileURL) {
+                        // Outside the App Sandbox's granted folders: the window
+                        // offers the grant, and selecting the row asks for it.
+                        summaries.append(DocumentSidebarEntry(fileURL: entry.fileURL,
+                            displayTitle: entry.displayTitle, previewText: Self.needsFolderAccessPreview,
                             isCurrent: false, isAvailable: true))
                     } else {
                         summaries.append(DocumentSummaryCache.shared.summary(for: entry.fileURL))
@@ -587,10 +603,19 @@ final class DocumentSidebarViewController: NSViewController, NSTextFieldDelegate
         activate(rows[rowTable.selectedRow])
     }
 
+    nonisolated static let needsFolderAccessPreview = "Needs folder access"
+
     private func activate(_ row: SidebarRow) {
         switch row {
         case .document(let entry):
-            if entry.isAvailable { onSelectDocument?(entry.fileURL) }
+            guard entry.isAvailable else { break }
+            let url = entry.fileURL
+            let current = sidebarEntries.first(where: \.isCurrent)?.fileURL
+            // Plain and Cmd-clicks both wait for a folder grant the file needs.
+            guard FolderAccessFlow.ensureAccess(to: url, requestedBy: current, window: view.window, onGranted: { [weak self] in
+                self?.onSelectDocument?(url)
+            }) else { break }
+            onSelectDocument?(url)
         case .outline(let item):
             setActiveOutlineAnchorID(item.anchorID)
             onSelectOutlineItem?(item.anchorID)

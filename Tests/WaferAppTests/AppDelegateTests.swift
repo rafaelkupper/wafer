@@ -48,6 +48,21 @@ final class AppDelegateTests: XCTestCase {
         XCTAssertEqual(openedInitialFiles, [files])
     }
 
+    func testItemsOpenedFromFinderOrTheOpenPanelBecomeReadableUnderTheSandbox() throws {
+        let tempDirectory = try TemporaryTestDirectory()
+        defer { tempDirectory.remove() }
+        let fileURL = try tempDirectory.createTextFile(named: "Guide.md", contents: "# Guide")
+        let access = installSandboxedFolderAccess()
+        var opened: [URL] = []
+        let delegate = AppDelegate(openURLs: { opened.append(contentsOf: $0) }, reopenPersistedLibrary: {})
+
+        delegate.application(NSApplication.shared, open: [fileURL])
+
+        XCTAssertEqual(opened, [fileURL])
+        XCTAssertTrue(access.store.covers(fileURL))
+        XCTAssertFalse(access.store.covers(tempDirectory.url.appendingPathComponent("Other.md")))
+    }
+
     func testLaunchAppliesResolvedAppearanceBeforeDocumentsOpen() throws {
         defer { ReaderTheme.resetToDefaultForTesting() }
         let tempDirectory = try TemporaryTestDirectory()

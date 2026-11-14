@@ -42,6 +42,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.appearancePreferenceStore = appearancePreferenceStore
     }
 
+    /// Documents opened at launch arrive before `applicationDidFinishLaunching`,
+    /// so stored folder grants are restored first.
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        FolderAccessStore.shared.restoreGrants()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         appearancePreferenceStore.reloadThemes()
         appearancePreferenceStore.applyResolvedPalette()
@@ -65,6 +71,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         MarkdownReaderDocument.flushAllEdits() ? .terminateNow : .terminateCancel
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        FolderAccessStore.shared.stopAccessingAll()
+    }
+
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
         true
     }
@@ -83,10 +93,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        FolderAccessStore.shared.noteUserSelected(panel.urls)
         openURLs(panel.urls)
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
+        // Finder, the Dock, and `open` hand Wafer access to exactly these items.
+        FolderAccessStore.shared.noteUserSelected(urls)
         var documentURLs: [URL] = []
         for url in urls {
             if LibraryController.isDirectory(url) {

@@ -22,7 +22,7 @@ enum MarkdownDocumentOpener {
 
     static func open(
         url: URL, anchorID: String? = nil,
-        documentFactory: () -> MarkdownReaderDocument = {
+        documentFactory: @escaping () -> MarkdownReaderDocument = {
             MarkdownReaderDocument(librarySnapshotProvider: librarySnapshot, scrollStateStore: scrollStateStore)
         }
     ) throws {
@@ -40,6 +40,18 @@ enum MarkdownDocumentOpener {
             if existingDocument.hasLoadedSource {
                 NSDocumentController.shared.noteNewRecentDocumentURL(normalizedURL)
             }
+            return
+        }
+
+        // Under the App Sandbox a file outside the granted folders (a linked
+        // note, for example) opens after the user grants its folder.
+        guard FolderAccessFlow.ensureAccess(to: normalizedURL, requestedBy: nil, window: currentMarkdownWindow(), onGranted: {
+            do {
+                try open(url: url, anchorID: anchorID, documentFactory: documentFactory)
+            } catch {
+                NSApp.presentError(error)
+            }
+        }) else {
             return
         }
 

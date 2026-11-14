@@ -2,6 +2,7 @@ import Foundation
 import WebKit
 import XCTest
 @testable import WaferApp
+@testable import WaferCore
 
 @MainActor
 final class WebKitLocalAssetSchemeHandlerTests: XCTestCase {
@@ -73,6 +74,47 @@ final class WebKitLocalAssetSchemeHandlerTests: XCTestCase {
         handler.webView(WKWebView(), start: task)
         wait(for: [rejected], timeout: 15)
         XCTAssertNotNil(task.error)
+    }
+
+    func testRequestOutsideTheSandboxScopeFailsWithoutReadingAndNamesItsWebView() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let url = directory.url.appendingPathComponent("image.png")
+        try Data([1]).write(to: url)
+        let queue = OperationQueue()
+        queue.isSuspended = true
+        let handler = WebKitLocalAssetSchemeHandler(queue: queue, accessScope: { FolderAccessScope(roots: []) })
+        handler.documentRootDirectory = directory.url
+        let webView = WKWebView()
+        let refused = expectation(description: "refused at once")
+        let reported = expectation(forNotification: .localAssetAccessDenied, object: webView) { notification in
+            (notification.userInfo?["fileURL"] as? URL)?.lastPathComponent == "image.png"
+        }
+        let task = LocalAssetTestTask(fileURL: url) { refused.fulfill() }
+
+        handler.webView(webView, start: task)
+
+        wait(for: [refused, reported], timeout: 5)
+        XCTAssertTrue(task.error is FolderAccessDeniedError)
+        XCTAssertTrue(task.data.isEmpty)
+        XCTAssertTrue(queue.operations.isEmpty, "nothing was scheduled to read")
+    }
+
+    func testRequestInsideTheSandboxScopeIsRead() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let url = directory.url.appendingPathComponent("image.png")
+        try Data([1, 2]).write(to: url)
+        let handler = WebKitLocalAssetSchemeHandler(accessScope: { FolderAccessScope(roots: [FileContainment(rootDirectory: directory.url)]) })
+        handler.documentRootDirectory = directory.url
+        let delivered = expectation(description: "delivered")
+        let task = LocalAssetTestTask(fileURL: url) { delivered.fulfill() }
+
+        handler.webView(WKWebView(), start: task)
+
+        wait(for: [delivered], timeout: 15)
+        XCTAssertEqual(task.data, Data([1, 2]))
+        XCTAssertTrue(task.finished)
     }
 }
 
