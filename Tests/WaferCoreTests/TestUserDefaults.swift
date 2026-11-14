@@ -62,7 +62,7 @@ private final class TestUserDefaultsSuites: NSObject, XCTestObservation, Sendabl
 
         func tearDown() throws {
             defaults.removePersistentDomain(forName: name)
-            defaults.synchronize()
+            _ = defaults.synchronize()
             let directory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Preferences")
             for suffix in [".plist", ".plist.lockfile", ".lockfile"] {
                 let url = directory.appendingPathComponent(name + suffix)
