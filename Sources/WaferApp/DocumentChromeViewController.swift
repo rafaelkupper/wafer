@@ -33,6 +33,7 @@ final class DocumentChromeViewController: NSViewController, ThemeApplying {
     private var sidebarAttachmentConstraints: [NSLayoutConstraint] = []
     private var hostedLeadingWithoutSidebarConstraint: NSLayoutConstraint?
     private var hostedLeadingWithSidebarConstraint: NSLayoutConstraint?
+    private var sidebarTransition: (id: UUID, isVisible: Bool)?
     private var hostedTransitionLeadingConstraint: NSLayoutConstraint?
     private var transitionWindowSizeLock: WindowSizeLock?
     #if DEBUG
@@ -75,7 +76,7 @@ final class DocumentChromeViewController: NSViewController, ThemeApplying {
     }
 
     var isSidebarVisible: Bool {
-        !(sidebarContainerView.isHidden)
+        sidebarTransition?.isVisible ?? !(sidebarContainerView.isHidden)
     }
 
     var sidebarMode: DocumentSidebarMode {
@@ -101,6 +102,14 @@ final class DocumentChromeViewController: NSViewController, ThemeApplying {
 
     var titleViewHostClassNameForTesting: String? {
         centeredTitleView.superview.map { NSStringFromClass(type(of: $0)) }
+    }
+
+    var isSidebarTransitioningForTesting: Bool { sidebarTransition != nil }
+    var contentFrameForTesting: NSRect { contentContainerView.frame }
+    var sidebarFrameForTesting: NSRect { sidebarContainerView.frame }
+    var activeContentLeadingConstraintCountForTesting: Int {
+        [hostedLeadingWithoutSidebarConstraint, hostedLeadingWithSidebarConstraint, hostedTransitionLeadingConstraint]
+            .compactMap { $0 }.filter(\.isActive).count
     }
 
     var sidebarWidthForTesting: CGFloat {
@@ -478,6 +487,11 @@ final class DocumentChromeViewController: NSViewController, ThemeApplying {
     }
 
     private func setSidebarVisible(_ isVisible: Bool) {
+        if let transition = sidebarTransition {
+            sidebarTransition = nil
+            finalizeAnimatedSidebarTransition(isVisible: transition.isVisible)
+            endWindowSizeLockIfNeeded()
+        }
         // The sidebar animation locks the window size; let the pane finish.
         editorPaneAnimation?.finish()
         let shouldReduceMotion = reducedMotionOverride ?? NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -498,8 +512,9 @@ final class DocumentChromeViewController: NSViewController, ThemeApplying {
             prepareSidebarForAnimatedClose()
         }
 
-        let endLeading = isVisible ? DocumentSidebarViewController.sidebarWidth : 0
-        beginContentTransition(startLeading: startLeading, endLeading: endLeading)
+        let transitionID = UUID()
+        sidebarTransition = (transitionID, isVisible)
+        beginContentTransition(startLeading: startLeading)
         beginWindowSizeLockIfNeeded()
         view.layoutSubtreeIfNeeded()
 
@@ -508,16 +523,14 @@ final class DocumentChromeViewController: NSViewController, ThemeApplying {
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             context.allowsImplicitAnimation = true
 
-            hostedTransitionLeadingConstraint?.animator().constant = isVisible ? DocumentSidebarViewController.sidebarWidth : 0
-            sidebarRevealWidthConstraint?.animator().constant = isVisible ? DocumentSidebarViewController.sidebarWidth : 0
+            hostedTransitionLeadingConstraint?.constant = isVisible ? DocumentSidebarViewController.sidebarWidth : 0
+            sidebarRevealWidthConstraint?.constant = isVisible ? DocumentSidebarViewController.sidebarWidth : 0
             sidebarContainerView.animator().alphaValue = isVisible ? 1 : 0
             view.layoutSubtreeIfNeeded()
         } completionHandler: { [weak self] in
             Task { @MainActor [weak self] in
-                guard let self else {
-                    return
-                }
-
+                guard let self, self.sidebarTransition?.id == transitionID else { return }
+                self.sidebarTransition = nil
                 self.finalizeAnimatedSidebarTransition(isVisible: isVisible)
                 self.endWindowSizeLockIfNeeded()
                 self.view.layoutSubtreeIfNeeded()
@@ -576,7 +589,7 @@ final class DocumentChromeViewController: NSViewController, ThemeApplying {
         }
     }
 
-    private func beginContentTransition(startLeading: CGFloat, endLeading: CGFloat) {
+    private func beginContentTransition(startLeading: CGFloat) {
         hostedLeadingWithoutSidebarConstraint?.isActive = false
         hostedLeadingWithSidebarConstraint?.isActive = false
 
@@ -610,11 +623,13 @@ final class DocumentChromeViewController: NSViewController, ThemeApplying {
     }
 
     private func alignContentWithSidebar() {
+        hostedTransitionLeadingConstraint?.isActive = false
         hostedLeadingWithoutSidebarConstraint?.isActive = false
         hostedLeadingWithSidebarConstraint?.isActive = true
     }
 
     private func alignContentWithoutSidebar() {
+        hostedTransitionLeadingConstraint?.isActive = false
         hostedLeadingWithSidebarConstraint?.isActive = false
         hostedLeadingWithoutSidebarConstraint?.isActive = true
     }
