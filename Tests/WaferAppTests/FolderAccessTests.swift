@@ -85,12 +85,13 @@ extension XCTestCase {
     func installSandboxedFolderAccess(
         defaults: UserDefaults? = nil,
         bookmarks: FakeSecurityScopedBookmarks = FakeSecurityScopedBookmarks(),
+        range: FolderAccessRange = .current,
         canOpenForReading: @escaping @MainActor (URL) -> Bool = { _ in true }
     ) -> SandboxedFolderAccess {
         let defaults = defaults ?? makeTestUserDefaults()
         let store = FolderAccessStore(
             defaults: defaults, bookmarks: bookmarks, isSandboxed: true, alwaysReadableRoots: [],
-            canOpenForReading: canOpenForReading
+            range: range, canOpenForReading: canOpenForReading
         )
         FolderAccessTestSupport.install(store)
         addTeardownBlock {
@@ -243,13 +244,13 @@ final class FolderAccessStoreTests: XCTestCase {
         let access = installSandboxedFolderAccess()
         let changes = FolderAccessChangeRecorder(store: access.store)
 
-        XCTAssertEqual(access.store.suggestedFolder(forDocumentAt: document).path, notes.path)
+        XCTAssertEqual(access.store.suggestion(forDocumentAt: document), .folder(notes, isWidened: false), "nothing needed: its own folder")
         access.store.recordUnreadableFile(image, forDocumentAt: document)
-        XCTAssertEqual(access.store.suggestedFolder(forDocumentAt: document).path, notes.path)
+        XCTAssertEqual(access.store.suggestion(forDocumentAt: document), .folder(notes, isWidened: false))
         access.store.recordLinkedFiles([linked], forDocumentAt: document)
 
         XCTAssertEqual(access.store.unreadableFiles(neededByDocumentAt: document).map(\.path), [linked.path, image.path].sorted())
-        XCTAssertEqual(access.store.suggestedFolder(forDocumentAt: document).path, directory.url.path)
+        XCTAssertEqual(access.store.suggestion(forDocumentAt: document), .folder(directory.url, isWidened: true))
         XCTAssertEqual(changes.count, 2)
 
         XCTAssertEqual(access.store.grantAccess(to: directory.url), [FileIdentity.identity(for: document)])
@@ -271,15 +272,72 @@ final class FolderAccessStoreTests: XCTestCase {
         XCTAssertTrue(access.store.unreadableFiles(neededByDocumentAt: document).isEmpty)
     }
 
-    func testTheSuggestionNeverWidensToAFolderJustBelowTheRoot() {
-        let access = installSandboxedFolderAccess()
-        let document = URL(fileURLWithPath: "/Users/someone/Notes/Plan.md")
+    func testTheSuggestionWidensAtMostTwoLevelsAndNeverToAFolderTooBroadToOffer() {
+        let access = installSandboxedFolderAccess(range: someoneRange)
+        let home = "/Users/someone"
+        let document = URL(fileURLWithPath: "\(home)/Notes/Projects/Plan.md")
+        func suggestion(needing paths: [String]) -> FolderAccessSuggestion? {
+            access.store.recordLinkedFiles(paths.map { URL(fileURLWithPath: $0) }, forDocumentAt: document)
+            return access.store.suggestion(forDocumentAt: document)
+        }
+        func folder(_ path: String, widened: Bool) -> FolderAccessSuggestion {
+            .folder(URL(fileURLWithPath: path, isDirectory: true), isWidened: widened)
+        }
 
-        access.store.recordUnreadableFile(URL(fileURLWithPath: "/Volumes/Drive/Image.png"), forDocumentAt: document)
-        XCTAssertEqual(access.store.suggestedFolder(forDocumentAt: document).path, "/Users/someone/Notes")
+        XCTAssertEqual(suggestion(needing: ["\(home)/Notes/Projects/img/a.md"]), folder("\(home)/Notes/Projects", widened: false))
+        XCTAssertEqual(suggestion(needing: ["\(home)/Notes/Projects/img/a.md", "\(home)/Notes/Areas/b.md"]),
+                       folder("\(home)/Notes", widened: true), "the closest folder holding the document and both files")
+        XCTAssertEqual(suggestion(needing: ["\(home)/Notes/Areas/b.md", "\(home)/Other/c.md"]), folder("\(home)/Notes", widened: true),
+                       "a common ancestor at the home folder is never offered; the nearby files come first")
+        XCTAssertEqual(suggestion(needing: ["\(home)/Other/c.md"]), folder("\(home)/Other", widened: false),
+                       "a file outside the window gets only its own folder")
+        XCTAssertEqual(suggestion(needing: ["\(home)/c.md"]),
+                       .outOfRange(file: URL(fileURLWithPath: "\(home)/c.md"), folder: URL(fileURLWithPath: home, isDirectory: true)))
+        XCTAssertEqual(suggestion(needing: ["/Volumes/Drive/Image.md", "/Users/other/Shared.md"]),
+                       .outOfRange(file: URL(fileURLWithPath: "/Users/other/Shared.md"), folder: URL(fileURLWithPath: "/Users/other", isDirectory: true)),
+                       "volume roots and other homes are never offered either")
 
-        access.store.recordLinkedFiles([URL(fileURLWithPath: "/Users/other/Shared.md")], forDocumentAt: document)
-        XCTAssertEqual(access.store.suggestedFolder(forDocumentAt: document).path, "/Users/someone/Notes")
+        let deep = URL(fileURLWithPath: "\(home)/A/B/C/D/Plan.md")
+        access.store.recordLinkedFiles([URL(fileURLWithPath: "\(home)/A/B/x.md")], forDocumentAt: deep)
+        XCTAssertEqual(access.store.suggestion(forDocumentAt: deep), folder("\(home)/A/B", widened: true), "two levels above the document")
+        access.store.recordLinkedFiles([URL(fileURLWithPath: "\(home)/A/x.md")], forDocumentAt: deep)
+        XCTAssertEqual(access.store.suggestion(forDocumentAt: deep), folder("\(home)/A", widened: false),
+                       "three levels above: only the file's own folder")
+
+        let inHome = URL(fileURLWithPath: "\(home)/Plan.md")
+        access.store.recordLinkedFiles([URL(fileURLWithPath: "\(home)/Pictures/i.md")], forDocumentAt: inHome)
+        XCTAssertEqual(access.store.suggestion(forDocumentAt: inHome), folder("\(home)/Pictures", widened: false),
+                       "a document in the home folder never widens to it")
+    }
+}
+
+/// The user `someone`, whose home is /Users/someone.
+let someoneRange = FolderAccessRange(homeDirectory: URL(fileURLWithPath: "/Users/someone", isDirectory: true), isVolumeRoot: { _ in false })
+
+final class FolderAccessRangeTests: XCTestCase {
+    func testTheHomeFolderVolumesTopLevelFoldersAndEverythingAboveThemAreTooBroad() throws {
+        let range = FolderAccessRange(homeDirectory: URL(fileURLWithPath: "/Users/someone", isDirectory: true),
+                                      isVolumeRoot: { $0.path == "/Users/someone/Mounts/Share" })
+        for path in [
+            "/", "/Users", "/Volumes", "/Library", "/Applications", "/System", "/private", "/tmp", "/private/var",
+            "/Users/someone", "/Users/someone/", "/USERS/SOMEONE", "/Users/someone/Library", "/Users/other", "/Users/Shared",
+            "/Volumes/Drive", "/System/Volumes/Data/Users/someone", "/System/Volumes/Data/Users",
+            "/Users/someone/Mounts/Share", "/Users/someone/Notes/../../..",
+        ] {
+            XCTAssertTrue(range.isTooBroad(URL(fileURLWithPath: path, isDirectory: true)), path)
+        }
+        for path in [
+            "/Users/someone/Notes", "/Users/someone/Library/Mobile Documents", "/Volumes/Drive/Notes",
+            "/Users/Shared/Notes", "/System/Volumes/Data/Users/someone/Notes", "/Users/someone/Mounts",
+        ] {
+            XCTAssertFalse(range.isTooBroad(URL(fileURLWithPath: path, isDirectory: true)), path)
+        }
+
+        let temporary = try TemporaryTestDirectory()
+        defer { temporary.remove() }
+        XCTAssertFalse(FolderAccessRange.current.isTooBroad(temporary.url))
+        XCTAssertTrue(FolderAccessRange.current.isTooBroad(FolderAccessRange.realHomeDirectory()))
+        XCTAssertTrue(FolderAccessRange.current.isTooBroad(URL(fileURLWithPath: "/", isDirectory: true)))
     }
 }
 
@@ -302,13 +360,60 @@ final class FolderAccessFlowTests: XCTestCase {
 
         XCTAssertFalse(FolderAccessFlow.ensureAccess(to: target, requestedBy: document, window: nil) { resumed += 1 })
 
-        XCTAssertEqual(requests.map(\.suggestedFolder.path), [target.deletingLastPathComponent().path])
+        XCTAssertEqual(requests.map(\.suggestedFolder?.path), [target.deletingLastPathComponent().path])
         XCTAssertEqual(requests.first?.prompt, "Grant Access")
-        XCTAssertTrue(try XCTUnwrap(requests.first).message.contains("to open “Linked.md”"))
+        XCTAssertTrue(try XCTUnwrap(requests.first).message.contains(
+            "To open “Linked.md”, grant access to its folder, “Other” (\(target.deletingLastPathComponent().path))."
+        ))
         XCTAssertEqual(resumed, 1)
         XCTAssertEqual(refreshed, [[FileIdentity.identity(for: document)]])
         XCTAssertTrue(FolderAccessFlow.ensureAccess(to: target, requestedBy: document, window: nil) { XCTFail("asked again") })
         XCTAssertEqual(requests.count, 1)
+    }
+
+    func testHostileLinksNeverOpenThePanelAtAFolderTooBroadToOffer() {
+        _ = installSandboxedFolderAccess(range: someoneRange)
+        let documentFolder = URL(fileURLWithPath: "/Users/someone/Notes", isDirectory: true)
+        let document = documentFolder.appendingPathComponent("Plan.md")
+        var requests: [FolderAccessRequest] = []
+        FolderAccessFlow.chooseFolder = { request, _, completion in
+            requests.append(request)
+            completion(nil)
+        }
+        let hostile = [
+            URL(fileURLWithPath: "/x.md"),
+            FileIdentity.normalized(URL(fileURLWithPath: "../../../x.md", relativeTo: documentFolder)),
+            URL(fileURLWithPath: "/Users/someone/x.md"),
+            URL(fileURLWithPath: "/Users/x.md"),
+            URL(fileURLWithPath: "/Users/other/x.md"),
+            URL(fileURLWithPath: "/Volumes/X/x.md"),
+            URL(fileURLWithPath: "/System/Volumes/Data/Users/someone/x.md"),
+            URL(fileURLWithPath: "/Users/someone/Library/x.md"),
+        ]
+
+        for target in hostile {
+            XCTAssertFalse(FolderAccessFlow.ensureAccess(to: target, requestedBy: document, window: nil) { XCTFail("resumed") })
+        }
+
+        XCTAssertEqual(requests.count, hostile.count)
+        for (request, target) in zip(requests, hostile) {
+            XCTAssertNil(request.suggestedFolder, "\(target.path) suggests no folder")
+            XCTAssertEqual(request.outOfRange?.startingFolder, documentFolder,
+                           "a panel the user asks for anyway opens at the document's folder, not \(target.path)")
+            XCTAssertTrue(request.message.contains("(\(target.path)) is outside the folders Wafer offers"), request.message)
+        }
+
+        requests = []
+        XCTAssertFalse(FolderAccessFlow.ensureAccess(to: URL(fileURLWithPath: "/Volumes/X/Notes/x.md"), requestedBy: document, window: nil) {})
+        XCTAssertEqual(requests.map(\.suggestedFolder?.path), ["/Volumes/X/Notes"], "below a volume root, the file's own folder")
+        XCTAssertTrue(try XCTUnwrap(requests.first).message.contains("(/Volumes/X/Notes)"))
+        XCTAssertFalse(try XCTUnwrap(requests.first).message.contains("parent folder"), "its parent is the volume root")
+
+        requests = []
+        let inHome = URL(fileURLWithPath: "/Users/someone/Plan.md")
+        XCTAssertFalse(FolderAccessFlow.ensureAccess(to: URL(fileURLWithPath: "/x.md"), requestedBy: inHome, window: nil) {})
+        XCTAssertNotNil(requests.first?.outOfRange)
+        XCTAssertNil(requests.first?.outOfRange?.startingFolder, "a document in the home folder offers no starting folder either")
     }
 
     func testCancelledOrUnrelatedChoicesDoNotResume() throws {
@@ -343,9 +448,10 @@ final class FolderAccessFlowTests: XCTestCase {
 
         FolderAccessFlow.requestAccess(forDocumentAt: document, window: nil) { granted.append($0) }
 
-        XCTAssertEqual(requests.map(\.suggestedFolder.path), [directory.url.path])
+        XCTAssertEqual(requests.map(\.suggestedFolder?.path), [directory.url.path])
         XCTAssertTrue(try XCTUnwrap(requests.first).message.contains("images and linked files in “Plan.md”"))
-        XCTAssertTrue(try XCTUnwrap(requests.first).message.contains("Choosing a parent folder covers more of your documents."))
+        XCTAssertTrue(try XCTUnwrap(requests.first).message.contains("grant access to “\(directory.url.lastPathComponent)” (\(directory.url.path))."))
+        XCTAssertTrue(try XCTUnwrap(requests.first).message.contains("Choosing a parent folder instead covers more of your documents."))
         XCTAssertEqual(granted, [true])
         XCTAssertTrue(access.store.unreadableFiles(neededByDocumentAt: document).isEmpty)
     }
@@ -437,7 +543,7 @@ final class FolderAccessFlowTests: XCTestCase {
         XCTAssertTrue(NSApplication.shared.sendAction(try XCTUnwrap(item.action), to: item.target, from: item))
 
         XCTAssertFalse(access.store.covers(recent), "an unreadable recent is not a session selection")
-        XCTAssertEqual(requests.map { $0.suggestedFolder.resolvingSymlinksInPath().path },
+        XCTAssertEqual(requests.map { $0.suggestedFolder?.resolvingSymlinksInPath().path },
                        [directory.url.resolvingSymlinksInPath().path], "opening it asks for its folder")
         XCTAssertEqual(MarkdownDocumentOpener.retainedDocumentCountForTesting, 0)
 
@@ -568,9 +674,34 @@ final class FolderAccessNoticeTests: XCTestCase {
 
         host.folderAccessNoticeForTesting?.triggerGrantAccessForTesting()
 
-        XCTAssertEqual(requests.map(\.suggestedFolder.path), [directory.url.path])
+        XCTAssertEqual(requests.map(\.suggestedFolder?.path), [directory.url.path])
         XCTAssertEqual(refreshed, [[FileIdentity.identity(for: fileURL)]])
         XCTAssertFalse(host.isFolderAccessNoticeVisibleForTesting)
+    }
+
+    func testANeededFileOutsideTheRangeIsExplainedInsteadOfOffered() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let fileURL = try directory.createTextFile(named: "Plan.md", contents: "# Plan")
+        let access = installSandboxedFolderAccess()
+        access.store.noteUserSelected([fileURL])
+        let (document, host, _) = try makeHostedDocument(fileURL)
+        defer { document.close() }
+
+        access.store.recordUnreadableFile(URL(fileURLWithPath: "/image.png"), forDocumentAt: fileURL)
+
+        XCTAssertTrue(host.isFolderAccessNoticeVisibleForTesting)
+        XCTAssertEqual(host.folderAccessNoticeForTesting?.message, "“Plan.md” needs files outside the folders Wafer offers.")
+        var requests: [FolderAccessRequest] = []
+        FolderAccessFlow.chooseFolder = { request, _, completion in
+            requests.append(request)
+            completion(nil)
+        }
+        host.folderAccessNoticeForTesting?.triggerGrantAccessForTesting()
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertNil(requests.first?.suggestedFolder)
+        XCTAssertEqual(requests.first?.outOfRange?.startingFolder, FileIdentity.normalized(fileURL).deletingLastPathComponent())
+        XCTAssertTrue(host.isFolderAccessNoticeVisibleForTesting, "cancelled: the document still needs the file")
     }
 
     func testDismissingTheNoticeHidesItForThatDocument() throws {
@@ -669,7 +800,7 @@ final class FolderAccessNoticeTests: XCTestCase {
         }
         document.navigateInCurrentWindow(to: next)
 
-        XCTAssertEqual(requests.map(\.suggestedFolder.path), [nextFolder.path])
+        XCTAssertEqual(requests.map(\.suggestedFolder?.path), [nextFolder.path])
         waitUntil { document.fileURL == FileIdentity.normalized(next) }
     }
 

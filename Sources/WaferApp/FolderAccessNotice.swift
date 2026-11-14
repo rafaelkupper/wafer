@@ -2,12 +2,26 @@ import AppKit
 import Foundation
 import WaferCore
 
-/// What the folder panel asks for.
+/// What a folder prompt asks for.
 struct FolderAccessRequest: Equatable {
-    /// Where the panel opens; choosing without selecting picks this folder.
-    let suggestedFolder: URL
+    /// A file whose folder is too broad to offer (see `FolderAccessRange`).
+    struct OutOfRange: Equatable {
+        /// The explanation's title.
+        let title: String
+        /// The panel's message if the user chooses a folder anyway.
+        let panelMessage: String
+        /// Where that panel opens: the requesting document's folder when it
+        /// may be offered, otherwise the panel's own default.
+        let startingFolder: URL?
+    }
+
+    /// Where the panel opens; Grant Access with nothing selected chooses
+    /// it. Nil for a file outside the range Wafer offers, which is explained
+    /// first, with a panel only if the user asks for one.
+    let suggestedFolder: URL?
     let message: String
     var prompt = "Grant Access"
+    var outOfRange: OutOfRange?
 }
 
 /// Asking for a folder grant and refreshing documents once it arrives.
@@ -34,39 +48,39 @@ enum FolderAccessFlow {
         if let documentURL {
             store.recordUnreadableFile(url, forDocumentAt: documentURL)
         }
-        requestAccess(to: url, window: window, onGranted: onGranted)
+        requestAccess(to: url, requestedBy: documentURL, window: window, onGranted: onGranted)
         return false
     }
 
     /// Asks for a folder that holds `url`, even when Wafer believes it can
     /// read it (after a refused read), and calls `onGranted` once a grant
-    /// covers it. The panel may be a sheet, so callers continue only from
+    /// covers it. The panel offers only the file's own folder, never one
+    /// too broad to offer. It may be a sheet, so callers continue only from
     /// `onGranted`, never after this returns.
-    static func requestAccess(to url: URL, window: NSWindow?, onGranted: @escaping @MainActor () -> Void) {
+    static func requestAccess(
+        to url: URL, requestedBy documentURL: URL? = nil, window: NSWindow?,
+        onGranted: @escaping @MainActor () -> Void
+    ) {
         let store = FolderAccessStore.shared
-        let folder = FileIdentity.normalized(url).deletingLastPathComponent()
-        let request = FolderAccessRequest(suggestedFolder: folder, message: message(
-            opening: url.lastPathComponent, folderName: folder.lastPathComponent
-        ))
-        chooseFolder(request, window) { chosen in
+        chooseFolder(request(opening: url, requestedBy: documentURL, range: store.range), window) { chosen in
             guard let chosen else { return }
             refreshDocuments(store.grantAccess(to: chosen))
             if store.covers(url) { onGranted() }
         }
     }
 
-    /// Grant Access… in a document window: offers the document's folder, or
-    /// the closest folder that also holds the files it needs.
+    /// Grant Access… in a document window: offers the document's folder,
+    /// widened within the range Wafer offers to hold the files it needs.
     static func requestAccess(
         forDocumentAt documentURL: URL, window: NSWindow?,
         completion: @escaping @MainActor (Bool) -> Void = { _ in }
     ) {
         let store = FolderAccessStore.shared
-        let folder = store.suggestedFolder(forDocumentAt: documentURL)
-        let request = FolderAccessRequest(suggestedFolder: folder, message: message(
-            showing: documentURL.lastPathComponent, folderName: folder.lastPathComponent
-        ))
-        chooseFolder(request, window) { chosen in
+        guard let suggestion = store.suggestion(forDocumentAt: documentURL) else {
+            completion(false)
+            return
+        }
+        chooseFolder(request(showing: documentURL, suggestion: suggestion, range: store.range), window) { chosen in
             guard let chosen else {
                 completion(false)
                 return
@@ -76,29 +90,99 @@ enum FolderAccessFlow {
         }
     }
 
-    static func noticeMessage(folderName: String) -> String {
-        "Allow Wafer to read the folder “\(folderName)” to show linked files and images."
+    /// The bar's text for the folder the window offers.
+    static func noticeMessage(for suggestion: FolderAccessSuggestion, documentName: String) -> String {
+        switch suggestion {
+        case .folder(let folder, _):
+            "Allow Wafer to read the folder “\(folder.lastPathComponent)” to show linked files and images."
+        case .outOfRange:
+            "“\(documentName)” needs files outside the folders Wafer offers."
+        }
     }
 
-    static func message(showing documentName: String, folderName: String) -> String {
-        "Wafer can read only the files and folders you choose. Grant access to “\(folderName)” to show the images and linked files in “\(documentName)”. Choosing a parent folder covers more of your documents."
+    static func request(opening url: URL, requestedBy documentURL: URL?, range: FolderAccessRange) -> FolderAccessRequest {
+        switch range.suggestion(for: url) {
+        case .folder(let folder, _):
+            FolderAccessRequest(suggestedFolder: folder, message: "Wafer can read only the files and folders you choose. To open “\(url.lastPathComponent)”, grant access to its folder, “\(folder.lastPathComponent)” (\(folder.path))."
+                + parentFolderHint(for: folder, isWidened: false, range: range))
+        case .outOfRange(let file, _):
+            outOfRangeRequest(for: file, requestedBy: documentURL, range: range)
+        }
     }
 
-    static func message(opening fileName: String, folderName: String) -> String {
-        "Wafer can read only the files and folders you choose. Grant access to “\(folderName)” to open “\(fileName)”. Choosing a parent folder covers more of your documents."
+    static func request(showing documentURL: URL, suggestion: FolderAccessSuggestion, range: FolderAccessRange) -> FolderAccessRequest {
+        switch suggestion {
+        case .folder(let folder, let isWidened):
+            FolderAccessRequest(suggestedFolder: folder, message: "Wafer can read only the files and folders you choose. To show the images and linked files in “\(documentURL.lastPathComponent)”, grant access to “\(folder.lastPathComponent)” (\(folder.path))."
+                + parentFolderHint(for: folder, isWidened: isWidened, range: range))
+        case .outOfRange(let file, _):
+            outOfRangeRequest(for: file, requestedBy: documentURL, range: range)
+        }
     }
 
-    /// The default chooser: a folder-only open panel, as a sheet when a
+    /// Mentions a parent folder only while the suggestion is narrow: not
+    /// once it was widened, and not when its parent is too broad to offer.
+    private static func parentFolderHint(for folder: URL, isWidened: Bool, range: FolderAccessRange) -> String {
+        guard !isWidened, !range.isTooBroad(folder.deletingLastPathComponent()) else { return "" }
+        return " Choosing a parent folder instead covers more of your documents."
+    }
+
+    private static func outOfRangeRequest(for file: URL, requestedBy documentURL: URL?, range: FolderAccessRange) -> FolderAccessRequest {
+        let name = file.lastPathComponent
+        let documentFolder = documentURL.map { FileIdentity.normalized($0).deletingLastPathComponent() }
+        return FolderAccessRequest(
+            suggestedFolder: nil,
+            message: "“\(name)” (\(file.path)) is outside the folders Wafer offers. Wafer never offers your home folder, a whole disk, or a folder above them, because a document's links decide which file is asked for. To allow it anyway, choose a folder that contains it yourself.",
+            outOfRange: .init(
+                title: "“\(name)” is outside the folders Wafer offers",
+                panelMessage: "Choose a folder that contains “\(name)” (\(file.path)).",
+                startingFolder: documentFolder.flatMap { range.isTooBroad($0) ? nil : $0 }
+            )
+        )
+    }
+
+    /// The default chooser: a folder-only open panel at the suggested
+    /// folder, or for a file outside the range Wafer offers, an explanation
+    /// and a panel only if the user asks for one. Each is a sheet when a
     /// window is free for one.
     static func runOpenPanel(_ request: FolderAccessRequest, window: NSWindow?, completion: @escaping @MainActor (URL?) -> Void) {
+        guard let outOfRange = request.outOfRange, request.suggestedFolder == nil else {
+            presentPanel(prompt: request.prompt, message: request.message, startingAt: request.suggestedFolder,
+                         window: window, completion: completion)
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = outOfRange.title
+        alert.informativeText = request.message
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Choose Folder…")
+        let respond: @MainActor (NSApplication.ModalResponse) -> Void = { response in
+            guard response == .alertSecondButtonReturn else {
+                completion(nil)
+                return
+            }
+            presentPanel(prompt: request.prompt, message: outOfRange.panelMessage, startingAt: outOfRange.startingFolder,
+                         window: window, completion: completion)
+        }
+        if let window, window.isVisible, window.attachedSheet == nil {
+            alert.beginSheetModal(for: window) { respond($0) }
+        } else {
+            respond(alert.runModal())
+        }
+    }
+
+    private static func presentPanel(
+        prompt: String, message: String, startingAt folder: URL?, window: NSWindow?,
+        completion: @escaping @MainActor (URL?) -> Void
+    ) {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.canCreateDirectories = false
-        panel.directoryURL = request.suggestedFolder
-        panel.prompt = request.prompt
-        panel.message = request.message
+        if let folder { panel.directoryURL = folder }
+        panel.prompt = prompt
+        panel.message = message
         if let window, window.isVisible, window.attachedSheet == nil {
             panel.beginSheetModal(for: window) { response in
                 completion(response == .OK ? panel.url : nil)
@@ -136,7 +220,7 @@ struct FolderAccessDeniedError: LocalizedError, CustomNSError, RecoverableError 
     }
 
     var recoverySuggestion: String? {
-        "macOS lets Wafer read only the files and folders you choose. Grant access to the folder that contains it; choosing a parent folder covers more of your documents."
+        "macOS lets Wafer read only the files and folders you choose. Grant access to the folder that contains it."
     }
 
     var recoveryOptions: [String] {
@@ -259,10 +343,12 @@ final class FolderAccessNoticeViewController: NSTitlebarAccessoryViewController,
         applyCurrentTheme()
     }
 
-    func show(message: String) {
+    /// `folderPath`, the full path of the folder offered, is the bar's tooltip.
+    func show(message: String, folderPath: String? = nil) {
         loadViewIfNeeded()
         messageLabel.stringValue = message
-        grantButton.setAccessibilityHelp(message)
+        messageLabel.toolTip = folderPath
+        grantButton.setAccessibilityHelp(folderPath.map { "\(message) \($0)" } ?? message)
         isHidden = false
     }
 

@@ -540,12 +540,15 @@ class DocumentWindowController: NSWindowController, ThemeApplying, NSUserInterfa
             return
         }
 
-        let folder = store.suggestedFolder(forDocumentAt: documentURL)
         let notice = installFolderAccessNoticeIfNeeded()
         if notice.isHidden || notice.message.isEmpty {
             FolderAccessStore.log.info("Showing the folder access notice for \(documentURL.lastPathComponent, privacy: .private)")
         }
-        notice.show(message: FolderAccessFlow.noticeMessage(folderName: folder.lastPathComponent))
+        let suggestion = store.suggestion(forDocumentAt: documentURL)
+            ?? .outOfRange(file: documentURL, folder: documentURL.deletingLastPathComponent())
+        let folderPath: String? = if case .folder(let folder, _) = suggestion { folder.path } else { nil }
+        notice.show(message: FolderAccessFlow.noticeMessage(for: suggestion, documentName: documentURL.lastPathComponent),
+                    folderPath: folderPath)
     }
 
     private func installFolderAccessNoticeIfNeeded() -> FolderAccessNoticeViewController {

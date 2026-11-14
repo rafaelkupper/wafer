@@ -110,6 +110,8 @@ final class FolderAccessStore {
     }
 
     let isSandboxed: Bool
+    /// The folders prompts may offer.
+    let range: FolderAccessRange
     private let defaults: UserDefaults
     private let notificationCenter: NotificationCenter
     private let bookmarks: SecurityScopedBookmarking
@@ -137,8 +139,10 @@ final class FolderAccessStore {
         bookmarks: SecurityScopedBookmarking = SystemSecurityScopedBookmarks(),
         isSandboxed: Bool = AppSandbox.isActive,
         alwaysReadableRoots: [URL] = FolderAccessStore.defaultAlwaysReadableRoots(),
+        range: FolderAccessRange = .current,
         canOpenForReading: @escaping @MainActor (URL) -> Bool = FolderAccessStore.canOpenForReading
     ) {
+        self.range = range
         self.defaults = defaults
         self.notificationCenter = notificationCenter
         self.bookmarks = bookmarks
@@ -349,20 +353,11 @@ final class FolderAccessStore {
             .sorted { $0.path < $1.path }
     }
 
-    /// The folder to offer: the document's folder, widened to the closest
-    /// folder that also holds the files it needs. Folders just below the root
-    /// (such as /Users or /Volumes) are never suggested.
-    func suggestedFolder(forDocumentAt documentURL: URL) -> URL {
-        let documentFolder = FileIdentity.normalized(documentURL).deletingLastPathComponent()
-        var common = documentFolder.pathComponents
-        for file in unreadableFiles(neededByDocumentAt: documentURL) {
-            let folder = file.deletingLastPathComponent().pathComponents
-            common = Array(zip(common, folder).prefix { $0 == $1 }.map(\.0))
-        }
-        guard common.count > 2, common.count < documentFolder.pathComponents.count else {
-            return documentFolder
-        }
-        return URL(fileURLWithPath: NSString.path(withComponents: common), isDirectory: true)
+    /// The folder to offer for Grant Access… in the document's window: its
+    /// own folder, widened within `range` to also hold the files it needs,
+    /// or a farther file's own folder (see `FolderAccessRange`).
+    func suggestion(forDocumentAt documentURL: URL) -> FolderAccessSuggestion? {
+        range.suggestion(forDocumentAt: documentURL, needing: unreadableFiles(neededByDocumentAt: documentURL))
     }
 
     // MARK: Private
