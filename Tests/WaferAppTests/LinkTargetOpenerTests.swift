@@ -129,6 +129,17 @@ final class LinkTargetOpenerTests: XCTestCase {
         XCTAssertTrue(opened.isEmpty)
     }
 
+    func testScriptCapableImageAndMarkupFilesRequireConfirmation() throws {
+        let opener = makeOpener()
+        let targets = try ["image.svg", "image.svgz", "data.xml", "page.xhtml", "page.html", "page.webarchive"]
+            .map { try makeFile($0) }
+        let disguised = directory.url.appendingPathComponent("image.png")
+        try FileManager.default.createSymbolicLink(at: disguised, withDestinationURL: targets[0])
+        for target in targets + [disguised] { opener.handle(.otherFile(target)) }
+        XCTAssertEqual(asked, targets + [disguised])
+        XCTAssertTrue(opened.isEmpty)
+    }
+
     func testConfirmationChoosesBetweenOpeningRevealingAndNothing() throws {
         let opener = makeOpener()
         let tool = try makeFile("tool", executable: true)
@@ -159,6 +170,7 @@ final class LinkTargetOpenerTests: XCTestCase {
     func testDocumentLinksGoThroughTheOpener() throws {
         let reader = RecordingReaderViewController()
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, _, _, _ in DispatchWorkItem {} },
             linkTargetHandler: { [unowned self] in self.makeOpener().handle($0) },

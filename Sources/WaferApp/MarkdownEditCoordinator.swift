@@ -43,6 +43,7 @@ final class MarkdownEditCoordinator {
     private let configuration: Configuration
     /// One queue per document, so its saves never overlap, across files too.
     private let saveWorker: MarkdownSaveWorker
+    private let diskState: MarkdownDiskState
     private(set) var isEditing = false
     private(set) var editor: MarkdownSourceEditorViewController?
     private(set) var session: MarkdownEditSession?
@@ -57,8 +58,9 @@ final class MarkdownEditCoordinator {
     private var alignmentGeneration = 0
     private var resignActiveObserver: NSObjectProtocol?
 
-    init(configuration: Configuration) {
+    init(configuration: Configuration, diskState: MarkdownDiskState = MarkdownDiskState()) {
         self.configuration = configuration
+        self.diskState = diskState
         self.saveWorker = MarkdownSaveWorker(writer: configuration.fileWriter)
     }
 
@@ -91,7 +93,8 @@ final class MarkdownEditCoordinator {
             fingerprint: source.fingerprint,
             format: source.format,
             resolveConflict: configuration.resolveConflict,
-            worker: saveWorker
+            worker: saveWorker,
+            diskState: diskState
         )
         self.session = session
         editor.load(text: source.sourceText)
@@ -254,6 +257,11 @@ final class MarkdownEditCoordinator {
     /// Lets a background save in flight finish now and passes its result to
     /// the document. A save requested meanwhile goes back on the autosave
     /// schedule, since the finished save's completion does not run.
+    func finishPendingSave() {
+        guard let session else { return }
+        finishPendingSave(of: session)
+    }
+
     private func finishPendingSave(of session: MarkdownEditSession) {
         guard session.isSaving else { return }
         session.finishPendingSave()

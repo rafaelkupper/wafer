@@ -307,8 +307,8 @@ final class DocumentHostWindowController: DocumentWindowController {
         #endif
 
         let document = MarkdownReaderDocument(
-            scrollStateStore: scrollStateStore,
-            librarySnapshotProvider: { [libraryController] in libraryController.snapshot }
+            librarySnapshotProvider: { [libraryController] in libraryController.snapshot },
+            scrollStateStore: scrollStateStore
         )
         document.fileURL = url
         return document

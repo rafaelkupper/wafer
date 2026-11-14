@@ -17,7 +17,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
 
     func testDocumentCreatesConcreteWebKitReaderWindowController() throws {
         let reader = RecordingReaderViewController()
-        let document = MarkdownReaderDocument(scrollStateStore: makeTestScrollStateStore(), readerControllerFactory: { reader })
+        let document = MarkdownReaderDocument(librarySnapshotProvider: emptyTestLibrarySnapshot, scrollStateStore: makeTestScrollStateStore(), readerControllerFactory: { reader })
         document.fileURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("Test.md")
         try document.read(from: Data("# Title".utf8), ofType: "dev.wafer.markdown")
         document.makeWindowControllers()
@@ -29,6 +29,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
 
     func testCopySourceWritesMarkdownOnlyAfterSourceLoads() throws {
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, _, _, _ in DispatchWorkItem {} },
             readerControllerFactory: { RecordingReaderViewController() }
@@ -50,6 +51,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
 
     func testCopyFileWritesFileURLOnlyAfterSourceLoads() throws {
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, _, _, _ in DispatchWorkItem {} },
             readerControllerFactory: { RecordingReaderViewController() }
@@ -76,6 +78,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         var scheduledSource: String?
         var capturedCompletion: ((WebKitRenderOutput) -> Void)?
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { source, _, _, _, completion in
                 scheduledSource = source
@@ -105,6 +108,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         let reader = RecordingReaderViewController()
         var capturedCompletion: ((WebKitRenderOutput) -> Void)?
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, _, _, completion in
                 capturedCompletion = completion
@@ -157,6 +161,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         store.save(fraction: 0.42, for: fileURL, fingerprint: fingerprint)
 
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: store,
             renderScheduler: { _, _, _, _, completion in
                 capturedCompletion = completion
@@ -180,6 +185,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         reader.stubbedCurrentScrollFraction = 0.73
 
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: store,
             renderScheduler: { _, _, _, _, _ in DispatchWorkItem {} },
             readerControllerFactory: { reader }
@@ -204,6 +210,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         reader.stubbedCurrentScrollFraction = 0.84
 
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: store,
             renderScheduler: { _, _, _, _, _ in DispatchWorkItem {} },
             readerControllerFactory: { reader },
@@ -238,6 +245,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         let reader = RecordingReaderViewController()
         var completions: [(WebKitRenderOutput) -> Void] = []
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, _, _, completion in
                 completions.append(completion)
@@ -267,6 +275,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         var handledTargets: [LinkTarget] = []
         var openedMarkdownLinks: [(URL, String?)] = []
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, _, _, _ in DispatchWorkItem {} },
             markdownLinkOpener: { url, anchorID in
@@ -298,6 +307,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         var handledTargets: [LinkTarget] = []
         var openedMarkdownLinks: [(URL, String?)] = []
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, _, _, _ in DispatchWorkItem {} },
             markdownLinkOpener: { url, anchorID in
@@ -326,6 +336,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         let reader = RecordingReaderViewController()
         var openedMarkdownLinks: [(URL, String?)] = []
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, _, _, _ in DispatchWorkItem {} },
             markdownLinkOpener: { url, anchorID in
@@ -359,14 +370,14 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         let library = SnapshotBox()
         var renderedIndexes: [WikiLinkIndex?] = []
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: { library.snapshot },
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, baseURL, _, wikiLinkIndex, completion in
                 renderedIndexes.append(wikiLinkIndex)
                 completion(WebKitRenderOutput(html: "<html></html>", baseURL: baseURL, hasWikiLinks: true))
                 return DispatchWorkItem {}
             },
-            readerControllerFactory: { RecordingReaderViewController() },
-            librarySnapshotProvider: { library.snapshot }
+            readerControllerFactory: { RecordingReaderViewController() }
         )
         document.fileURL = note
         try document.read(from: Data("See [[Other]]".utf8), ofType: "dev.wafer.markdown")
@@ -385,6 +396,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         let reader = RecordingReaderViewController()
         var openedMarkdownLinks: [(URL, String?)] = []
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, _, _, _ in DispatchWorkItem {} },
             markdownLinkOpener: { url, anchorID in
@@ -421,6 +433,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         let tabReader = RecordingReaderViewController()
         tabReader.stubbedContentReady = true
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, _, _, _ in DispatchWorkItem {} },
             readerControllerFactory: { reader }
@@ -433,6 +446,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         let host = try XCTUnwrap(document.windowControllers.first as? DocumentHostWindowController)
         host.tabDocumentFactoryForTesting = { url in
             let tabDocument = MarkdownReaderDocument(
+                librarySnapshotProvider: emptyTestLibrarySnapshot,
                 scrollStateStore: makeTestScrollStateStore(),
                 renderScheduler: { _, _, _, _, _ in DispatchWorkItem {} },
                 readerControllerFactory: { tabReader }
@@ -461,6 +475,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         var completions: [(WebKitRenderOutput) -> Void] = []
         let secondRenderScheduled = expectation(description: "second render scheduled")
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, baseURL, _, _, completion in
                 if let baseURL {
@@ -525,6 +540,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         var monitors: [FakeFileMonitor] = []
         let secondRenderScheduled = expectation(description: "second render scheduled")
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, baseURL, _, _, _ in
                 if baseURL == secondURL {
@@ -574,6 +590,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         var completions: [(WebKitRenderOutput) -> Void] = []
         let reloadRenderScheduled = expectation(description: "reload render scheduled")
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { source, _, _, _, completion in
                 scheduledSources.append(source)
@@ -639,6 +656,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         )
         var scheduledPalettes: [ReaderThemePalette] = []
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, palette, _, completion in
                 scheduledPalettes.append(palette)
@@ -675,6 +693,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         var renderCount = 0
         let reloadSettled = expectation(description: "reload settled")
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, _, _, _ in
                 renderCount += 1
@@ -721,6 +740,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         var scheduledSources: [String] = []
         let manualReloadScheduled = expectation(description: "manual reload scheduled")
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { source, _, _, _, _ in
                 scheduledSources.append(source)
@@ -759,7 +779,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
     }
 
     func testReloadDocumentValidationRequiresFileURL() throws {
-        let document = MarkdownReaderDocument(scrollStateStore: makeTestScrollStateStore(), renderScheduler: { _, _, _, _, _ in DispatchWorkItem {} })
+        let document = MarkdownReaderDocument(librarySnapshotProvider: emptyTestLibrarySnapshot, scrollStateStore: makeTestScrollStateStore(), renderScheduler: { _, _, _, _, _ in DispatchWorkItem {} })
         let reloadItem = NSMenuItem(
             title: "Reload",
             action: #selector(MarkdownReaderDocument.reloadDocument(_:)),
@@ -792,6 +812,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         let secondRenderScheduled = expectation(description: "second render scheduled")
         let staleReloadSettled = expectation(description: "stale reload settled")
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, baseURL, _, _, _ in
                 if let baseURL {
@@ -861,6 +882,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         var completions: [(WebKitRenderOutput) -> Void] = []
         let secondRenderScheduled = expectation(description: "second render scheduled")
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: store,
             renderScheduler: { _, baseURL, _, _, completion in
                 completions.append(completion)
@@ -896,6 +918,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         store.save(fraction: 0.58, for: fileURL, fingerprint: fingerprint)
 
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: store,
             renderScheduler: { _, _, _, _, completion in
                 capturedCompletion = completion
@@ -927,6 +950,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         var completions: [((WebKitRenderOutput) -> Void)] = []
         let secondRenderScheduled = expectation(description: "second render scheduled")
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, baseURL, _, _, completion in
                 completions.append(completion)
@@ -958,6 +982,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         let reader = RecordingReaderViewController()
         var capturedCompletion: ((WebKitRenderOutput) -> Void)?
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, _, _, completion in
                 capturedCompletion = completion
@@ -988,6 +1013,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         let reader = RecordingReaderViewController()
         var capturedCompletion: ((WebKitRenderOutput) -> Void)?
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, _, _, completion in
                 capturedCompletion = completion
@@ -1025,6 +1051,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         var monitors: [FakeFileMonitor] = []
         let reloadRenderScheduled = expectation(description: "reload render scheduled")
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, _, _, completion in
                 if reader.appliedInitialScrollFractions.count == 1 {
