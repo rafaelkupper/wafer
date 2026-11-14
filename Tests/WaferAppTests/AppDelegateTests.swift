@@ -57,7 +57,7 @@ final class AppDelegateTests: XCTestCase {
             bundledThemesDirectoryURL: nil,
             revealHandler: { _ in }
         )
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let store = AppearancePreferenceStore(defaults: defaults, themeLibrary: themeLibrary, systemIsDark: { true })
         var reopenedLibrary = false
         let delegate = AppDelegate(

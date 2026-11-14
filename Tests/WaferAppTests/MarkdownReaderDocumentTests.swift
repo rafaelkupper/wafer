@@ -103,7 +103,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
     }
 
     func testRenderCompletionUpdatesWindowStatistics() throws {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let store = DocumentStatisticPreferenceStore(defaults: defaults)
         let reader = RecordingReaderViewController()
         var capturedCompletion: ((WebKitRenderOutput) -> Void)?
@@ -649,7 +649,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         defer { ReaderTheme.resetToDefaultForTesting() }
         let reader = RecordingReaderViewController()
         reader.stubbedCurrentScrollFraction = 0.37
-        let appearanceDefaults = UserDefaults(suiteName: UUID().uuidString)!
+        let appearanceDefaults = makeTestUserDefaults()
         let appearanceStore = AppearancePreferenceStore(
             defaults: appearanceDefaults,
             systemIsDark: { false }
@@ -732,7 +732,7 @@ final class MarkdownReaderDocumentTests: XCTestCase {
         defer { tempDirectory.remove() }
         let fileURL = try tempDirectory.createTextFile(named: "Manual.md", contents: "# Manual")
         let changedData = Data("# Manual\nChanged".utf8)
-        let preferenceStore = ReaderBehaviorPreferenceStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        let preferenceStore = ReaderBehaviorPreferenceStore(defaults: makeTestUserDefaults())
         preferenceStore.automaticallyReloadsDocuments = false
 
         let reader = RecordingReaderViewController()

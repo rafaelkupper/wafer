@@ -130,7 +130,7 @@ final class ThemeLibraryTests: XCTestCase {
         XCTAssertEqual(result.palettes.map(\.name), ["Ocean"])
         XCTAssertEqual(result.diagnostics.map(\.fileName), ["Missing.json", "Broken.json"])
         let store = AppearancePreferenceStore(
-            defaults: UserDefaults(suiteName: UUID().uuidString)!, themeLibrary: library,
+            defaults: makeTestUserDefaults(), themeLibrary: library,
             missingCustomThemeNotifier: { _ in }, systemIsDark: { false }
         )
         store.appearanceSelection = .custom("Missing")

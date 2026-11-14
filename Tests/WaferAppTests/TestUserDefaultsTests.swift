@@ -1,0 +1,1 @@
+../WaferCoreTests/TestUserDefaultsTests.swift

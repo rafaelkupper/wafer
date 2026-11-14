@@ -1,7 +1,9 @@
 import AppKit
 import UniformTypeIdentifiers
+import WebKit
 import XCTest
 @testable import WaferApp
+@testable import WaferCore
 
 @MainActor
 final class DocumentExportControllerTests: XCTestCase {
@@ -98,11 +100,52 @@ final class DocumentExportControllerTests: XCTestCase {
         XCTAssertEqual(panel.nameFieldStringValue, "Doc.html")
     }
 
+    func testExportFixtureBlocksHTTPAndHTTPSImagesWithReaderCSP() throws {
+        let reader = WebKitReaderViewController()
+        let window = hostInWindow(reader)
+        defer { close(window, reader: reader) }
+        waitForNavigation(in: reader) {
+            reader.loadHTMLForTesting(htmlDocument(body: ""))
+        }
+        let webView = try XCTUnwrap(reader.webViewForExport)
+        webView.configuration.userContentController.addUserScript(WKUserScript(
+            source: """
+            window.blockedImages = [];
+            document.addEventListener('securitypolicyviolation', event => {
+                window.blockedImages.push({uri: event.blockedURI, directive: event.effectiveDirective});
+            });
+            """,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true,
+            in: .defaultClient
+        ))
+        waitForNavigation(in: reader) {
+            reader.loadHTMLForTesting(htmlDocument(body: """
+                <img src="https://example.com/blocked.png">
+                <img src="http://example.com/blocked.png">
+                """))
+        }
+        let checked = expectation(description: "CSP violations checked")
+        webView.evaluateJavaScript("window.blockedImages", in: nil, in: .defaultClient) { result in
+            defer { checked.fulfill() }
+            do {
+                let violations = try XCTUnwrap(try result.get() as? [[String: String]])
+                XCTAssertEqual(violations.count, 2)
+                XCTAssertTrue(violations.allSatisfy { $0["directive"] == "img-src" })
+                XCTAssertTrue(violations.contains { $0["uri"]?.hasPrefix("https://example.com") == true })
+                XCTAssertTrue(violations.contains { $0["uri"]?.hasPrefix("http://example.com") == true })
+            } catch {
+                XCTFail("Cannot inspect CSP violations: \(error)")
+            }
+        }
+        wait(for: [checked], timeout: 5)
+    }
+
     func testExportHTMLSkipsRemoteFetchWhenRemoteImagesAreDisabled() throws {
         let tempDirectory = try TemporaryTestDirectory()
         defer { tempDirectory.remove() }
         let outputURL = tempDirectory.url.appendingPathComponent("RemoteDisabled.html")
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let preferenceStore = ReaderBehaviorPreferenceStore(defaults: defaults)
         preferenceStore.loadsRemoteImages = false
         let fetcher = RecordingRemoteImageFetcher()
@@ -293,11 +336,13 @@ final class DocumentExportControllerTests: XCTestCase {
     }
 
     private func htmlDocument(body: String) -> String {
-        """
+        let policy = WebKitHTMLRenderer.contentSecurityPolicy(allowsPageScripts: false, scriptNonce: "")
+        return """
         <!doctype html>
         <html>
         <head>
           <meta charset="utf-8">
+          <meta http-equiv="Content-Security-Policy" content="\(policy)">
           <style>body { color: #123456; }</style>
         </head>
         <body>\(body)</body>

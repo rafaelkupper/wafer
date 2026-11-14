@@ -6,7 +6,7 @@ import XCTest
 @MainActor
 final class AppearancePreferenceStoreTests: XCTestCase {
     func testAppearanceSelectionDefaultsToSystemWhenUnsetOrInvalid() {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let store = AppearancePreferenceStore(defaults: defaults)
 
         XCTAssertEqual(store.appearanceSelection, .system)
@@ -18,7 +18,7 @@ final class AppearancePreferenceStoreTests: XCTestCase {
 
     func testExplicitSelectionPersistsBroadcastsAndAppliesPalette() {
         defer { ReaderTheme.resetToDefaultForTesting() }
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let notificationCenter = NotificationCenter()
         let store = AppearancePreferenceStore(
             defaults: defaults,
@@ -47,7 +47,7 @@ final class AppearancePreferenceStoreTests: XCTestCase {
 
     func testResolvedPaletteMapsSystemThroughInjectedAppearanceSource() {
         let systemAppearance = SystemAppearanceStub(isDark: false)
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let store = AppearancePreferenceStore(defaults: defaults, systemIsDark: { systemAppearance.isDark })
 
         XCTAssertEqual(store.resolvedPalette(), .light)
@@ -60,7 +60,7 @@ final class AppearancePreferenceStoreTests: XCTestCase {
     func testSystemAppearanceChangesApplyOnlyWhenFollowingSystem() {
         defer { ReaderTheme.resetToDefaultForTesting() }
         let systemAppearance = SystemAppearanceStub(isDark: false)
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let store = AppearancePreferenceStore(defaults: defaults, systemIsDark: { systemAppearance.isDark })
 
         store.applyResolvedPalette()
@@ -86,7 +86,7 @@ final class AppearancePreferenceStoreTests: XCTestCase {
         try themeData(named: "Ocean").write(to: themesURL.appendingPathComponent("Ocean.json"))
         let library = ThemeLibrary(themesDirectoryURL: themesURL, bundledThemesDirectoryURL: nil, revealHandler: { _ in })
         library.loadThemes()
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let store = AppearancePreferenceStore(
             defaults: defaults,
             themeLibrary: library,
@@ -110,7 +110,7 @@ final class AppearancePreferenceStoreTests: XCTestCase {
             bundledThemesDirectoryURL: nil,
             revealHandler: { _ in }
         )
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         var missingThemeNames: [String] = []
         let store = AppearancePreferenceStore(
             defaults: defaults,

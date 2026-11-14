@@ -23,7 +23,7 @@ final class PerformanceRegressionTests: XCTestCase {
                 contentFingerprint: LibraryFileFingerprint(modificationDate: .distantPast, fileSize: 4))
         }
         let center = NotificationCenter()
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let library = LibraryController(preferenceStore: LibraryPreferenceStore(defaults: defaults), notificationCenter: center,
             scanner: { _ in LibraryScanner.Result(files: files, truncated: false) },
             monitorFactory: { _, _ in ReviewDirectoryMonitor() })

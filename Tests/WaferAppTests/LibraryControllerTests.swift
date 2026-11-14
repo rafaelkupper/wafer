@@ -9,7 +9,7 @@ final class LibraryControllerTests: XCTestCase {
         let tempDirectory = try TemporaryTestDirectory()
         defer { tempDirectory.remove() }
         _ = try tempDirectory.createTextFile(named: "Guide.md", contents: "# Guide")
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let store = LibraryPreferenceStore(defaults: defaults)
         let controller = LibraryController(
             preferenceStore: store,
@@ -28,7 +28,7 @@ final class LibraryControllerTests: XCTestCase {
         let tempDirectory = try TemporaryTestDirectory()
         defer { tempDirectory.remove() }
         _ = try tempDirectory.createTextFile(named: "Guide.md", contents: "# Guide")
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let store = LibraryPreferenceStore(defaults: defaults)
         store.libraryFolderURL = tempDirectory.url
         let controller = LibraryController(
@@ -41,7 +41,7 @@ final class LibraryControllerTests: XCTestCase {
 
         XCTAssertEqual(controller.files.map(\.displayTitle), ["Guide"])
 
-        let missingStore = LibraryPreferenceStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        let missingStore = LibraryPreferenceStore(defaults: makeTestUserDefaults())
         missingStore.libraryFolderURL = tempDirectory.url.appendingPathComponent("Missing", isDirectory: true)
         let missingController = LibraryController(preferenceStore: missingStore)
 
@@ -57,7 +57,7 @@ final class LibraryControllerTests: XCTestCase {
     func testCloseLibraryClearsStatePreferenceAndMonitor() throws {
         let tempDirectory = try TemporaryTestDirectory()
         defer { tempDirectory.remove() }
-        let store = LibraryPreferenceStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        let store = LibraryPreferenceStore(defaults: makeTestUserDefaults())
         var monitor: FakeDirectoryMonitor?
         let controller = LibraryController(
             preferenceStore: store,
@@ -86,7 +86,7 @@ final class LibraryControllerTests: XCTestCase {
         defer { secondDirectory.remove() }
         var monitors: [FakeDirectoryMonitor] = []
         let controller = LibraryController(
-            preferenceStore: LibraryPreferenceStore(defaults: UserDefaults(suiteName: UUID().uuidString)!),
+            preferenceStore: LibraryPreferenceStore(defaults: makeTestUserDefaults()),
             scanner: { _ in LibraryScanner.Result(files: [], truncated: false) },
             monitorFactory: { rootURL, onChange in
                 let fake = FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange)
@@ -113,7 +113,7 @@ final class LibraryControllerTests: XCTestCase {
         let scanner = RecordingLibraryScanner()
         var monitor: FakeDirectoryMonitor?
         let controller = LibraryController(
-            preferenceStore: LibraryPreferenceStore(defaults: UserDefaults(suiteName: UUID().uuidString)!),
+            preferenceStore: LibraryPreferenceStore(defaults: makeTestUserDefaults()),
             scanner: scanner.scan(rootURL:),
             monitorFactory: { rootURL, onChange in
                 let fake = FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange)
@@ -144,7 +144,7 @@ final class LibraryControllerTests: XCTestCase {
         let clock = ManualLibraryRescanClock()
         var monitor: FakeDirectoryMonitor?
         let controller = LibraryController(
-            preferenceStore: LibraryPreferenceStore(defaults: UserDefaults(suiteName: UUID().uuidString)!),
+            preferenceStore: LibraryPreferenceStore(defaults: makeTestUserDefaults()),
             scanner: { _ in LibraryScanner.Result(files: [], truncated: false) },
             monitorFactory: { rootURL, onChange in
                 let fake = FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange)
@@ -174,7 +174,7 @@ final class LibraryControllerTests: XCTestCase {
         defer { tempDirectory.remove() }
         let scanner = ThreadRecordingLibraryScanner()
         let controller = LibraryController(
-            preferenceStore: LibraryPreferenceStore(defaults: UserDefaults(suiteName: UUID().uuidString)!),
+            preferenceStore: LibraryPreferenceStore(defaults: makeTestUserDefaults()),
             scanner: scanner.scan(rootURL:),
             monitorFactory: { rootURL, onChange in FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange) }
         )
@@ -195,7 +195,7 @@ final class LibraryControllerTests: XCTestCase {
         )
         let scanner = StaticLibraryScanner(result: LibraryScanner.Result(files: [firstFile], truncated: false))
         let controller = LibraryController(
-            preferenceStore: LibraryPreferenceStore(defaults: UserDefaults(suiteName: UUID().uuidString)!),
+            preferenceStore: LibraryPreferenceStore(defaults: makeTestUserDefaults()),
             scanner: scanner.scan(rootURL:),
             monitorFactory: { rootURL, onChange in FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange) }
         )
@@ -224,7 +224,7 @@ final class LibraryControllerTests: XCTestCase {
             )
         )
         let controller = LibraryController(
-            preferenceStore: LibraryPreferenceStore(defaults: UserDefaults(suiteName: UUID().uuidString)!),
+            preferenceStore: LibraryPreferenceStore(defaults: makeTestUserDefaults()),
             scanner: scanner.scan(rootURL:),
             monitorFactory: { rootURL, onChange in FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange) }
         )
@@ -254,7 +254,7 @@ final class LibraryControllerTests: XCTestCase {
             secondResult: LibraryScanner.Result(files: [secondFile], truncated: false)
         )
         let controller = LibraryController(
-            preferenceStore: LibraryPreferenceStore(defaults: UserDefaults(suiteName: UUID().uuidString)!),
+            preferenceStore: LibraryPreferenceStore(defaults: makeTestUserDefaults()),
             scanner: scanner.scan(rootURL:),
             monitorFactory: { rootURL, onChange in FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange) }
         )
@@ -288,7 +288,7 @@ final class LibraryControllerTests: XCTestCase {
         _ = try directory.createTextFile(named: "Guide.md", contents: "# Guide")
         let center = NotificationCenter()
         let controller = LibraryController(
-            preferenceStore: LibraryPreferenceStore(defaults: UserDefaults(suiteName: UUID().uuidString)!),
+            preferenceStore: LibraryPreferenceStore(defaults: makeTestUserDefaults()),
             notificationCenter: center,
             monitorFactory: { rootURL, onChange in FakeDirectoryMonitor(rootURL: rootURL, onChange: onChange) }
         )

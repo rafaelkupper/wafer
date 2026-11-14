@@ -222,7 +222,7 @@ final class AppMenuBuilderTests: XCTestCase {
             libraryFile(url: secondURL, title: "B"),
         ]
         let controller = LibraryController(
-            preferenceStore: LibraryPreferenceStore(defaults: UserDefaults(suiteName: UUID().uuidString)!),
+            preferenceStore: LibraryPreferenceStore(defaults: makeTestUserDefaults()),
             scanner: { _ in LibraryScanner.Result(files: scannedFiles, truncated: false) },
             monitorFactory: { rootURL, onChange in FakeMenuDirectoryMonitor(rootURL: rootURL, onChange: onChange) }
         )
@@ -291,7 +291,7 @@ final class AppMenuBuilderTests: XCTestCase {
     }
 
     func testAutomaticallyReloadMenuItemReflectsAndTogglesPreference() throws {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let store = ReaderBehaviorPreferenceStore(defaults: defaults)
         let controller = ReaderBehaviorMenuController(preferenceStore: store)
         let item = NSMenuItem(
@@ -311,7 +311,7 @@ final class AppMenuBuilderTests: XCTestCase {
     }
 
     func testLoadRemoteImagesMenuItemReflectsAndTogglesPreference() throws {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let store = ReaderBehaviorPreferenceStore(defaults: defaults)
         let controller = ReaderBehaviorMenuController(preferenceStore: store)
         let item = NSMenuItem(
@@ -332,7 +332,7 @@ final class AppMenuBuilderTests: XCTestCase {
 
     func testAppearanceMenuItemReflectsAndChangesSelection() throws {
         defer { ReaderTheme.resetToDefaultForTesting() }
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let store = AppearancePreferenceStore(defaults: defaults, systemIsDark: { false })
         let controller = AppearanceMenuController(preferenceStore: store)
         let systemItem = appearanceMenuItem(title: "System", selection: .system)
@@ -382,7 +382,7 @@ final class AppMenuBuilderTests: XCTestCase {
         try FileManager.default.createDirectory(at: themesURL, withIntermediateDirectories: true)
         try themeData(named: "Ocean").write(to: themesURL.appendingPathComponent("Ocean.json"))
         let library = ThemeLibrary(themesDirectoryURL: themesURL, bundledThemesDirectoryURL: nil, revealHandler: { _ in })
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let store = AppearancePreferenceStore(
             defaults: defaults,
             themeLibrary: library,
@@ -412,7 +412,7 @@ final class AppMenuBuilderTests: XCTestCase {
             bundledThemesDirectoryURL: nil,
             revealHandler: { revealedURL = $0 }
         )
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let store = AppearancePreferenceStore(defaults: defaults, themeLibrary: library, systemIsDark: { false })
         let controller = AppearanceMenuController(preferenceStore: store, themeLibrary: library)
         let menu = NSMenu(title: "Appearance")

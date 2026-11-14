@@ -24,7 +24,7 @@ final class ScrollStateStoreTests: XCTestCase {
     }
 
     func testSavesAndLoadsScrollFraction() {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let store = ScrollStateStore(defaults: defaults)
         let fileURL = URL(fileURLWithPath: "/tmp/example.md")
 
@@ -36,7 +36,7 @@ final class ScrollStateStoreTests: XCTestCase {
     }
 
     func testDifferentFingerprintProducesDifferentEntry() {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let store = ScrollStateStore(defaults: defaults)
         let fileURL = URL(fileURLWithPath: "/tmp/example.md")
 
@@ -46,7 +46,7 @@ final class ScrollStateStoreTests: XCTestCase {
     }
 
     func testPruneRemovesOldAndInvalidScrollEntriesOnly() {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let store = ScrollStateStore(defaults: defaults)
         let fileURL = URL(fileURLWithPath: "/tmp/example.md")
         let cutoff = Date(timeIntervalSince1970: 1_700_000_000)

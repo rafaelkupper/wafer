@@ -91,7 +91,7 @@ final class EditorPaneWindowTests: XCTestCase {
         let controller = DocumentWindowController(
             contentViewController: NSViewController(),
             appearancePreferenceStore: AppearancePreferenceStore(
-                defaults: UserDefaults(suiteName: UUID().uuidString)!,
+                defaults: makeTestUserDefaults(),
                 missingCustomThemeNotifier: { _ in },
                 systemIsDark: { true }
             )

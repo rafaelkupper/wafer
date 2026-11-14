@@ -464,7 +464,7 @@ final class ReaderReliabilityTests: XCTestCase {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try Data("# Note".utf8).write(to: folder.appendingPathComponent("Note.md"))
         try Data("# Hub\n\n[[Note]]".utf8).write(to: folder.appendingPathComponent("Hub.md"))
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let store = LibraryPreferenceStore(defaults: defaults)
         let library = LibraryController(preferenceStore: store, monitorFactory: { _, _ in NoLibraryMonitor() })
         try library.openLibrary(at: folder)
@@ -515,7 +515,7 @@ final class ReaderReliabilityTests: XCTestCase {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try Data("# Note\n\nalpha".utf8).write(to: folder.appendingPathComponent("Note.md"))
         let library = LibraryController(
-            preferenceStore: LibraryPreferenceStore(defaults: UserDefaults(suiteName: UUID().uuidString)!),
+            preferenceStore: LibraryPreferenceStore(defaults: makeTestUserDefaults()),
             monitorFactory: { _, _ in NoLibraryMonitor() }
         )
         let sidebar = DocumentSidebarViewController(libraryController: library)
@@ -565,7 +565,7 @@ final class ReaderReliabilityTests: XCTestCase {
         onError: @escaping @MainActor (Error) -> Void = { XCTFail("Unexpected source error: \($0)") },
         scheduler: @escaping MarkdownReaderDocument.RenderScheduler = { _, _, _, _, _ in DispatchWorkItem {} }
     ) -> MarkdownReaderDocument {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         return MarkdownReaderDocument(
             librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(), renderScheduler: scheduler,
