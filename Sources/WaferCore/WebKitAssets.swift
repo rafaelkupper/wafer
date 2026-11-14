@@ -43,7 +43,7 @@ final class PreviewAttachmentStore {
         var isDirectory: ObjCBool = false
 
         guard
-            Self.isAllowed(fileURL: resolvedFileURL, in: resolvedRootURL),
+            FileContainment.isContained(resolvedFileURL, in: resolvedRootURL),
             FileManager.default.fileExists(atPath: resolvedFileURL.path, isDirectory: &isDirectory),
             !isDirectory.boolValue
         else {
@@ -59,10 +59,4 @@ final class PreviewAttachmentStore {
         return "cid:\(key)"
     }
 
-    private static func isAllowed(fileURL: URL, in rootDirectory: URL) -> Bool {
-        let filePath = fileURL.path
-        let rootPath = rootDirectory.path
-        let rootPrefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
-        return filePath == rootPath || filePath.hasPrefix(rootPrefix)
-    }
 }

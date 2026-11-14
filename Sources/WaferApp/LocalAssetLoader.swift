@@ -93,27 +93,12 @@ enum LocalAssetLoader {
         return data
     }
 
-    private static func allowedRoots(_ directories: [URL]) -> [(url: URL, caseSensitive: Bool)] {
-        directories.map { directory in
-            let root = resolvedFileURL(forPath: directory.path)
-            let caseSensitive = (try? root.resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey]))?
-                .volumeSupportsCaseSensitiveNames ?? true
-            return (root, caseSensitive)
-        }
+    private static func allowedRoots(_ directories: [URL]) -> [FileContainment] {
+        directories.map { FileContainment(rootDirectory: $0) }
     }
 
-    private static func isAllowed(fileURL: URL, in roots: [(url: URL, caseSensitive: Bool)]) -> Bool {
-        roots.contains { contains(fileURL, in: $0.url, caseSensitive: $0.caseSensitive) }
-    }
-
-    static func contains(_ file: URL, in root: URL, caseSensitive: Bool) -> Bool {
-        let fileParts = file.standardizedFileURL.pathComponents
-        let rootParts = root.standardizedFileURL.pathComponents
-        guard fileParts.count >= rootParts.count else { return false }
-        return zip(fileParts, rootParts).allSatisfy { filePart, rootPart in
-            caseSensitive ? filePart == rootPart
-                : filePart.compare(rootPart, options: [.caseInsensitive], locale: Locale(identifier: "en_US_POSIX")) == .orderedSame
-        }
+    private static func isAllowed(fileURL: URL, in roots: [FileContainment]) -> Bool {
+        roots.contains { $0.contains(fileURL) }
     }
 
     private static func resolvedFileURL(forPath path: String) -> URL {

@@ -132,14 +132,6 @@ final class LocalAssetLoaderTests: XCTestCase {
             }))
     }
 
-    func testReadUsesVolumeCaseSensitivityAndComponentBoundaries() {
-        let root = URL(fileURLWithPath: "/folder/Images")
-        let file = URL(fileURLWithPath: "/folder/images/a.png")
-        XCTAssertTrue(LocalAssetLoader.contains(file, in: root, caseSensitive: false))
-        XCTAssertFalse(LocalAssetLoader.contains(file, in: root, caseSensitive: true))
-        XCTAssertFalse(LocalAssetLoader.contains(URL(fileURLWithPath: "/folder/Images-other/a.png"), in: root, caseSensitive: false))
-    }
-
     func testReadAcceptsSymlinkInsideRootAndRejectsEscapingFinalSymlink() throws {
         let directory = try TemporaryTestDirectory()
         defer { directory.remove() }

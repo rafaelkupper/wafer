@@ -105,8 +105,7 @@ public enum LibraryScanner {
         let existing = Dictionary(existingFiles.map { ($0.identity, $0) }, uniquingKeysWith: { first, _ in first })
         var files: [LibraryFile] = existingFiles.filter { previous in
             traversal.skippedURLs.contains { skipped in
-                let path = FileIdentity.identity(for: skipped)
-                return previous.fileURL.path == path || previous.fileURL.path.hasPrefix(path + "/")
+                FileContainment.isContained(previous.fileURL, in: skipped)
             }
         }
         var skippedItemCount = traversal.skippedURLs.count
