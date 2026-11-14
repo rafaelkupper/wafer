@@ -39,9 +39,7 @@ final class MarkdownReaderDocument: NSDocument {
 
     private let assetResolver: AssetResolver
     private let scrollStateStore: ScrollStateStore
-    private let renderWorker = MarkdownRenderWorker()
-    /// Replaces the render worker in tests.
-    private let injectedRenderScheduler: RenderScheduler?
+    private let rendering: DocumentRenderCoordinator
     private let markdownLinkOpener: MarkdownLinkOpener
     private let linkTargetHandler: LinkTargetHandler
     private let readerControllerFactory: ReaderControllerFactory
@@ -53,6 +51,9 @@ final class MarkdownReaderDocument: NSDocument {
     private let scrollPersistenceDebounceInterval: TimeInterval
     private let wikiLinkIndexProvider: WikiLinkIndexProvider
     private let sourceLoadErrorHandler: @MainActor (Error) -> Void
+    private var closeInFlight = false
+    private var didClose = false
+    private var navigationGeneration = 0
     private let editMode: MarkdownEditCoordinator
 
     /// The file as shown: its text (the editor's text while editing), its
@@ -65,10 +66,6 @@ final class MarkdownReaderDocument: NSDocument {
     private weak var readerController: WebKitReaderViewController?
     private weak var documentWindowController: DocumentWindowController?
     private var fileMonitor: FileChangeMonitoring?
-    private var renderWorkItem: DispatchWorkItem?
-    private var isRendering = false
-    private var pendingLiveRender = false
-    private var renderToken = UUID()
     private var initialSourceFailureHandler: (@MainActor () -> Void)?
     private var currentStatistics: DocumentStatistics?
     private var currentSidebarEntries: [DocumentSidebarEntry] = []
@@ -81,7 +78,6 @@ final class MarkdownReaderDocument: NSDocument {
     private(set) var navigationHistory = WindowNavigationHistory()
     private var lastRenderedWikiLinkIndex: WikiLinkIndex?
     private var lastOutputHadWikiLinks = false
-    private var renderedPalette: ReaderThemePalette?
     var initialCascadeSourceWindow: NSWindow?
     var hasLoadedSource: Bool { source != nil }
 
@@ -135,7 +131,13 @@ final class MarkdownReaderDocument: NSDocument {
     ) {
         self.assetResolver = assetResolver
         self.scrollStateStore = scrollStateStore
-        self.injectedRenderScheduler = renderScheduler
+        if let renderScheduler {
+            self.rendering = DocumentRenderCoordinator { request, completion in
+                renderScheduler(request.source, request.baseURL, request.palette, request.wikiLinkIndex, completion)
+            }
+        } else {
+            self.rendering = DocumentRenderCoordinator()
+        }
         self.markdownLinkOpener = markdownLinkOpener
         self.linkTargetHandler = linkTargetHandler
         self.readerControllerFactory = readerControllerFactory
@@ -157,7 +159,7 @@ final class MarkdownReaderDocument: NSDocument {
         ), diskState: diskState)
         self.editMode = editMode
         self.sourceLoading = MarkdownSourceLoader(
-            load: sourceLoader, diskState: diskState, finishPendingSave: { editMode.finishPendingSave() }
+            load: sourceLoader, diskState: diskState, finishPendingSave: { editMode.finishPendingSave(completion: $0) }
         )
         super.init()
         editMode.delegate = self
@@ -258,15 +260,21 @@ final class MarkdownReaderDocument: NSDocument {
     }
 
     override func close() {
-        // Last chance for edits that reached here without an interactive
-        // flush (for example an inactive tab in a closing window).
-        if isEditing {
-            _ = flushEdits(interactive: false)
+        guard !closeInFlight, !didClose else { return }
+        closeInFlight = true
+        navigationGeneration += 1
+        sourceLoading.abandon()
+        flushEdits(interactive: true) { success in
+            self.closeInFlight = false
+            guard success, !self.didClose else { return }
+            self.didClose = true
+            self.finishClose()
         }
+    }
+
+    private func finishClose() {
         editMode.stop()
-        renderToken = UUID()
-        isRendering = false
-        pendingLiveRender = false
+        rendering.cancel()
         sourceLoading.abandon()
         initialSourceFailureHandler = nil
         sourceLoading.deferredReload = nil
@@ -274,10 +282,9 @@ final class MarkdownReaderDocument: NSDocument {
         stopFileMonitor()
         persistCurrentScrollFraction()
         scrollPersistenceWorkItem?.cancel()
-        renderWorkItem?.cancel()
-        renderWorker.cancel()
         readerController?.shutdown()
         MarkdownDocumentOpener.release(document: self)
+        FolderAccessFlow.documentStoppedShowing(fileURL)
         super.close()
     }
 
@@ -352,19 +359,25 @@ final class MarkdownReaderDocument: NSDocument {
         showsLoadingPlaceholder: Bool = true,
         live: Bool = false
     ) {
-        guard let source, let readerController else {
-            return
+        rendering.request(live: live) { [weak self] in
+            guard let self, let source = self.source, let readerController = self.readerController else {
+                return nil
+            }
+            return self.renderRequest(
+                source: source, readerController: readerController,
+                initialScrollFractionOverride: initialScrollFractionOverride,
+                showsLoadingPlaceholder: showsLoadingPlaceholder, live: live
+            )
         }
+    }
 
-        // Typing coalesces behind the active render; navigation and explicit
-        // refreshes still supersede it through the generation token.
-        if live, isRendering {
-            pendingLiveRender = true
-            return
-        }
-        pendingLiveRender = false
-        isRendering = true
-
+    private func renderRequest(
+        source: LoadedMarkdownSource,
+        readerController: WebKitReaderViewController,
+        initialScrollFractionOverride: Double?,
+        showsLoadingPlaceholder: Bool,
+        live: Bool
+    ) -> DocumentRenderCoordinator.Request {
         let fileURL = fileURL
         let restoreFraction: Double?
         if live {
@@ -376,10 +389,6 @@ final class MarkdownReaderDocument: NSDocument {
         } else {
             restoreFraction = nil
         }
-        let token = UUID()
-        renderToken = token
-
-        renderWorkItem?.cancel()
         if showsLoadingPlaceholder {
             currentStatistics = nil
             currentActiveHeadingID = nil
@@ -392,21 +401,11 @@ final class MarkdownReaderDocument: NSDocument {
         let palette = ReaderTheme.current
         let wikiLinkIndex = wikiLinkIndexProvider()
         lastRenderedWikiLinkIndex = wikiLinkIndex
-        let workItem = scheduleRender(source.sourceText, fileURL, palette, wikiLinkIndex) { [weak self] output in
-            guard let self, self.renderToken == token else {
-                return
-            }
-
-            self.isRendering = false
-            self.renderWorkItem = nil
-            defer {
-                if self.pendingLiveRender {
-                    self.pendingLiveRender = false
-                    self.scheduleRenderIfPossible(
-                        initialScrollFractionOverride: nil, showsLoadingPlaceholder: false, live: true
-                    )
-                }
-            }
+        return DocumentRenderCoordinator.Request(
+            source: source.sourceText, baseURL: fileURL, palette: palette,
+            wikiLinkIndex: wikiLinkIndex, annotatesSourceLines: isEditing
+        ) { [weak self] output in
+            guard let self else { return }
             self.lastOutputHadWikiLinks = output.hasWikiLinks
             if live {
                 self.applyLiveRender(output)
@@ -422,33 +421,8 @@ final class MarkdownReaderDocument: NSDocument {
             if let anchorID = self.pendingAnchor.id {
                 self.pendingAnchor = .afterPageLoad(anchorID)
             }
-            self.renderedPalette = palette
             self.readerController?.apply(renderOutput: output, initialScrollFraction: restoreFraction)
         }
-        if renderToken == token, isRendering { renderWorkItem = workItem }
-    }
-
-    /// Edit-mode renders carry source-line annotations; each request says so
-    /// itself, so the worker keeps no flag between requests.
-    private func scheduleRender(
-        _ source: String,
-        _ baseURL: URL?,
-        _ palette: ReaderThemePalette,
-        _ wikiLinkIndex: WikiLinkIndex?,
-        completion: @escaping @MainActor @Sendable (WebKitRenderOutput) -> Void
-    ) -> DispatchWorkItem {
-        if let injectedRenderScheduler {
-            return injectedRenderScheduler(source, baseURL, palette, wikiLinkIndex, completion)
-        }
-
-        return renderWorker.schedule(
-            source: source,
-            baseURL: baseURL,
-            palette: palette,
-            wikiLinkIndex: wikiLinkIndex,
-            annotatesSourceLines: isEditing,
-            completion: completion
-        )
     }
 
     /// Typing must stay cheap: only chrome state that changed is pushed,
@@ -503,10 +477,10 @@ final class MarkdownReaderDocument: NSDocument {
     }
 
     func applyThemeIfNeeded() {
-        let palette = ReaderTheme.current
-        guard palette != renderedPalette, let readerController, readerController.isContentReadyForExport else { return }
-        renderedPalette = palette
-        readerController.updateTheme(palette)
+        guard let readerController else { return }
+        rendering.applyThemeIfNeeded(ReaderTheme.current, isContentReady: readerController.isContentReadyForExport) {
+            readerController.updateTheme($0)
+        }
     }
 
     private func rerenderPreservingScroll() {
@@ -529,10 +503,10 @@ final class MarkdownReaderDocument: NSDocument {
     }
 
     @objc func reloadDocument(_ sender: Any?) {
-        if isEditing, !flushEdits(interactive: true) {
-            return
+        flushEdits(interactive: true) { success in
+            guard success, !self.didClose else { return }
+            self.performReloadFromDisk(forceRender: true)
         }
-        performReloadFromDisk(forceRender: true)
     }
 
     private func performReloadFromDisk(forceRender: Bool = false) {
@@ -635,10 +609,14 @@ final class MarkdownReaderDocument: NSDocument {
         if sameDocumentAnchorID(for: url) == nil,
            let host,
            case .markdownFile(let markdownURL) = assetResolver.classify(url) {
-            host.openTab(
-                for: MarkdownDocumentOpener.normalizedFileURL(for: markdownURL),
-                anchorID: MarkdownDocumentOpener.anchorID(in: url)
-            )
+            let targetURL = MarkdownDocumentOpener.normalizedFileURL(for: markdownURL)
+            let anchorID = MarkdownDocumentOpener.anchorID(in: url)
+            // Under the App Sandbox a target outside the granted folders opens
+            // after a grant; the new tab only reads it.
+            guard FolderAccessFlow.ensureAccess(to: targetURL, requestedBy: fileURL, window: host.window, access: .readOnly, onGranted: { [weak host] in
+                host?.openTab(for: targetURL, anchorID: anchorID)
+            }) else { return }
+            host.openTab(for: targetURL, anchorID: anchorID)
             return
         }
 
@@ -799,12 +777,16 @@ final class MarkdownReaderDocument: NSDocument {
     }
 
     private func navigate(to url: URL, anchorID: String?, historyAfterNavigation: WindowNavigationHistory?) {
+        guard !closeInFlight, !didClose else { return }
         let normalizedURL = MarkdownDocumentOpener.normalizedFileURL(for: url)
+        // A request that goes nowhere (unsupported, or waiting for a folder
+        // grant) leaves an in-flight navigation and its cleanup alone.
         guard MarkdownDocumentOpener.supports(url: normalizedURL) else {
             return
         }
 
         guard fileURL != normalizedURL else {
+            navigationGeneration += 1
             // Selecting the opening document again must keep its initial read.
             if source == nil {
                 if sourceLoading.state.url != normalizedURL, let initialSourceFailureHandler {
@@ -826,40 +808,58 @@ final class MarkdownReaderDocument: NSDocument {
             return
         }
 
-        // Unsaved edits are saved before leaving; a cancelled conflict stays put.
-        guard flushEdits(interactive: true) else {
+        // Under the App Sandbox a file outside the granted folders needs the
+        // user's grant first; the navigation resumes once it covers the file.
+        // While editing, the file opens in the editor, so the grant must let
+        // Wafer save it too.
+        // A Back or Forward that waits for a grant carries history from now;
+        // if another navigation finished meanwhile, it opens as a new step.
+        let requestGeneration = navigationGeneration
+        guard FolderAccessFlow.ensureAccess(to: normalizedURL, requestedBy: fileURL, window: windowForSheet,
+                                            access: isEditing ? .readWrite : .readOnly, onGranted: { [weak self] in
+            guard let self else { return }
+            let history = self.navigationGeneration == requestGeneration ? historyAfterNavigation : nil
+            self.navigate(to: url, anchorID: anchorID, historyAfterNavigation: history)
+        }) else {
             return
         }
+        navigationGeneration += 1
+        let generation = navigationGeneration
 
-        persistCurrentScrollFraction()
-        sourceLoading.read(.navigating(normalizedURL)) { [weak self] result in
-            guard let self else { return }
-            switch result {
-            case .success(let loaded):
-                // The editor stayed editable during the read: save what was
-                // typed meanwhile before it shows the new file, and stay on
-                // this file if that save fails or is cancelled.
-                guard self.flushEdits(interactive: true) else {
+        // Save before reading, then again before replacing the editable
+        // source. A newer navigation or close invalidates both continuations.
+        flushEdits(interactive: true) { [self] success in
+            guard success, self.navigationGeneration == generation, !self.didClose else { return }
+            self.persistCurrentScrollFraction()
+            self.sourceLoading.read(.navigating(normalizedURL)) { [weak self] result in
+                guard let self, self.navigationGeneration == generation, !self.didClose else { return }
+                switch result {
+                case .success(let loaded):
+                    self.flushEdits(interactive: true) { success in
+                        guard self.navigationGeneration == generation, !self.didClose else { return }
+                        guard success else {
+                            self.updateWindowNavigationControls()
+                            self.runDeferredReload()
+                            return
+                        }
+                        self.sourceLoading.abandon()
+                        self.replaceCurrentFile(with: loaded, fileURL: normalizedURL,
+                            anchorID: anchorID, historyAfterNavigation: historyAfterNavigation)
+                        self.runDeferredReload()
+                    }
+                case .failure(let error):
                     self.updateWindowNavigationControls()
-                    break
+                    if !self.hasLoadedSource {
+                        let cleanup = self.initialSourceFailureHandler
+                        self.initialSourceFailureHandler = nil
+                        cleanup?()
+                    }
+                    self.sourceLoadErrorHandler(error)
+                    self.runDeferredReload()
                 }
-                // A conflict prompt runs the run loop; a reload of this file
-                // that began meanwhile must not land on the next one.
-                self.sourceLoading.abandon()
-                self.replaceCurrentFile(with: loaded, fileURL: normalizedURL,
-                    anchorID: anchorID, historyAfterNavigation: historyAfterNavigation)
-            case .failure(let error):
-                self.updateWindowNavigationControls()
-                if !self.hasLoadedSource {
-                    let cleanup = self.initialSourceFailureHandler
-                    self.initialSourceFailureHandler = nil
-                    cleanup?()
-                }
-                self.sourceLoadErrorHandler(error)
             }
-            self.runDeferredReload()
+            self.updateWindowNavigationControls()
         }
-        updateWindowNavigationControls()
     }
 
     private func replaceCurrentFile(
@@ -878,6 +878,7 @@ final class MarkdownReaderDocument: NSDocument {
         initialSourceFailureHandler = nil
 
         stopFileMonitor()
+        let departingFileURL = self.fileURL
         self.fileURL = fileURL
         source = loadedSource
         currentActiveHeadingID = nil
@@ -887,6 +888,7 @@ final class MarkdownReaderDocument: NSDocument {
             pendingAnchor = .none
         }
         OpenDocumentRegistry.shared.reindex(self)
+        FolderAccessFlow.documentStoppedShowing(departingFileURL)
         NSDocumentController.shared.noteNewRecentDocumentURL(fileURL)
 
         startFileMonitor(for: fileURL)
@@ -917,14 +919,14 @@ final class MarkdownReaderDocument: NSDocument {
 
     @objc func toggleEditing(_ sender: Any?) {
         if isEditing {
-            endEditing()
+            endEditing { _ in }
         } else {
             beginEditing()
         }
     }
 
     @objc func saveEdits(_ sender: Any?) {
-        flushEdits(interactive: true)
+        flushEdits(interactive: true) { _ in }
     }
 
     /// Restores the text from when the editor last loaded the file, as one
@@ -959,36 +961,55 @@ final class MarkdownReaderDocument: NSDocument {
         editor.focus()
     }
 
-    /// Saves and closes the editor. Returns false when unsaved edits could
-    /// not be saved and the user kept them.
-    @discardableResult
-    func endEditing() -> Bool {
-        guard isEditing else { return true }
-        guard flushEdits(interactive: true) else { return false }
-
-        if let text = editMode.editor?.text {
-            source?.sourceText = text
+    /// Saves before closing the editor; cancellation leaves it open.
+    func endEditing(completion: @escaping @MainActor (Bool) -> Void) {
+        flushEdits(interactive: true) { success in
+            guard success else { completion(false); return }
+            if let text = self.editMode.editor?.text { self.source?.sourceText = text }
+            self.tearDownEditing()
+            self.scheduleRenderIfPossible(initialScrollFractionOverride: nil, showsLoadingPlaceholder: false, live: true)
+            completion(true)
         }
-        tearDownEditing()
-        // The final text without annotations, patched into the same page.
-        scheduleRenderIfPossible(initialScrollFractionOverride: nil, showsLoadingPlaceholder: false, live: true)
-        return true
     }
 
-    /// Saves unsaved editor text. Returns true when nothing unsaved remains:
-    /// the text was saved or unchanged, or the user discarded the edits.
-    @discardableResult
-    func flushEdits(interactive: Bool) -> Bool {
-        editMode.flush(interactive: interactive)
+    func flushEdits(interactive: Bool, completion: @escaping @MainActor (Bool) -> Void) {
+        editMode.flush(interactive: interactive, completion: completion)
     }
 
-    /// Saves every open document's editor text, prompting on conflicts.
-    /// Returns false if any document kept unsaved edits (quit is cancelled).
-    static func flushAllEdits() -> Bool {
-        for case let document as MarkdownReaderDocument in NSDocumentController.shared.documents {
-            guard document.flushEdits(interactive: true) else { return false }
+    /// Recheck earlier documents after flushing later ones: they remain
+    /// editable throughout a deferred window close or application quit.
+    static func flushEdits(
+        in documents: [MarkdownReaderDocument], completion: @escaping @MainActor (Bool) -> Void
+    ) {
+        func next(_ index: Int) {
+            guard index < documents.count else {
+                if documents.contains(where: { $0.editMode.needsFlush }) {
+                    next(0)
+                } else {
+                    completion(true)
+                }
+                return
+            }
+            documents[index].flushEdits(interactive: true) { success in
+                if success { next(index + 1) } else { completion(false) }
+            }
         }
-        return true
+        next(0)
+    }
+
+    static func flushAllEdits(completion: @escaping @MainActor (Bool) -> Void) {
+        let documents = NSDocumentController.shared.documents.compactMap { $0 as? MarkdownReaderDocument }
+        flushEdits(in: documents) { success in
+            guard success else { completion(false); return }
+            // Another document may have opened while the application was
+            // waiting for a slow volume. Include its edits before replying.
+            let current = NSDocumentController.shared.documents.compactMap { $0 as? MarkdownReaderDocument }
+            if current.contains(where: { $0.editMode.needsFlush }) {
+                flushAllEdits(completion: completion)
+            } else {
+                completion(true)
+            }
+        }
     }
 
     static func isWritable(_ url: URL) -> Bool {

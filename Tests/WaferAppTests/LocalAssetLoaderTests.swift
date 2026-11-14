@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
 @testable import WaferApp
+@testable import WaferCore
 
 final class LocalAssetLoaderTests: XCTestCase {
     func testFileURLExtractionRejectsInvalidLocalAssetURLs() {
@@ -29,6 +30,24 @@ final class LocalAssetLoaderTests: XCTestCase {
 
         XCTAssertEqual(response.data, Data("hello".utf8))
         XCTAssertEqual(response.response.mimeType, "text/plain")
+    }
+
+    func testReadRefusesFilesOutsideTheSandboxScopeBeforeOpeningThem() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let other = try TemporaryTestDirectory()
+        defer { other.remove() }
+        let image = try directory.createFile(named: "image.png", contents: Data([1]))
+        let elsewhere = FolderAccessScope(roots: [FileContainment(rootDirectory: other.url)])
+
+        XCTAssertThrowsError(try LocalAssetLoader.read(
+            image, allowedRootDirectories: [directory.url], maximumByteCount: 10, scope: elsewhere,
+            beforeOpening: { XCTFail("opened a file outside the sandbox scope") }
+        )) { error in
+            XCTAssertEqual((error as? FolderAccessDeniedError)?.fileURL.lastPathComponent, "image.png")
+        }
+        let covering = FolderAccessScope(roots: [FileContainment(rootDirectory: directory.url)])
+        XCTAssertEqual(try LocalAssetLoader.read(image, allowedRootDirectories: [directory.url], maximumByteCount: 10, scope: covering), Data([1]))
     }
 
     func testFileURLAllowsFilesInRootAndNestedSubdirectories() throws {
@@ -130,6 +149,29 @@ final class LocalAssetLoaderTests: XCTestCase {
                 try FileManager.default.moveItem(at: parent, to: root.appendingPathComponent("original"))
                 try FileManager.default.createSymbolicLink(at: parent, withDestinationURL: outside)
             }))
+    }
+
+    /// The swapped parent still lies inside the document's root, so only the
+    /// sandbox scope, checked again on the opened path, refuses it.
+    func testReadRejectsParentSwappedOutOfTheSandboxScopeAfterTheScopeCheck() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let root = directory.url.appendingPathComponent("root")
+        let granted = root.appendingPathComponent("images")
+        let ungranted = root.appendingPathComponent("private")
+        try FileManager.default.createDirectory(at: granted, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: ungranted, withIntermediateDirectories: true)
+        try Data("granted".utf8).write(to: granted.appendingPathComponent("image.png"))
+        try Data("ungranted".utf8).write(to: ungranted.appendingPathComponent("image.png"))
+        let scope = FolderAccessScope(roots: [FileContainment(rootDirectory: granted)])
+
+        XCTAssertThrowsError(try LocalAssetLoader.read(granted.appendingPathComponent("image.png"),
+            allowedRootDirectories: [root], maximumByteCount: 100, scope: scope, beforeOpening: {
+                try FileManager.default.moveItem(at: granted, to: root.appendingPathComponent("original"))
+                try FileManager.default.createSymbolicLink(at: granted, withDestinationURL: ungranted)
+            })) { error in
+            XCTAssertTrue(error is FolderAccessDeniedError, "refused as outside the scope, not read: \(error)")
+        }
     }
 
     func testReadAcceptsSymlinkInsideRootAndRejectsEscapingFinalSymlink() throws {

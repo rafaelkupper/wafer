@@ -5,11 +5,19 @@ setopt NULL_GLOB
 ROOT_DIR=${0:A:h:h}
 CONFIGURATION=${1:-debug}
 MODE=${CONFIGURATION:l}
+BUNDLE_ID=dev.wafer.app.dev
+if [[ "${2:-}" == "--release-identity" && $# == 2 ]]; then
+  BUNDLE_ID=dev.wafer.app
+elif (( $# > 1 )); then
+  print -u2 -- "Usage: scripts/build-app.sh [debug|release] [--release-identity]"
+  exit 1
+fi
 APP_NAME=Wafer
 QUICKLOOK_NAME=WaferQuickLook
 APP_BUNDLE="$ROOT_DIR/build/$APP_NAME.app"
 RESOURCE_BUNDLES=(Wafer_WaferCore.bundle Wafer_WaferApp.bundle)
 QUICKLOOK_APPEX="$APP_BUNDLE/Contents/PlugIns/$QUICKLOOK_NAME.appex"
+APP_ENTITLEMENTS="$ROOT_DIR/App/$APP_NAME.entitlements"
 LSREGISTER=${WAFER_LSREGISTER:-"/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"}
 
 resource_directory() {
@@ -47,8 +55,8 @@ if [[ "$MODE" == "release" ]]; then
     -Xswiftc -file-prefix-map -Xswiftc "$ROOT_DIR=/wafer"
     -Xcc "-fdebug-prefix-map=$ROOT_DIR=/wafer")
 fi
-swift build -c "$MODE" "${BUILD_FLAGS[@]}" --product "$APP_NAME"
-swift build -c "$MODE" "${BUILD_FLAGS[@]}" --product "$QUICKLOOK_NAME"
+# Build both executable products in one SwiftPM invocation.
+swift build -c "$MODE" "${BUILD_FLAGS[@]}"
 BUILD_PRODUCTS_DIR=$(swift build -c "$MODE" "${BUILD_FLAGS[@]}" --show-bin-path)
 EXECUTABLE_PATH="$BUILD_PRODUCTS_DIR/$APP_NAME"
 QUICKLOOK_EXECUTABLE_PATH="$BUILD_PRODUCTS_DIR/$QUICKLOOK_NAME"
@@ -64,6 +72,8 @@ for resource in reader-theme.css gemoji-shortcodes.json gemoji-LICENSE.txt \
 done
 APP_RESOURCES=$(resource_directory "$BUILD_PRODUCTS_DIR/Wafer_WaferApp.bundle")
 require_resource "$APP_RESOURCES/Themes/GitHub Light.json"
+require_resource "$APP_ENTITLEMENTS"
+require_resource "$ROOT_DIR/App/container-migration.plist"
 
 rm -rf "$APP_BUNDLE"
 mkdir -p \
@@ -76,8 +86,22 @@ mkdir -p \
 cp "$ROOT_DIR/App/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
 cp "$EXECUTABLE_PATH" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 cp "$ROOT_DIR/App/Resources/$APP_NAME.icns" "$APP_BUNDLE/Contents/Resources/$APP_NAME.icns"
+# Read by macOS once, when the first sandboxed launch creates the container.
+if [[ "$BUNDLE_ID" == dev.wafer.app ]]; then
+  cp "$ROOT_DIR/App/container-migration.plist" "$APP_BUNDLE/Contents/Resources/container-migration.plist"
+fi
 cp "$ROOT_DIR/App/QuickLook-Info.plist" "$QUICKLOOK_APPEX/Contents/Info.plist"
 cp "$QUICKLOOK_EXECUTABLE_PATH" "$QUICKLOOK_APPEX/Contents/MacOS/$QUICKLOOK_NAME"
+
+if [[ "$BUNDLE_ID" != dev.wafer.app ]]; then
+  plutil -replace CFBundleIdentifier -string "$BUNDLE_ID" "$APP_BUNDLE/Contents/Info.plist"
+  plutil -replace CFBundleIdentifier -string "$BUNDLE_ID.quicklook" "$QUICKLOOK_APPEX/Contents/Info.plist"
+  # Development builds must not offer the shipping feed or migrate release data.
+  plutil -remove SUFeedURL "$APP_BUNDLE/Contents/Info.plist"
+  plutil -remove SUPublicEDKey "$APP_BUNDLE/Contents/Info.plist"
+  APP_ENTITLEMENTS="$ROOT_DIR/build/Development.entitlements"
+  sed "s/dev\\.wafer\\.app-sp/$BUNDLE_ID-sp/g" "$ROOT_DIR/App/Wafer.entitlements" > "$APP_ENTITLEMENTS"
+fi
 
 # Embed Sparkle whole, symlinks included. The executable finds it through the
 # @executable_path/../Frameworks rpath set in Package.swift.
@@ -109,6 +133,11 @@ if [[ "$MODE" == "release" ]]; then
 fi
 
 codesign --force --sign - --entitlements "$ROOT_DIR/App/QuickLook.entitlements" "$QUICKLOOK_APPEX"
+# The app is signed last, after the nested code it seals, so local builds run
+# in the App Sandbox with the shipping entitlements. Ad hoc signing has no team
+# identity, so the hardened runtime's library validation is left to the
+# Developer ID release signing in package-release.sh.
+codesign --force --sign - --entitlements "$APP_ENTITLEMENTS" "$APP_BUNDLE"
 
 if [[ "${WAFER_REGISTER_APP:-0}" == "1" ]]; then
   if [[ -x "$LSREGISTER" ]]; then

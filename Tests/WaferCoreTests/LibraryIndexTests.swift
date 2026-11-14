@@ -3,6 +3,83 @@ import XCTest
 @testable import WaferCore
 
 final class LibraryIndexTests: XCTestCase {
+    func testRecoveryScanReusesUnchangedFilesWithoutParsing() throws {
+        let directory = try CoreLibraryTemporaryDirectory()
+        defer { directory.remove() }
+        _ = try directory.createTextFile(named: "Keep.md", contents: "# Keep\n\nUnchanged")
+        let changed = try directory.createTextFile(named: "Change.md", contents: "# Before")
+        let initial = LibraryScanner.scan(rootURL: directory.url)
+        XCTAssertEqual(initial.parsedFileCount, 2)
+
+        let recovery = LibraryScanner.scan(rootURL: directory.url, existingFiles: initial.files, changedPaths: nil)
+        XCTAssertEqual(recovery.files, initial.files)
+        XCTAssertEqual(recovery.parsedFileCount, 0, "a recovery walk must reuse unchanged parsed entries")
+
+        let explicitChange = LibraryScanner.scan(rootURL: directory.url, existingFiles: initial.files, changedPaths: [FileIdentity.identity(for: changed)])
+        XCTAssertEqual(explicitChange.files, initial.files)
+        XCTAssertEqual(explicitChange.parsedFileCount, 1, "an explicit file event must force a read even if metadata matches")
+
+        try Data("# After with new text".utf8).write(to: changed)
+        let updated = LibraryScanner.scan(rootURL: directory.url, existingFiles: initial.files, changedPaths: nil)
+        XCTAssertEqual(updated.parsedFileCount, 1)
+        XCTAssertEqual(Set(updated.files.map(\.displayTitle)), ["Keep", "After with new text"])
+        XCTAssertNil(updated.failure)
+        XCTAssertEqual(updated.skippedItemCount, 0)
+    }
+
+    func testRecoveryScanDetectsReplacementWithSameSizeAndModificationDate() throws {
+        let directory = try CoreLibraryTemporaryDirectory()
+        defer { directory.remove() }
+        let file = try directory.createTextFile(named: "Note.md", contents: "# First")
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: file.path)
+        let initial = LibraryScanner.scan(rootURL: directory.url)
+        let replacement = try directory.createTextFile(named: "replacement", contents: "# Other")
+        try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: replacement.path)
+        _ = try FileManager.default.replaceItemAt(file, withItemAt: replacement)
+
+        let recovery = LibraryScanner.scan(rootURL: directory.url, existingFiles: initial.files, changedPaths: nil)
+        let previous = try XCTUnwrap(initial.files.first)
+        let current = try XCTUnwrap(recovery.files.first)
+        XCTAssertEqual(current.contentFingerprint.fileSize, previous.contentFingerprint.fileSize)
+        XCTAssertEqual(current.contentFingerprint.modificationDate, previous.contentFingerprint.modificationDate)
+        XCTAssertNotEqual(current.contentFingerprint.fileIdentifier, previous.contentFingerprint.fileIdentifier)
+        XCTAssertEqual(current.displayTitle, "Other")
+        XCTAssertEqual(recovery.parsedFileCount, 1)
+    }
+
+    func testMetadataOnlyChangeIsStoredWithoutCountingAsAContentChange() throws {
+        let directory = try CoreLibraryTemporaryDirectory()
+        defer { directory.remove() }
+        let file = try directory.createTextFile(named: "Note.md", contents: "# Note")
+        let initial = LibraryScanner.scan(rootURL: directory.url)
+        // Like a Finder tag: only the status-change time moves.
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+
+        let recovery = LibraryScanner.scan(rootURL: directory.url, existingFiles: initial.files, changedPaths: nil)
+        XCTAssertEqual(recovery.parsedFileCount, 1)
+        let diff = LibraryIndexDiff.apply(scan: recovery, to: initial.files)
+        XCTAssertEqual(diff.changed, [], "the text is identical")
+        XCTAssertEqual(diff.files.map(\.contentFingerprint), recovery.files.map(\.contentFingerprint),
+                       "the fresher metadata is kept")
+
+        let next = LibraryScanner.scan(rootURL: directory.url, existingFiles: diff.files, changedPaths: nil)
+        XCTAssertEqual(next.parsedFileCount, 0, "the next recovery scan reuses the entry")
+    }
+
+    func testFullRereadParsesFilesWhoseMetadataLooksUnchanged() throws {
+        let directory = try CoreLibraryTemporaryDirectory()
+        defer { directory.remove() }
+        _ = try directory.createTextFile(named: "A.md", contents: "# A")
+        _ = try directory.createTextFile(named: "B.md", contents: "# B")
+        let initial = LibraryScanner.scan(rootURL: directory.url)
+
+        let reread = LibraryScanner.scan(rootURL: directory.url, existingFiles: initial.files,
+                                         changedPaths: nil, reusesUnchangedFiles: false)
+        XCTAssertEqual(reread.parsedFileCount, 2)
+        XCTAssertEqual(reread.files.map(\.displayTitle), initial.files.map(\.displayTitle))
+    }
+
     private let parser = MarkdownParser()
 
     func testScanFindsMarkdownFilesAndSkipsUnsupportedHiddenAndJunkPaths() throws {

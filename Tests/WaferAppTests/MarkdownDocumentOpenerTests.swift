@@ -94,6 +94,32 @@ final class MarkdownDocumentOpenerTests: XCTestCase {
         XCTAssertEqual(MarkdownDocumentOpener.retainedDocumentCountForTesting, initialRetainedCount)
     }
 
+    func testAFileOutsideTheGrantsOpensOnlyAfterTheUserGrantsItsFolder() throws {
+        _ = NSApplication.shared
+        defer { closeOpenMarkdownDocuments() }
+        let tempDirectory = try TemporaryTestDirectory()
+        defer { tempDirectory.remove() }
+        let fileURL = try tempDirectory.createTextFile(named: "Linked.md", contents: "# Linked")
+        let access = installSandboxedFolderAccess()
+        let initialRetainedCount = MarkdownDocumentOpener.retainedDocumentCountForTesting
+        let makeDocument = { MarkdownReaderDocument(librarySnapshotProvider: emptyTestLibrarySnapshot, scrollStateStore: makeTestScrollStateStore()) }
+
+        FolderAccessFlow.chooseFolder = { _, _, completion in completion(nil) }
+        try MarkdownDocumentOpener.open(url: fileURL, documentFactory: makeDocument)
+        XCTAssertEqual(MarkdownDocumentOpener.retainedDocumentCountForTesting, initialRetainedCount)
+
+        var requests: [FolderAccessRequest] = []
+        FolderAccessFlow.chooseFolder = { request, _, completion in
+            requests.append(request)
+            completion(request.suggestedFolder)
+        }
+        try MarkdownDocumentOpener.open(url: fileURL, documentFactory: makeDocument)
+
+        XCTAssertEqual(requests.map(\.suggestedFolder?.path), [tempDirectory.url.path])
+        XCTAssertEqual(MarkdownDocumentOpener.retainedDocumentCountForTesting, initialRetainedCount + 1)
+        XCTAssertTrue(access.store.covers(fileURL))
+    }
+
     func testOpeningSameFileTwiceReusesExistingDocument() throws {
         _ = NSApplication.shared
         defer { closeOpenMarkdownDocuments() }

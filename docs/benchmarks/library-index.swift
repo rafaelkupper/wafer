@@ -41,6 +41,10 @@ let scan = autoreleasepool { LibraryScanner.scan(rootURL: root) }
 let scanMS = (CFAbsoluteTimeGetCurrent() - start) * 1_000
 precondition(scan.files.count == fileCount && scan.failure == nil && scan.skippedItemCount == 0 && !scan.truncated)
 let retained = footprint() - before
+let recoveryStart = CFAbsoluteTimeGetCurrent()
+let recovery = autoreleasepool { LibraryScanner.scan(rootURL: root, existingFiles: scan.files, changedPaths: nil) }
+let recoveryMS = (CFAbsoluteTimeGetCurrent() - recoveryStart) * 1_000
+precondition(recovery.files == scan.files && recovery.failure == nil && recovery.skippedItemCount == 0 && !recovery.truncated)
 let queries = ["needle", "word1999x100", "absentterm", "cafe needle"]
 var times: [String: Double] = [:]
 var counts: [String: Int] = [:]
@@ -58,7 +62,9 @@ for snippets in [false, true] {
     }
 }
 let output: [String: Any] = ["files": scan.files.count, "source_bytes": fileCount * byteCount,
-    "scan_ms": scanMS, "retained_footprint_bytes": retained, "query_ms": times, "match_counts": counts]
+    "scan_ms": scanMS, "recovery_ms": recoveryMS, "parsed_files": scan.parsedFileCount,
+    "recovery_parsed_files": recovery.parsedFileCount,
+    "retained_footprint_bytes": retained, "query_ms": times, "match_counts": counts]
 let json = try JSONSerialization.data(withJSONObject: output, options: [.sortedKeys])
 print(String(decoding: json, as: UTF8.self))
 withExtendedLifetime(scan) {}

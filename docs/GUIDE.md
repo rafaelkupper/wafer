@@ -5,6 +5,7 @@ This guide describes Wafer's behavior in detail. For an overview and screenshots
 ## Behavior
 
 - Finder-open markdown documents via `.md`, `.markdown`, `.mdown`, and `.mkd`
+- Runs in the macOS App Sandbox: Wafer reads only the files and folders you choose. When a document needs other files, a bar in its window offers Grant Access…, and Wafer > Folder Access… lists and removes what you granted (see [Folder access](#folder-access))
 - Multi-window AppKit document UI that reads by default, with an optional edit mode
 - Edit mode (Edit > Edit Markdown, `Cmd-E`, or the pencil button in the titlebar): the window widens to the left for a syntax-colored Markdown source editor, and the reader becomes a live preview that updates in place as you type; the two panes scroll together (see [Edit Mode](#edit-mode))
 - In-app updates through Sparkle: Wafer > Check for Updates..., with optional scheduled checks (Wafer > Automatically Check for Updates). Nothing is downloaded until you choose to install, and no system profile is sent
@@ -59,10 +60,33 @@ Edit mode puts the Markdown source next to the rendered document. It is off by d
 - Edits save automatically about a second after you stop typing, and also when you switch documents, close the tab or window, switch to another app, leave edit mode, or quit. File > Save (`Cmd-S`) saves immediately. File > Revert Edits restores the text from when the file was opened in the editor; it is an ordinary edit, so Undo brings your changes back.
 - Saving keeps the file's encoding (UTF-8 or UTF-16), byte-order mark, line endings, and permissions. If you never change anything, the file is never rewritten.
 - If the file changes on disk while you have no unsaved edits, the editor takes the new version. If both changed, Wafer asks whether to keep your edits, use the disk version, or save your version as a copy. It never overwrites an external change without asking. A disk version that grows beyond the 32 MB opening limit also triggers this conflict check.
+- If the file changed, moved, or was deleted while you were editing, choose **Cancel** in the save conflict alert (or press Escape) to keep your unsaved edits open and leave the file on disk untouched. This also cancels the close, navigation, or other action that triggered the save. Cancelling the **Save a Copy…** panel returns to the conflict alert, where you can choose another option or Cancel.
 - Undo and redo are per editor and reset when another file is loaded into it.
 - Read-only files cannot be opened in edit mode.
 
 Limits: the panes are aligned by their top line, so a tall diagram or image can leave the line you are typing on below the bottom of the preview. With several tabs, the window takes the width of the selected tab at once when you switch between an editing tab and a reading one. Files with mixed line endings are saved with their most common ending once edited.
+
+## Folder access
+
+Wafer runs in the macOS App Sandbox, so it can read only what you choose. Opening a Markdown file from Finder, the Dock, File > Open..., or File > Open Recent lets Wafer read and save that file. Images next to it, notes it links to, and the previews of those notes need access to their folder.
+
+- When a document needs such files, a bar appears below the titlebar: "Allow Wafer to read the folder “Notes” to show linked files and images", with **Grant Access…** and a close button. Point at the message to see the folder's full path. The bar is part of the window, not the document, and never blocks reading.
+- Grant Access… opens a folder panel at the document's folder, or at the closest folder up to two levels above it that also holds the files the document needs. The panel's message shows the folder's full path. Click **Grant Access** to choose that folder, or go to another folder and choose it yourself.
+- Wafer never suggests your home folder, a whole disk, /Users, or a folder above them, because a document's links decide which file is asked for. A needed file farther away is offered its own folder. For a file directly in one of those folders (a link to `/x.md`, or to a note at the top of your home folder or of a disk), Wafer explains that the file is outside the folders it offers. You can still choose a folder yourself with Choose Folder…, or open a Markdown file by itself with File > Open….
+- Wafer also never suggests a folder that holds settings and secrets rather than documents, however narrow: a hidden folder (one whose name starts with a period, such as `~/.ssh`, or any folder inside one), or a Library folder or any folder in it: your own (`~/Library`, such as Keychains or Application Support), another user's, or the system's (`/Library`). A link to a file there gets the same explanation. The exceptions are the cloud drives macOS keeps in your Library: folders inside iCloud Drive, and inside a cloud storage provider's drive in `~/Library/CloudStorage` (such as Dropbox, Google Drive, or OneDrive), are offered like any other folder, but never the whole of iCloud Drive or of a provider's drive. Other apps' folders in iCloud Drive, such as an Obsidian vault synced through iCloud, are not suggested: choose the folder yourself, or open the vault with File > Open Folder....
+- If the folder you choose doesn't contain the file Wafer asked for (or, from the bar, any of the files the document needs), Wafer doesn't remember it. It says which folder lacks which file and offers **Choose Again…** or **Cancel**.
+- Folders you grant to show images and links are remembered for reading only: Wafer can show their files but not change them. Your library folder and folders you grant while editing are remembered for reading and writing, so edits there can be saved. A file you open yourself can always be saved. (In the session in which you choose a folder, macOS lets Wafer change it until Wafer quits; read-only applies from the next launch.)
+- If you start editing a document in a folder granted for reading only, Wafer says it cannot save there and offers Grant Access…, which grants the folder for writing and opens the editor.
+- After the grant, images, linked-note previews, and links work at once, without reopening the document.
+- Clicking a link to a note or file outside the folders you granted asks for its folder first, then opens it. While you edit, the link opens in the editor, so its folder is granted for writing. In the Documents sidebar, linked notes Wafer cannot read yet say "Needs folder access"; selecting one asks for the grant.
+- Grants are remembered across launches. Documents in your library folder are already covered. A folder on a drive that was not connected at launch works as soon as the drive is connected.
+- If Wafer cannot read a document at all, its error alert offers Grant Access… as well. This includes recent documents from Wafer 2.1.1, which ran without the sandbox: choosing one in File > Open Recent asks for its folder.
+
+### Folder Access window
+
+Wafer > Folder Access… lists the folders Wafer remembers. Each shows its full path, Read only or Read and write, and whether it is your library ("Your library") or not available (a drive that is not connected). Select a folder and click **Remove** to stop Wafer from using it and forget it; a document that needs it asks again. Documents keep what they already show until you reload them. A folder you chose in the current session stays readable to macOS until Wafer quits, but Wafer no longer counts it as granted. Removing the folder marked Your library also closes the library, because Wafer may no longer use its folder; to use it again, open it with File > Open Folder....
+
+The first launch of the sandboxed version moves your preferences, scroll positions, and custom themes into Wafer's container, `~/Library/Containers/dev.wafer.app`. Nothing needs to be redone except choosing the library folder once (below).
 
 ## Folder Library
 
@@ -72,9 +96,11 @@ Folder changes refresh the library after 500 ms without another change. If anoth
 
 When a folder is opened without an existing reader window, Wafer opens the first markdown file from the completed background scan as the visible entry point for the library.
 
-The Library sidebar mode shows a collapsible folder tree. Selecting a file replaces the current document in the same window, and the current file stays highlighted as you browse. The selected folder is persisted and restored on next launch.
+The Library sidebar mode shows a collapsible folder tree. Selecting a file replaces the current document in the same window, and the current file stays highlighted as you browse. The selected folder is persisted and restored on next launch. Opening it with File > Open Folder... (or by dropping it) also grants Wafer access to the folder for reading and writing, so its notes, images, links, and edits work in later launches. The grant follows the folder: if you move or rename the library folder, Wafer finds it at its new place on the next launch.
 
-If the folder or an indexed file becomes unreadable, Wafer keeps the last complete library snapshot and shows "Library unavailable. Results may be stale." in Library mode. The saved folder stays selected across launches. After reconnecting a share or restoring access, choose File > Retry Library to rescan and restart monitoring. Close Library explicitly forgets the folder. A successful scan still removes files that were actually deleted.
+After you update from a version without the App Sandbox, Wafer asks once to choose your library folder again, because macOS lets it read only folders you choose. The panel opens inside the saved folder, so clicking Choose keeps it. If a folder you already granted for reading and writing contains the library, Wafer reopens it without asking; a folder granted for reading only is not enough, because library documents are edited in place. If you choose Not Now, the library shows as unavailable until you choose File > Retry Library, which offers the panel again. A library you already granted on a drive that is not connected is not asked for: it shows as unavailable and is scanned again as soon as you connect the drive. Close Library forgets the library; the folder stays granted, and Wafer > Folder Access… can remove it.
+
+If the folder or an indexed file becomes unreadable, Wafer keeps the last complete library snapshot and shows "Library unavailable. Results may be stale." in Library mode. The saved folder stays selected across launches. After reconnecting a share or restoring access, choose File > Retry Library to reread every file and restart monitoring. Close Library explicitly forgets the folder. A successful scan still removes files that were actually deleted.
 
 Quick Open (`Cmd-Shift-O`) fuzzy-matches filenames and relative paths, showing up to 50 ranked results. Return opens the selection in the current window. `Cmd-Return` uses the normal document opener, which focuses an existing window for that file or opens one if needed.
 
@@ -156,8 +182,10 @@ Use the Theme menu to choose:
 - bundled themes that ship with the app: GitHub Light, GitHub Dark, Dracula, Solarized Light,
   Solarized Dark, Nord, Monokai, One Dark, Gruvbox Dark, Catppuccin Mocha, Catppuccin Latte,
   Tokyo Night, Rosé Pine, and Synthwave '84
-- custom themes loaded from JSON files in `~/Library/Application Support/Wafer/Themes`; a custom
-  theme with the same `name` as a bundled theme overrides it
+- custom themes loaded from JSON files in Wafer's themes folder,
+  `~/Library/Containers/dev.wafer.app/Data/Library/Application Support/Wafer/Themes` (the first
+  sandboxed launch moves the folder there from `~/Library/Application Support/Wafer/Themes`); a
+  custom theme with the same `name` as a bundled theme overrides it
 
 Bundled themes live in `Sources/WaferApp/Resources/Themes` and are regenerated from compact color
 specs with `python3 scripts/gen_themes.py`.

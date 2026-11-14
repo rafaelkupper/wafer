@@ -11,6 +11,8 @@ final class LibraryPreferenceStore: @unchecked Sendable {
 
     private enum DefaultsKey {
         static let libraryFolderPath = "libraryFolderPath"
+        static let libraryAccessPromptShown = "libraryAccessPromptShown"
+        static let libraryFolderGrantID = "libraryFolderGrantID"
     }
 
     private let defaults: UserDefaults
@@ -42,13 +44,43 @@ final class LibraryPreferenceStore: @unchecked Sendable {
                 defaults.set(normalizedURL.path, forKey: DefaultsKey.libraryFolderPath)
             } else {
                 defaults.removeObject(forKey: DefaultsKey.libraryFolderPath)
+                defaults.removeObject(forKey: DefaultsKey.libraryFolderGrantID)
             }
+            defaults.removeObject(forKey: DefaultsKey.libraryAccessPromptShown)
 
             notificationCenter.post(
                 name: .libraryPreferenceDidChange,
                 object: self,
                 userInfo: LibraryPreferenceChange(folderURL: normalizedURL).userInfo
             )
+        }
+    }
+
+    /// The folder grant that holds the library (`FolderAccessStore`). Its
+    /// bookmark follows the folder, so a moved or renamed library is found
+    /// again at launch. Cleared with the library.
+    var libraryGrantID: String? {
+        get { defaults.string(forKey: DefaultsKey.libraryFolderGrantID) }
+        set {
+            if let newValue {
+                defaults.set(newValue, forKey: DefaultsKey.libraryFolderGrantID)
+            } else {
+                defaults.removeObject(forKey: DefaultsKey.libraryFolderGrantID)
+            }
+        }
+    }
+
+    /// Whether Wafer already asked, once, to choose the saved library folder
+    /// again because the App Sandbox could not read it. A new library choice
+    /// clears it.
+    var hasAskedForLibraryAccess: Bool {
+        get { defaults.bool(forKey: DefaultsKey.libraryAccessPromptShown) }
+        set {
+            if newValue {
+                defaults.set(true, forKey: DefaultsKey.libraryAccessPromptShown)
+            } else {
+                defaults.removeObject(forKey: DefaultsKey.libraryAccessPromptShown)
+            }
         }
     }
 }

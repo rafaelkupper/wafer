@@ -8,6 +8,7 @@ enum AppMenuBuilder {
     private static let appearanceMenuController = AppearanceMenuController()
     private static let libraryMenuController = LibraryMenuController()
     private static let quickOpenPanelController = QuickOpenPanelController()
+    private static let folderAccessWindowController = FolderAccessWindowController()
 
     static func makeMainMenu(windowsMenu: NSMenu, appDelegate: AppDelegate) -> NSMenu {
         let mainMenu = NSMenu(title: "MainMenu")
@@ -121,6 +122,15 @@ enum AppMenuBuilder {
         )
         automaticUpdateChecksItem.target = UpdateController.shared
         menu.addItem(automaticUpdateChecksItem)
+
+        menu.addItem(.separator())
+        let folderAccessItem = NSMenuItem(
+            title: "Folder Access…",
+            action: #selector(FolderAccessWindowController.showFolderAccess(_:)),
+            keyEquivalent: ""
+        )
+        folderAccessItem.target = folderAccessWindowController
+        menu.addItem(folderAccessItem)
 
         menu.addItem(.separator())
         menu.addItem(
@@ -397,7 +407,7 @@ final class LibraryMenuController: NSObject, NSMenuItemValidation {
     }
 
     @objc func retryLibrary(_ sender: NSMenuItem) {
-        libraryController.refreshLibrary()
+        libraryController.refreshLibrary(rereadingAllFiles: true)
     }
 }
 
@@ -567,6 +577,9 @@ final class RecentDocumentsMenuController: NSObject, NSMenuDelegate {
             return
         }
 
+        // AppKit restores access to recent documents from its own bookmarks,
+        // except for recents saved without the sandbox; those ask for their folder.
+        FolderAccessStore.shared.noteRecentDocumentOpened(url)
         MarkdownDocumentOpener.open(urls: [url])
     }
 }

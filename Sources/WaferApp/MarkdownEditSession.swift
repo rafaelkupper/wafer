@@ -1,5 +1,4 @@
 import AppKit
-import os
 import WaferCore
 
 enum EditConflictKind: Equatable, Sendable {
@@ -19,7 +18,7 @@ enum EditConflictResolution: Equatable {
     case discardMine
     /// Write the editor text to another file; the original keeps its disk state.
     case saveCopy(URL)
-    /// Keep the edits in memory without saving (only offered for write failures).
+    /// Keep the edits in memory without saving and cancel the pending action.
     case cancel
 }
 
@@ -78,8 +77,8 @@ final class MarkdownEditSession {
     private let resolveConflict: EditConflictResolver
     private let worker: MarkdownSaveWorker
     private let diskState: MarkdownDiskState
-    private var isResolvingConflict = false
-    private var pendingSave: PendingSave?
+    private var saving = false
+    private var saveWaiters: [@MainActor () -> Void] = []
 
     init(
         fileURL: URL,
@@ -119,142 +118,130 @@ final class MarkdownEditSession {
         text != savedText
     }
 
-    /// True while a background save runs.
-    var isSaving: Bool {
-        pendingSave != nil
-    }
+    /// Includes conflict resolution and copy writes.
+    var isSaving: Bool { saving }
 
     // MARK: Saving
 
-    /// Saves `snapshot` if it differs from the saved text, after any
-    /// background save has finished. The disk is compared with the last
-    /// loaded or saved bytes immediately before the file is replaced; any
-    /// difference is a conflict. Non-interactive saves never prompt and
-    /// leave conflicting edits in memory.
-    func save(_ snapshot: EditSnapshot, interactive: Bool) -> Outcome {
-        finishPendingSave()
-        if let revision = snapshot.revision, revision == savedRevision {
-            return .unchanged
-        }
-        guard !isResolvingConflict else {
-            return snapshot.text == savedText ? .unchanged : .keptInMemory
-        }
-
-        switch worker.perform(request(for: snapshot, overwrite: false)) {
-        case .unchanged:
-            markSaved(snapshot, fingerprint: savedFingerprint)
-            return .unchanged
-        case .written(let fingerprint):
-            diskState.didSave()
-            markSaved(snapshot, fingerprint: fingerprint)
-            return .saved
-        case .conflict(let kind, let diskData):
-            guard interactive else {
-                return .keptInMemory
+    /// Saves in order after any earlier write. Completion and conflict UI
+    /// run on the main actor; encoding, hashing and writes run on the worker.
+    func save(
+        _ snapshot: EditSnapshot, interactive: Bool,
+        completion: @escaping @MainActor (Outcome) -> Void
+    ) {
+        finishPendingSave {
+            if let revision = snapshot.revision, revision == self.savedRevision {
+                completion(.unchanged)
+                return
             }
-            return resolve(kind, diskData: diskData, snapshot: snapshot)
+            self.saving = true
+            self.attemptSave(snapshot, overwrite: false, interactive: interactive) { outcome in
+                self.completeSave { completion(outcome) }
+            }
         }
     }
 
-    func save(_ text: String, interactive: Bool) -> Outcome {
-        save(EditSnapshot(text: text, revision: nil), interactive: interactive)
+    func save(_ text: String, interactive: Bool, completion: @escaping @MainActor (Outcome) -> Void) {
+        save(EditSnapshot(text: text, revision: nil), interactive: interactive, completion: completion)
     }
 
-    /// Starts saving `snapshot` on the worker and returns at once; the caller
-    /// never waits for file I/O. `completion` runs on the main actor unless a
-    /// synchronous save takes the result first. Returns false, starting
-    /// nothing, while another save or a conflict prompt is running.
     @discardableResult
     func saveInBackground(
         _ snapshot: EditSnapshot,
         completion: @escaping @MainActor (BackgroundOutcome) -> Void
     ) -> Bool {
-        guard pendingSave == nil, !isResolvingConflict else {
-            return false
-        }
-
-        let request = request(for: snapshot, overwrite: false)
-        let slot = SaveResultSlot()
-        pendingSave = PendingSave(request: request, slot: slot, completion: completion)
-        // The session stays alive until its save is delivered.
-        worker.performInBackground(request) { attempt in
-            slot.store(attempt)
+        guard !saving else { return false }
+        saving = true
+        worker.performInBackground(request(for: snapshot, overwrite: false)) { attempt in
             DispatchQueue.main.async {
-                self.deliverPendingSave(from: slot, callingCompletion: true)
+                let outcome: BackgroundOutcome
+                switch attempt {
+                case .unchanged:
+                    self.markSaved(snapshot, fingerprint: self.savedFingerprint)
+                    outcome = .saved
+                case .written(let fingerprint):
+                    self.diskState.didSave()
+                    self.markSaved(snapshot, fingerprint: fingerprint)
+                    outcome = .saved
+                case .conflict(let kind, _):
+                    outcome = .conflict(kind)
+                }
+                self.completeSave { completion(outcome) }
             }
         }
         return true
     }
 
-    /// Waits for a background save in flight and applies its result. Its
-    /// completion is not called: the caller saves next and handles conflicts.
-    func finishPendingSave() {
-        guard let pendingSave else { return }
-        worker.waitUntilIdle()
-        deliverPendingSave(from: pendingSave.slot, callingCompletion: false)
+    /// Continues after all earlier saves have delivered their bookkeeping.
+    /// Never waits for the worker on the calling thread.
+    func finishPendingSave(completion: @escaping @MainActor () -> Void) {
+        guard saving else { completion(); return }
+        saveWaiters.append { self.finishPendingSave(completion: completion) }
     }
 
-    private func deliverPendingSave(from slot: SaveResultSlot, callingCompletion: Bool) {
-        guard let pending = pendingSave, pending.slot === slot, let attempt = slot.take() else {
-            return
-        }
-
-        pendingSave = nil
-        let outcome: BackgroundOutcome
-        switch attempt {
-        case .unchanged:
-            markSaved(pending.request.snapshot, fingerprint: savedFingerprint)
-            outcome = .saved
-        case .written(let fingerprint):
-            diskState.didSave()
-            markSaved(pending.request.snapshot, fingerprint: fingerprint)
-            outcome = .saved
-        case .conflict(let kind, _):
-            outcome = .conflict(kind)
-        }
-        if callingCompletion {
-            pending.completion(outcome)
-        }
+    private func completeSave(_ completion: () -> Void) {
+        saving = false
+        let waiters = saveWaiters
+        saveWaiters.removeAll()
+        completion()
+        for waiter in waiters { waiter() }
     }
 
-    private func resolve(_ firstConflict: EditConflictKind, diskData: Data?, snapshot: EditSnapshot) -> Outcome {
-        var conflict = firstConflict
-        let restorableDiskData = conflict == .changedOnDisk ? diskData : nil
-        isResolvingConflict = true
-        defer { isResolvingConflict = false }
-        while true {
-            switch resolveConflict(conflict, fileURL) {
-            case .overwrite:
-                switch worker.perform(request(for: snapshot, overwrite: true)) {
-                case .written(let fingerprint):
-                    diskState.didSave()
-                    markSaved(snapshot, fingerprint: fingerprint)
-                    return .saved
+    private func attemptSave(
+        _ snapshot: EditSnapshot, overwrite: Bool, interactive: Bool,
+        restorableDiskData: Data? = nil,
+        completion: @escaping @MainActor (Outcome) -> Void
+    ) {
+        worker.performInBackground(request(for: snapshot, overwrite: overwrite)) { attempt in
+            DispatchQueue.main.async {
+                switch attempt {
                 case .unchanged:
-                    markSaved(snapshot, fingerprint: savedFingerprint)
-                    return .saved
-                case .conflict(let kind, _):
-                    conflict = kind
+                    self.markSaved(snapshot, fingerprint: self.savedFingerprint)
+                    completion(.unchanged)
+                case .written(let fingerprint):
+                    self.diskState.didSave()
+                    self.markSaved(snapshot, fingerprint: fingerprint)
+                    completion(.saved)
+                case .conflict(let kind, let diskData):
+                    guard interactive else { completion(.keptInMemory); return }
+                    self.resolve(kind, diskData: restorableDiskData ?? (kind == .changedOnDisk ? diskData : nil),
+                                 snapshot: snapshot, completion: completion)
                 }
-            case .discardMine:
-                return discardEdits(diskData: restorableDiskData)
-            case .saveCopy(let copyURL):
-                do {
-                    try MarkdownSaveWorker.encodedData(for: snapshot.text, format: format).write(to: copyURL, options: .atomic)
-                } catch {
-                    conflict = .writeFailed(error.localizedDescription)
-                    continue
-                }
-                if restorableDiskData != nil {
-                    return discardEdits(diskData: restorableDiskData)
-                }
-                // Nothing usable on disk: the edits now live in the copy.
-                savedText = snapshot.text
-                savedRevision = snapshot.revision
-                return .saved
-            case .cancel:
-                return .keptInMemory
             }
+        }
+    }
+
+    private func resolve(
+        _ conflict: EditConflictKind, diskData: Data?, snapshot: EditSnapshot,
+        completion: @escaping @MainActor (Outcome) -> Void
+    ) {
+        let restorableDiskData = diskData
+        switch resolveConflict(conflict, fileURL) {
+        case .overwrite:
+            attemptSave(snapshot, overwrite: true, interactive: true,
+                        restorableDiskData: restorableDiskData, completion: completion)
+        case .discardMine:
+            completion(discardEdits(diskData: restorableDiskData))
+        case .saveCopy(let copyURL):
+            worker.saveCopy(snapshot.text, format: format, to: copyURL) { result in
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success:
+                        if restorableDiskData != nil {
+                            completion(self.discardEdits(diskData: restorableDiskData))
+                        } else {
+                            self.savedText = snapshot.text
+                            self.savedRevision = snapshot.revision
+                            completion(.saved)
+                        }
+                    case .failure(let error):
+                        self.resolve(.writeFailed(error.localizedDescription), diskData: restorableDiskData,
+                                     snapshot: snapshot, completion: completion)
+                    }
+                }
+            }
+        case .cancel:
+            completion(.keptInMemory)
         }
     }
 
@@ -346,36 +333,51 @@ final class MarkdownEditSession {
 
     // MARK: Conflict UI
 
-    /// Default conflict UI: an app-modal alert, plus a save panel for copies.
-    static func presentConflict(_ kind: EditConflictKind, fileURL: URL) -> EditConflictResolution {
-        let name = fileURL.lastPathComponent
+    @MainActor
+    struct ConflictAlert {
         let alert = NSAlert()
-        alert.alertStyle = .warning
-        let choices: [(String, EditConflictResolution?)]
-        switch kind {
-        case .changedOnDisk:
-            alert.messageText = "\(name) changed on disk while you were editing it."
-            alert.informativeText = "Keep your version and overwrite the file, use the version on disk, or save your version as a separate file."
-            choices = [("Keep My Edits", .overwrite), ("Use Disk Version", .discardMine), ("Save a Copy…", nil)]
-        case .missingOnDisk:
-            alert.messageText = "\(name) was moved or deleted while you were editing it."
-            alert.informativeText = "Save it again at its original location, save your version somewhere else, or discard your unsaved edits."
-            choices = [("Save", .overwrite), ("Save a Copy…", nil), ("Discard My Edits", .discardMine)]
-        case .writeFailed(let message):
-            alert.messageText = "Wafer couldn't save \(name)."
-            alert.informativeText = message
-            choices = [("Save a Copy…", nil), ("Discard My Edits", .discardMine), ("Cancel", .cancel)]
-        }
-        for choice in choices {
-            alert.addButton(withTitle: choice.0)
+        private let resolutions: [EditConflictResolution?]
+
+        init(_ kind: EditConflictKind, fileURL: URL) {
+            let name = fileURL.lastPathComponent
+            alert.alertStyle = .warning
+            let choices: [(String, EditConflictResolution?)]
+            switch kind {
+            case .changedOnDisk:
+                alert.messageText = "\(name) changed on disk while you were editing it."
+                alert.informativeText = "Keep your version and overwrite the file, use the version on disk, or save your version as a separate file. Cancel keeps your unsaved edits open without changing the file."
+                choices = [("Keep My Edits", .overwrite), ("Use Disk Version", .discardMine), ("Save a Copy…", nil), ("Cancel", .cancel)]
+            case .missingOnDisk:
+                alert.messageText = "\(name) was moved or deleted while you were editing it."
+                alert.informativeText = "Save it again at its original location, save your version somewhere else, or discard your unsaved edits. Cancel keeps your unsaved edits open without recreating the file."
+                choices = [("Save", .overwrite), ("Save a Copy…", nil), ("Discard My Edits", .discardMine), ("Cancel", .cancel)]
+            case .writeFailed(let message):
+                alert.messageText = "Wafer couldn't save \(name)."
+                alert.informativeText = message
+                choices = [("Save a Copy…", nil), ("Discard My Edits", .discardMine), ("Cancel", .cancel)]
+            }
+            for choice in choices {
+                let button = alert.addButton(withTitle: choice.0)
+                if choice.1 == .cancel {
+                    button.keyEquivalent = "\u{1b}"
+                }
+            }
+            resolutions = choices.map(\.1)
         }
 
+        /// Nil opens the copy panel; an unrecognized response cancels the save.
+        func resolution(for response: NSApplication.ModalResponse) -> EditConflictResolution? {
+            let index = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+            guard resolutions.indices.contains(index) else { return .cancel }
+            return resolutions[index]
+        }
+    }
+
+    /// Default conflict UI: an app-modal alert, plus a save panel for copies.
+    static func presentConflict(_ kind: EditConflictKind, fileURL: URL) -> EditConflictResolution {
+        let prompt = ConflictAlert(kind, fileURL: fileURL)
         while true {
-            let index = alert.runModal().rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
-            guard choices.indices.contains(index) else {
-                return .cancel
-            }
-            if let resolution = choices[index].1 {
+            if let resolution = prompt.resolution(for: prompt.alert.runModal()) {
                 return resolution
             }
 
@@ -387,42 +389,6 @@ final class MarkdownEditSession {
                 return .saveCopy(url)
             }
             // Panel cancelled: ask again rather than losing the edits.
-        }
-    }
-}
-
-/// A background save in flight: what it writes, where its result lands, and
-/// what runs when it is delivered.
-@MainActor
-private final class PendingSave {
-    let request: MarkdownSaveRequest
-    let slot: SaveResultSlot
-    let completion: @MainActor (MarkdownEditSession.BackgroundOutcome) -> Void
-
-    init(
-        request: MarkdownSaveRequest,
-        slot: SaveResultSlot,
-        completion: @escaping @MainActor (MarkdownEditSession.BackgroundOutcome) -> Void
-    ) {
-        self.request = request
-        self.slot = slot
-        self.completion = completion
-    }
-}
-
-/// Hands a background save's result to the main actor, taken once: by the
-/// main-queue callback, or by a synchronous save that waited for it.
-private final class SaveResultSlot: Sendable {
-    private let attempt = OSAllocatedUnfairLock<MarkdownSaveAttempt?>(initialState: nil)
-
-    func store(_ value: MarkdownSaveAttempt) {
-        attempt.withLock { $0 = value }
-    }
-
-    func take() -> MarkdownSaveAttempt? {
-        attempt.withLock { value in
-            defer { value = nil }
-            return value
         }
     }
 }
@@ -452,19 +418,13 @@ enum MarkdownSaveAttempt: Sendable, Equatable {
 }
 
 /// Runs saves one at a time on a background queue, so file I/O and hashing
-/// stay off the main thread. Synchronous saves queue behind background ones.
+/// stay off the main thread, including interactive saves and copies.
 final class MarkdownSaveWorker: Sendable {
     private let queue = DispatchQueue(label: "dev.wafer.edit-save", qos: .userInitiated)
     private let writer: MarkdownEditSession.FileWriter
 
     init(writer: @escaping MarkdownEditSession.FileWriter = MarkdownEditSession.replaceContents) {
         self.writer = writer
-    }
-
-    /// Runs `request` after any queued save and returns its result.
-    func perform(_ request: MarkdownSaveRequest) -> MarkdownSaveAttempt {
-        let writer = writer
-        return queue.sync { Self.attempt(request, writer: writer) }
     }
 
     /// Runs `request` after any queued save; `completion` runs on the queue.
@@ -478,9 +438,13 @@ final class MarkdownSaveWorker: Sendable {
         }
     }
 
-    /// Returns once every queued save has finished.
-    func waitUntilIdle() {
-        queue.sync {}
+    func saveCopy(
+        _ text: String, format: MarkdownTextFormat, to url: URL,
+        completion: @escaping @Sendable (Result<Void, Error>) -> Void
+    ) {
+        queue.async {
+            completion(Result { try Self.encodedData(for: text, format: format).write(to: url, options: .atomic) })
+        }
     }
 
     static func attempt(_ request: MarkdownSaveRequest, writer: MarkdownEditSession.FileWriter) -> MarkdownSaveAttempt {

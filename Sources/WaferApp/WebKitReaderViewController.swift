@@ -4,14 +4,9 @@ import WaferCore
 import WebKit
 
 @MainActor
-class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMessageHandler, NSUserInterfaceValidations, NSSearchFieldDelegate, ThemeApplying {
+class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMessageHandler, NSUserInterfaceValidations, ThemeApplying {
     private static let headingScrollOffset: Int = 28
     private static let readerContentWorld = WKContentWorld.world(name: "dev.wafer.reader")
-
-    private enum FindDirection {
-        case next
-        case previous
-    }
 
     private enum ScriptMessageName {
         static let scroll = "waferScroll"
@@ -26,41 +21,45 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
     private let remoteImageSchemeHandler: RemoteImageSchemeHandler
     private let rootView = NSView()
     private let webView: WKWebView
-    private let findBarView = ReaderFindBarView()
-    #if DEBUG
-    private var suppressFindExecutionForTesting = false
-    private var suppressedFindMatchResultForTesting: Bool?
-    #endif
+    private lazy var findController = ReaderFindController(
+        find: { [weak self] query, configuration, completion in
+            self?.webView.find(query, configuration: configuration) { completion($0.matchFound) }
+        },
+        clearSelection: { [weak self] script in self?.webView.evaluateJavaScript(script) },
+        focusContent: { [weak self] in self?.focusContent() }
+    )
+    private var findBarView: ReaderFindBarView { findController.bar }
     private var pendingRestoreFraction: Double?
     private var hasRenderableContent = false
     private var displayedLoadingFileName: String?
-    private var navigationID = UUID()
-    private var pendingReaderLoadURL: URL?
+    private var navigation = ReaderNavigationState()
     private var currentNavigation: WKNavigation?
-    private var themeUpdateID: UUID?
-    private var awaitingContentReady = false
-    private var didFinishCurrentNavigation = false
-    private var didCompleteCurrentNavigation = false
     private var didInstallScriptMessageHandlers = false
     private var lastKnownScrollFraction: Double = 0
-    // Edit-mode live preview state for the current page.
-    private var liveBodyHTML: String?
-    private var liveHelpersInstalled = false
-    private var livePatchStateReady = false
-    private var pageHasMermaid = false
-    private var pageHasMath = false
-    private var scrollSyncInFlight = false
-    private var pendingScrollSync: EditorScrollPosition?
-    private var lastSyncedMetrics: EditorScrollPosition?
+    private lazy var livePreview = ReaderLivePreviewController(
+        evaluate: { [weak self] script, arguments, world, completion in
+            self?.webView.callAsyncJavaScript(
+                script, arguments: arguments, in: nil,
+                in: world == .page ? .page : Self.readerContentWorld,
+                completionHandler: completion
+            )
+        },
+        isContentReady: { [weak self] in self?.isContentReadyForExport == true },
+        reload: { [weak self] output in
+            guard let self else { return }
+            let fraction = self.lastKnownScrollFraction
+            self.apply(renderOutput: output, initialScrollFraction: fraction >= 0.98 ? 1 : fraction)
+        }
+    )
     #if DEBUG
-    private(set) var livePatchCountForTesting = 0
-    private(set) var liveFullReloadCountForTesting = 0
+    var livePatchCountForTesting: Int { livePreview.livePatchCountForTesting }
+    var liveFullReloadCountForTesting: Int { livePreview.liveFullReloadCountForTesting }
     #endif
     private(set) var currentActiveHeadingID: String?
     #if DEBUG
-    private(set) var lastFindQueryForTesting: String?
-    private(set) var lastFindDirectionForTesting: String?
-    private(set) var lastFindMatchFoundForTesting: Bool?
+    var lastFindQueryForTesting: String? { findController.lastFindQueryForTesting }
+    var lastFindDirectionForTesting: String? { findController.lastFindDirectionForTesting }
+    var lastFindMatchFoundForTesting: Bool? { findController.lastFindMatchFoundForTesting }
     /// Re-installed on every reader load, after the reader's own user scripts.
     var additionalUserScriptsForTesting: [WKUserScript] = []
     #endif
@@ -80,6 +79,8 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         let contentController = WKUserContentController()
         configuration.userContentController = contentController
         configuration.preferences.isTextInteractionEnabled = true
+        // The reader only loads HTML it generates; Safe Browsing lookups are a sandbox denial with no benefit.
+        configuration.preferences.isFraudulentWebsiteWarningEnabled = false
         configuration.setURLSchemeHandler(localAssetSchemeHandler, forURLScheme: "wafer-local")
         configuration.setURLSchemeHandler(remoteImageSchemeHandler, forURLScheme: "wafer-remote")
 
@@ -103,7 +104,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         webView.allowsMagnification = false
         webView.allowsBackForwardNavigationGestures = false
         configureScrollBehavior()
-        configureFindUI()
+        _ = findController
         applyCurrentTheme()
     }
 
@@ -138,12 +139,12 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
     }
 
     var isAwaitingContentReadyForTesting: Bool {
-        awaitingContentReady
+        navigation.awaitingContentReady
     }
     #endif
 
     var isContentReadyForExport: Bool {
-        hasRenderableContent && didCompleteCurrentNavigation && !awaitingContentReady && themeUpdateID == nil
+        hasRenderableContent && navigation.isReady
     }
 
     var webViewForExport: WKWebView? {
@@ -156,13 +157,13 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
 
     #if DEBUG
     func setSuppressFindExecutionForTesting(_ isSuppressed: Bool) {
-        suppressFindExecutionForTesting = isSuppressed
+        findController.suppressFindExecutionForTesting = isSuppressed
     }
     #endif
 
     #if DEBUG
     func setSuppressedFindMatchResultForTesting(_ matchFound: Bool?) {
-        suppressedFindMatchResultForTesting = matchFound
+        findController.suppressedFindMatchResultForTesting = matchFound
     }
     #endif
 
@@ -172,7 +173,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
     }
 
     func triggerFindQueryChangeForTesting() {
-        controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: findBarView.searchField))
+        findController.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: findBarView.searchField))
     }
 
     static var scrollScriptSourceForTesting: String {
@@ -213,49 +214,27 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
     }
 
     @objc func showFindInterface(_ sender: Any?) {
-        ensureFindBarVisible()
-        view.window?.makeFirstResponder(findBarView.searchField)
-        findBarView.searchField.selectText(nil)
+        _ = view
+        findController.showFindInterface(sender)
     }
 
     @objc func findNextMatch(_ sender: Any?) {
-        guard !normalizedFindQuery().isEmpty else {
-            showFindInterface(sender)
-            updateFindStatus(nil)
-            return
-        }
-
-        ensureFindBarVisible()
-        performFind(direction: .next)
+        _ = view
+        findController.findNextMatch(sender)
     }
 
     @objc func findPreviousMatch(_ sender: Any?) {
-        guard !normalizedFindQuery().isEmpty else {
-            showFindInterface(sender)
-            updateFindStatus(nil)
-            return
-        }
-
-        ensureFindBarVisible()
-        performFind(direction: .previous)
+        _ = view
+        findController.findPreviousMatch(sender)
     }
 
     @objc func hideFindInterface(_ sender: Any?) {
-        findBarView.isHidden = true
-        updateFindStatus(nil)
-        clearBrowserSelection()
-        view.window?.makeFirstResponder(webView)
+        _ = view
+        findController.hideFindInterface(sender)
     }
 
     func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
-        switch item.action {
-        case #selector(showFindInterface(_:)):
-            return true
-        case #selector(findNextMatch(_:)), #selector(findPreviousMatch(_:)):
-            return !normalizedFindQuery().isEmpty
-        default:
-            return true
-        }
+        findController.validateUserInterfaceItem(item)
     }
 
     func displayLoading(for fileName: String) {
@@ -268,7 +247,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
 
         displayedLoadingFileName = fileName
         resetNavigationCompletionState(awaitsContentReady: false)
-        resetLivePreviewState(for: nil)
+        livePreview.reset(for: nil)
         hasRenderableContent = false
         pendingRestoreFraction = nil
         localAssetSchemeHandler.documentRootDirectory = nil
@@ -278,7 +257,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
     func apply(renderOutput: WebKitRenderOutput, initialScrollFraction: Double?) {
         displayedLoadingFileName = nil
         resetNavigationCompletionState(awaitsContentReady: renderOutput.waitsForContentReady)
-        resetLivePreviewState(for: renderOutput)
+        livePreview.reset(for: renderOutput)
         hasRenderableContent = true
         pendingRestoreFraction = initialScrollFraction
         lastKnownScrollFraction = initialScrollFraction ?? 0
@@ -287,15 +266,12 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
     }
 
     private func loadReaderHTML(_ html: String, baseURL: URL?) {
-        var components = URLComponents(url: baseURL ?? URL(string: "wafer-reader://document/")!, resolvingAgainstBaseURL: false)!
-        components.queryItems = (components.queryItems ?? []) + [URLQueryItem(name: "wafer-navigation", value: navigationID.uuidString)]
-        let readerURL = components.url!
-        pendingReaderLoadURL = readerURL
+        let readerURL = navigation.authorizeLoad(baseURL: baseURL)
         let controller = webView.configuration.userContentController
         controller.removeAllUserScripts()
         controller.addUserScript(WKUserScript(source: """
             document.addEventListener('wafer-content-ready', function() {
-              window.webkit.messageHandlers.waferContentReady.postMessage('\(navigationID.uuidString)');
+              window.webkit.messageHandlers.waferContentReady.postMessage('\(navigation.id.uuidString)');
             });
             """, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: Self.readerContentWorld))
         // The bundled Core renderer uses this page-world API. It is a DOM
@@ -315,8 +291,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
 
     /// Update CSS and existing diagrams without replacing the reading surface.
     func updateTheme(_ palette: ReaderThemePalette) {
-        let updateID = UUID()
-        themeUpdateID = updateID
+        let updateID = navigation.beginThemeUpdate()
         let variables = Dictionary(uniqueKeysWithValues: palette.mermaid.themeVariables + [("fontFamily", palette.mermaid.fontFamily)])
         webView.callAsyncJavaScript("""
             let style = document.getElementById('wafer-palette');
@@ -332,8 +307,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
             """, arguments: ["css": ReaderTheme.generatedRootBlock(for: palette),
                               "theme": palette.mermaid.theme, "variables": variables],
             in: nil, in: .page) { [weak self] _ in
-                guard let self, self.themeUpdateID == updateID else { return }
-                self.themeUpdateID = nil
+                guard let self, self.navigation.finishThemeUpdate(id: updateID) else { return }
                 self.onNavigationFinished?()
             }
     }
@@ -342,7 +316,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
     func loadHTMLForTesting(_ html: String, baseURL: URL? = nil, initialScrollFraction: Double? = nil) {
         displayedLoadingFileName = nil
         resetNavigationCompletionState(awaitsContentReady: false)
-        resetLivePreviewState(for: nil)
+        livePreview.reset(for: nil)
         hasRenderableContent = true
         pendingRestoreFraction = initialScrollFraction
         lastKnownScrollFraction = initialScrollFraction ?? 0
@@ -433,169 +407,30 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
 
     // MARK: Edit-mode live preview
 
-    /// True when the current page can be patched in place and scroll-synced.
-    var supportsLivePreview: Bool {
-        !ReaderLivePreviewScript.installer.isEmpty && liveBodyHTML != nil && isContentReadyForExport
-    }
+    var supportsLivePreview: Bool { livePreview.supportsLivePreview }
 
-    /// Patches the current page in place with a new render of the same
-    /// document: edits while typing, and the renders that add or remove
-    /// source-line annotations when edit mode starts or ends. Falls back to a
-    /// full load, keeping the scroll position, when the page is not ready,
-    /// lacks a renderer the new content needs, or cannot be matched.
-    /// `editorPosition` is the editor's position after the edit, so the
-    /// preview realigns in the same step.
     func applyLiveUpdate(
         renderOutput: WebKitRenderOutput,
         editorPosition: EditorScrollPosition? = nil,
         completion: (@MainActor (_ patched: Bool) -> Void)? = nil
     ) {
-        guard
-            let body = renderOutput.bodyHTML,
-            supportsLivePreview,
-            !renderOutput.hasMermaidDiagrams || pageHasMermaid,
-            !renderOutput.hasMathDisplays || pageHasMath
-        else {
-            applyLiveFullReload(renderOutput)
-            completion?(false)
-            return
-        }
-
-        let expectedNavigationID = navigationID
-        let previous: Any = livePatchStateReady ? NSNull() : (liveBodyHTML ?? "")
-        var arguments = Self.scriptArguments(for: editorPosition ?? .zero)
-        arguments["html"] = body
-        arguments["previous"] = previous
-        arguments["hasPosition"] = false
-        if let editorPosition {
-            lastSyncedMetrics = editorPosition
-        }
-        webView.callAsyncJavaScript(ReaderLivePreviewScript.patchCall, arguments: arguments, in: nil, in: .page) { [weak self] result in
-            guard let self, self.navigationID == expectedNavigationID else { return }
-            if case let .success(value) = result, let status = value as? String, status.hasPrefix("patched") {
-                self.liveBodyHTML = body
-                if let editorPosition { self.syncScroll(to: editorPosition) }
-                self.livePatchStateReady = true
-                #if DEBUG
-                self.livePatchCountForTesting += 1
-                #endif
-                completion?(true)
-            } else {
-                self.applyLiveFullReload(renderOutput)
-                completion?(false)
-            }
-        }
+        livePreview.applyLiveUpdate(renderOutput: renderOutput, editorPosition: editorPosition, completion: completion)
     }
 
-    /// Aligns the preview with the editor's top line. Calls are coalesced so
-    /// at most one is in flight; the latest position wins.
     func syncScroll(to position: EditorScrollPosition) {
-        guard supportsLivePreview else {
-            return
-        }
-        guard !scrollSyncInFlight else {
-            pendingScrollSync = position
-            return
-        }
-
-        scrollSyncInFlight = true
-        lastSyncedMetrics = position
-        let expectedNavigationID = navigationID
-        let script = liveHelpersInstalled ? ReaderLivePreviewScript.installedScrollCall : ReaderLivePreviewScript.scrollCall
-        liveHelpersInstalled = true
-        webView.callAsyncJavaScript(script, arguments: Self.scriptArguments(for: position), in: nil, in: Self.readerContentWorld) { [weak self] _ in
-            guard let self else { return }
-            self.scrollSyncInFlight = false
-            guard self.navigationID == expectedNavigationID else {
-                self.pendingScrollSync = nil
-                return
-            }
-            if let next = self.pendingScrollSync {
-                self.pendingScrollSync = nil
-                self.syncScroll(to: next)
-            }
-        }
+        livePreview.syncScroll(to: position)
     }
 
-    /// Tells the page the editor's scroll range changed (its text or size
-    /// did) without moving the preview. No-op when nothing changed.
     func updateScrollSyncMetrics(_ position: EditorScrollPosition) {
-        guard supportsLivePreview, liveHelpersInstalled, !position.hasSameMetrics(as: lastSyncedMetrics) else {
-            return
-        }
-
-        lastSyncedMetrics = position
-        webView.callAsyncJavaScript(
-            ReaderLivePreviewScript.updateMetricsCall,
-            arguments: Self.scriptArguments(for: position),
-            in: nil,
-            in: Self.readerContentWorld
-        ) { _ in }
+        livePreview.updateScrollSyncMetrics(position)
     }
 
-    /// The fractional source line at the top of the preview for an editor
-    /// with the given scroll range, or nil when the page has no annotated
-    /// blocks. The page takes this as the synced position, so the preview
-    /// does not move.
     func sourceLineAtTop(for position: EditorScrollPosition, completion: @escaping @MainActor (Double?) -> Void) {
-        guard supportsLivePreview else {
-            completion(nil)
-            return
-        }
-
-        liveHelpersInstalled = true
-        lastSyncedMetrics = position
-        webView.callAsyncJavaScript(
-            ReaderLivePreviewScript.lineAtTopCall,
-            arguments: Self.scriptArguments(for: position),
-            in: nil,
-            in: Self.readerContentWorld
-        ) { result in
-            if case let .success(value) = result, let number = value as? NSNumber {
-                completion(number.doubleValue)
-            } else {
-                completion(nil)
-            }
-        }
+        livePreview.sourceLineAtTop(for: position, completion: completion)
     }
 
-    /// Stops scroll sync when edit mode ends; the page stays as it is.
     func endLivePreview() {
-        pendingScrollSync = nil
-        lastSyncedMetrics = nil
-        guard liveHelpersInstalled else {
-            return
-        }
-
-        webView.callAsyncJavaScript(ReaderLivePreviewScript.deactivateCall, arguments: [:], in: nil, in: Self.readerContentWorld) { _ in }
-    }
-
-    private static func scriptArguments(for position: EditorScrollPosition) -> [String: Any] {
-        [
-            "line": position.line,
-            "topLine": position.topLine,
-            "bottomLine": position.bottomLine,
-            "visibleLines": position.visibleLines,
-            "totalLines": position.totalLines,
-        ]
-    }
-
-    private func applyLiveFullReload(_ renderOutput: WebKitRenderOutput) {
-        #if DEBUG
-        liveFullReloadCountForTesting += 1
-        #endif
-        let fraction = lastKnownScrollFraction
-        apply(renderOutput: renderOutput, initialScrollFraction: fraction >= 0.98 ? 1 : fraction)
-    }
-
-    private func resetLivePreviewState(for renderOutput: WebKitRenderOutput?) {
-        liveBodyHTML = renderOutput?.bodyHTML
-        liveHelpersInstalled = false
-        livePatchStateReady = false
-        pageHasMermaid = renderOutput?.hasMermaidDiagrams ?? false
-        pageHasMath = renderOutput?.hasMathDisplays ?? false
-        pendingScrollSync = nil
-        lastSyncedMetrics = nil
+        livePreview.endLivePreview()
     }
 
     #if DEBUG
@@ -606,7 +441,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
 
     #if DEBUG
     func handleContentReadyForTesting() {
-        handleContentReady()
+        handleContentReady(id: navigation.id.uuidString)
     }
     #endif
 
@@ -653,7 +488,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
                 handleCopyCode(text)
             }
         case ScriptMessageName.contentReady:
-            if message.body as? String == navigationID.uuidString { handleContentReady() }
+            if let id = message.body as? String { handleContentReady(id: id) }
         case ScriptMessageName.liveScroll:
             if let line = (message.body as? NSNumber)?.doubleValue, line.isFinite {
                 onLiveScroll?(line)
@@ -670,14 +505,13 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
 
     private func handleNavigationFinished() {
         configureScrollBehavior()
-        didFinishCurrentNavigation = true
-        completeNavigationIfReady()
+        if navigation.navigationFinished() { completeNavigation() }
     }
 
     private func installReaderScriptThenFinishNavigation() {
-        let expectedID = navigationID
+        let expectedID = navigation.id
         webView.evaluateJavaScript(Self.scrollScript, in: nil, in: Self.readerContentWorld) { [weak self] _ in
-            guard let self, self.navigationID == expectedID else { return }
+            guard let self, self.navigation.id == expectedID else { return }
             self.handleNavigationFinished()
         }
     }
@@ -695,23 +529,12 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
             decisionHandler(handleActivatedLink(url, modifierFlags: navigationAction.modifierFlags))
             return
         }
-        guard navigationAction.targetFrame?.isMainFrame == true,
-              navigationAction.navigationType == .other else {
-            decisionHandler(.cancel)
-            return
-        }
-        if url == pendingReaderLoadURL {
-            pendingReaderLoadURL = nil
-            decisionHandler(.allow)
-            return
-        }
-        // Fragment changes retain this document and its isolated handlers.
-        var target = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        var current = webView.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }
-        let hasFragment = target?.fragment != nil
-        target?.fragment = nil
-        current?.fragment = nil
-        decisionHandler(hasFragment && target?.url == current?.url ? .allow : .cancel)
+        let allowed = navigation.allowsNavigation(
+            to: url, currentURL: webView.url,
+            isMainFrame: navigationAction.targetFrame?.isMainFrame == true,
+            isOther: navigationAction.navigationType == .other
+        )
+        decisionHandler(allowed ? .allow : .cancel)
     }
 
     func handleActivatedLink(_ url: URL, modifierFlags: NSEvent.ModifierFlags = []) -> WKNavigationActionPolicy {
@@ -740,41 +563,6 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         #endif
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
-    }
-
-    func controlTextDidChange(_ obj: Notification) {
-        guard obj.object as? NSTextField === findBarView.searchField else {
-            return
-        }
-
-        if normalizedFindQuery().isEmpty {
-            #if DEBUG
-            lastFindQueryForTesting = nil
-            lastFindMatchFoundForTesting = nil
-            #endif
-            updateFindStatus(nil)
-            clearBrowserSelection()
-            return
-        }
-
-        performFind(direction: .next)
-    }
-
-    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-        guard control === findBarView.searchField else {
-            return false
-        }
-
-        switch commandSelector {
-        case #selector(cancelOperation(_:)):
-            hideFindInterface(control)
-            return true
-        case #selector(insertNewline(_:)):
-            findNextMatch(control)
-            return true
-        default:
-            return false
-        }
     }
 
     func handleReportedScrollFraction(_ fraction: Double) {
@@ -811,11 +599,7 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
     }
 
     private func resetNavigationCompletionState(awaitsContentReady: Bool) {
-        navigationID = UUID()
-        themeUpdateID = nil
-        awaitingContentReady = awaitsContentReady
-        didFinishCurrentNavigation = false
-        didCompleteCurrentNavigation = false
+        navigation.reset(awaitsContentReady: awaitsContentReady)
     }
 
     private func invalidateWebViewCallbacks() {
@@ -835,22 +619,13 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         didInstallScriptMessageHandlers = false
     }
 
-    private func handleContentReady() {
-        guard awaitingContentReady else {
-            return
-        }
-
+    private func handleContentReady(id: String) {
+        guard id == navigation.id.uuidString, navigation.awaitingContentReady else { return }
         configureScrollBehavior()
-        awaitingContentReady = false
-        completeNavigationIfReady()
+        if navigation.contentReady(id: id) { completeNavigation() }
     }
 
-    private func completeNavigationIfReady() {
-        guard didFinishCurrentNavigation, !awaitingContentReady, !didCompleteCurrentNavigation else {
-            return
-        }
-
-        didCompleteCurrentNavigation = true
+    private func completeNavigation() {
         restorePendingScrollIfNeeded()
         onNavigationFinished?()
     }
@@ -928,11 +703,6 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
         ])
     }
 
-    private func configureFindUI() {
-        findBarView.configure(target: self, delegate: self)
-        updateFindStatus(nil)
-    }
-
     private func webContentScrollView() -> NSScrollView? {
         webContentScrollViews().first
     }
@@ -944,71 +714,6 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
     private func findScrollViews(in view: NSView) -> [NSScrollView] {
         let localScrollViews = (view as? NSScrollView).map { [$0] } ?? []
         return localScrollViews + view.subviews.flatMap(findScrollViews(in:))
-    }
-
-    private func ensureFindBarVisible() {
-        findBarView.isHidden = false
-    }
-
-    private func normalizedFindQuery() -> String {
-        findBarView.searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func performFind(direction: FindDirection) {
-        let query = normalizedFindQuery()
-        guard !query.isEmpty else {
-            updateFindStatus(nil)
-            return
-        }
-
-        #if DEBUG
-        lastFindQueryForTesting = query
-        lastFindDirectionForTesting = direction == .previous ? "previous" : "next"
-        #endif
-
-        #if DEBUG
-        if suppressFindExecutionForTesting {
-            let matchFound = suppressedFindMatchResultForTesting ?? true
-            #if DEBUG
-            lastFindMatchFoundForTesting = matchFound
-            #endif
-            updateFindStatus(matchFound ? nil : "No matches")
-            return
-        }
-
-        #endif
-
-        let configuration = WKFindConfiguration()
-        configuration.backwards = direction == .previous
-        configuration.wraps = true
-        configuration.caseSensitive = false
-        webView.find(query, configuration: configuration) { [weak self] result in
-            guard let self else {
-                return
-            }
-
-            #if DEBUG
-            self.lastFindMatchFoundForTesting = result.matchFound
-            #endif
-            self.updateFindStatus(result.matchFound ? nil : "No matches")
-        }
-    }
-
-    private func updateFindStatus(_ text: String?) {
-        findBarView.statusLabel.stringValue = text ?? ""
-        findBarView.statusLabel.isHidden = text == nil || text?.isEmpty == true
-    }
-
-    private func clearBrowserSelection() {
-        webView.evaluateJavaScript("""
-        (function() {
-          const selection = window.getSelection && window.getSelection();
-          if (selection) {
-            selection.removeAllRanges();
-          }
-          return true;
-        })();
-        """)
     }
 
     private static let scrollScript = ReaderScriptResource.load("reader-scroll")

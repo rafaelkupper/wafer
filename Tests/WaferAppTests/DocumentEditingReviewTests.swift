@@ -71,6 +71,7 @@ final class DocumentEditingReviewTests: XCTestCase {
         let url = try directory.createTextFile(named: "Note.md", contents: "B")
         let readCaptured = expectation(description: "captured B")
         let saveStaged = DispatchSemaphore(value: 0)
+        let waitingForSave = expectation(description: "read delivery asynchronously awaits blocked save")
         let readGate = ReloadDeliveryGate()
         let writeGate = DispatchSemaphore(value: 0)
         let diskState = MarkdownDiskState()
@@ -92,23 +93,27 @@ final class DocumentEditingReviewTests: XCTestCase {
                 readGate.wait()
             }
             return source
-        }, diskState: diskState, finishPendingSave: {
-            writeGate.signal()
-            session.finishPendingSave()
+        }, diskState: diskState, finishPendingSave: { completion in
+            if session.isSaving { waitingForSave.fulfill() }
+            session.finishPendingSave(completion: completion)
         })
         let completed = expectation(description: "read applied")
         loader.read(.reloading(url)) { result in
             XCTAssertEqual(try? result.get().sourceText, "C")
             completed.fulfill()
         }
-        defer { readGate.release(); writeGate.signal(); session.finishPendingSave() }
+        defer { readGate.release(); writeGate.signal() }
         wait(for: [readCaptured], timeout: 5)
         XCTAssertTrue(session.saveInBackground(.init(text: "C", revision: 1)) { _ in
-            XCTFail("The source loader must synchronously take this save's result")
+            XCTAssertEqual(session.savedText, "C")
         })
         XCTAssertEqual(saveStaged.wait(timeout: .now() + 5), .success)
         XCTAssertTrue(session.isSaving)
         readGate.release()
+        wait(for: [waitingForSave], timeout: 5)
+        XCTAssertEqual(session.savedText, "B")
+        XCTAssertEqual(loader.state, .reloading(url))
+        writeGate.signal()
         wait(for: [completed], timeout: 5)
         XCTAssertEqual(session.savedText, "C")
         XCTAssertFalse(session.isSaving)

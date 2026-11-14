@@ -19,6 +19,29 @@ final class FileContainmentTests: XCTestCase {
         }
     }
 
+    func testACandidateResolvedOnceMatchesEveryRootLikeTheURL() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let root = directory.appendingPathComponent("doc")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let alias = directory.appendingPathComponent("alias")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: root)
+        let roots = [root, directory.appendingPathComponent("doc2"), URL(fileURLWithPath: "/a/doc")].flatMap {
+            [FileContainment(rootDirectory: $0), FileContainment(rootDirectory: $0, caseSensitive: false)]
+        }
+        let files = [
+            root.appendingPathComponent("image.png"), alias.appendingPathComponent("image.png"),
+            root, URL(fileURLWithPath: "/a/DOC/x.png"), URL(fileURLWithPath: "/a/doc/../secret.png"),
+            URL(string: "https://example.com/a/doc")!,
+        ]
+        for file in files {
+            let candidate = FileContainment.Candidate(file)
+            for containment in roots {
+                XCTAssertEqual(containment.contains(candidate), containment.contains(file), "\(file) in \(containment)")
+            }
+        }
+    }
+
     func testActualVolumeCaseRulesAndPreviewCollection() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

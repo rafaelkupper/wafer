@@ -38,9 +38,9 @@ final class MarkdownEditSessionTests: XCTestCase {
             throw failure
         })
 
-        XCTAssertEqual(session.save("mine\n", interactive: false), .keptInMemory)
+        XCTAssertEqual(session.saveAndWait("mine\n", interactive: false), .keptInMemory)
         XCTAssertEqual(conflicts, [], "non-interactive saves never prompt")
-        XCTAssertEqual(session.save("mine\n", interactive: true), .keptInMemory)
+        XCTAssertEqual(session.saveAndWait("mine\n", interactive: true), .keptInMemory)
         XCTAssertEqual(conflicts, [.writeFailed(failure.localizedDescription)], "the original error reaches the prompt")
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "original\n")
         XCTAssertEqual(session.savedText, "original\n")
@@ -81,7 +81,7 @@ final class MarkdownEditSessionTests: XCTestCase {
             }
         })
 
-        XCTAssertEqual(session.save("mine\n", interactive: true), .keptInMemory)
+        XCTAssertEqual(session.saveAndWait("mine\n", interactive: true), .keptInMemory)
         XCTAssertEqual(conflicts, [.changedOnDisk])
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "theirs\n")
     }
@@ -107,8 +107,8 @@ final class MarkdownEditSessionTests: XCTestCase {
         XCTAssertEqual(writer.wroteOnMainThread, [false])
         XCTAssertEqual(session.savedText, "one\ntwo\n")
         XCTAssertEqual(session.savedRevision, 7)
-        XCTAssertEqual(session.save(EditSnapshot(text: "one\ntwo\n", revision: 7), interactive: true), .unchanged)
-        XCTAssertEqual(session.save("one\ntwo\n", interactive: true), .unchanged)
+        XCTAssertEqual(session.saveAndWait(EditSnapshot(text: "one\ntwo\n", revision: 7), interactive: true), .unchanged)
+        XCTAssertEqual(session.saveAndWait("one\ntwo\n", interactive: true), .unchanged)
         XCTAssertEqual(writer.writes.count, 1, "unchanged text writes nothing")
     }
 
@@ -118,8 +118,8 @@ final class MarkdownEditSessionTests: XCTestCase {
         let url = try directory.createFile(named: "Doc.md", contents: Data([0xEF, 0xBB, 0xBF]) + Data("# A\r\nB\r\n".utf8))
         let session = try makeSession(for: url)
 
-        XCTAssertEqual(session.save("# A\nB\n", interactive: true), .unchanged)
-        XCTAssertEqual(session.save("# A\nB\nC\n", interactive: true), .saved)
+        XCTAssertEqual(session.saveAndWait("# A\nB\n", interactive: true), .unchanged)
+        XCTAssertEqual(session.saveAndWait("# A\nB\nC\n", interactive: true), .saved)
         XCTAssertEqual(try Data(contentsOf: url), Data([0xEF, 0xBB, 0xBF]) + Data("# A\r\nB\r\nC\r\n".utf8))
         XCTAssertEqual(session.savedFingerprint, FileFingerprint.sha256Hex(for: try Data(contentsOf: url)))
     }
@@ -131,7 +131,7 @@ final class MarkdownEditSessionTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         let session = try makeSession(for: url)
 
-        XCTAssertEqual(session.save("secret 2", interactive: true), .saved)
+        XCTAssertEqual(session.saveAndWait("secret 2", interactive: true), .saved)
         let permissions = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int
         XCTAssertEqual(permissions, 0o600)
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "secret 2")
@@ -148,11 +148,11 @@ final class MarkdownEditSessionTests: XCTestCase {
         }
         try Data("from agent\r\n".utf8).write(to: url)
 
-        XCTAssertEqual(session.save("mine", interactive: false), .keptInMemory)
+        XCTAssertEqual(session.saveAndWait("mine", interactive: false), .keptInMemory)
         XCTAssertEqual(conflicts, [])
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "from agent\r\n")
 
-        XCTAssertEqual(session.save("mine", interactive: true), .reverted("from agent\n"))
+        XCTAssertEqual(session.saveAndWait("mine", interactive: true), .reverted("from agent\n"))
         XCTAssertEqual(conflicts, [.changedOnDisk])
         XCTAssertEqual(session.savedText, "from agent\n")
         XCTAssertEqual(session.format.lineEnding, .crlf)
@@ -165,7 +165,7 @@ final class MarkdownEditSessionTests: XCTestCase {
         let session = try makeSession(for: url) { _, _ in .overwrite }
         try Data("theirs".utf8).write(to: url)
 
-        XCTAssertEqual(session.save("mine", interactive: true), .saved)
+        XCTAssertEqual(session.saveAndWait("mine", interactive: true), .saved)
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "mine")
     }
 
@@ -177,7 +177,7 @@ final class MarkdownEditSessionTests: XCTestCase {
         let session = try makeSession(for: url) { _, _ in .saveCopy(copyURL) }
         try Data("theirs".utf8).write(to: url)
 
-        XCTAssertEqual(session.save("mine", interactive: true), .reverted("theirs"))
+        XCTAssertEqual(session.saveAndWait("mine", interactive: true), .reverted("theirs"))
         XCTAssertEqual(try String(contentsOf: copyURL, encoding: .utf8), "mine")
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "theirs")
     }
@@ -193,7 +193,7 @@ final class MarkdownEditSessionTests: XCTestCase {
         }
         try FileManager.default.removeItem(at: url)
 
-        XCTAssertEqual(session.save("again", interactive: true), .saved)
+        XCTAssertEqual(session.saveAndWait("again", interactive: true), .saved)
         XCTAssertEqual(conflicts, [.missingOnDisk])
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "again")
     }
@@ -219,6 +219,8 @@ final class DocumentEditModeTests: XCTestCase {
     /// Runs inside the conflict prompt, as events do while a modal alert is up.
     private var duringConflictPrompt: (() -> Void)?
     private var loadErrors: [Error] = []
+    private var documents: [MarkdownReaderDocument] = []
+    private var cleaningUp = false
 
     override func setUp() async throws {
         directory = try TemporaryTestDirectory()
@@ -228,9 +230,21 @@ final class DocumentEditModeTests: XCTestCase {
         conflictResolution = .overwrite
         duringConflictPrompt = nil
         loadErrors = []
+        documents = []
+        cleaningUp = false
     }
 
     override func tearDown() async throws {
+        cleaningUp = true
+        duringConflictPrompt = nil
+        for document in documents {
+            let saved = await withCheckedContinuation { continuation in
+                document.flushEdits(interactive: true) { continuation.resume(returning: $0) }
+            }
+            XCTAssertTrue(saved)
+            document.close()
+        }
+        documents = []
         directory.remove()
     }
 
@@ -239,7 +253,8 @@ final class DocumentEditModeTests: XCTestCase {
         autosaveDelay: TimeInterval = 0.05,
         makesWindow: Bool = true,
         sourceLoader: @escaping MarkdownReaderDocument.SourceLoader = MarkdownReaderDocument.loadSource,
-        fileWriter: @escaping MarkdownEditSession.FileWriter = MarkdownEditSession.replaceContents
+        fileWriter: @escaping MarkdownEditSession.FileWriter = MarkdownEditSession.replaceContents,
+        resolveConflict: EditConflictResolver? = nil
     ) throws -> (MarkdownReaderDocument, RecordingReaderViewController) {
         let reader = RecordingReaderViewController()
         let document = MarkdownReaderDocument(
@@ -258,15 +273,17 @@ final class DocumentEditModeTests: XCTestCase {
                 return monitor
             },
             sourceLoadErrorHandler: { [weak self] in self?.loadErrors.append($0) },
-            editConflictResolver: { [weak self] kind, _ in
+            editConflictResolver: { [weak self] kind, fileURL in
+                if self?.cleaningUp == true { return .discardMine }
                 self?.conflicts.append(kind)
                 self?.duringConflictPrompt?()
-                return self?.conflictResolution ?? .cancel
+                return resolveConflict?(kind, fileURL) ?? self?.conflictResolution ?? .cancel
             },
             editFileWriter: fileWriter,
             autosaveDelay: autosaveDelay,
             liveRenderInterval: 0.01
         )
+        documents.append(document)
         document.fileURL = url
         try document.read(from: Data(contentsOf: url), ofType: "dev.wafer.markdown")
         if makesWindow {
@@ -312,7 +329,7 @@ final class DocumentEditModeTests: XCTestCase {
         waitUntil("live render used editor text") { self.renderedSources.last == "# A\nB\nC" }
         XCTAssertFalse(document.isDocumentEdited, "edits never mark the NSDocument edited")
 
-        XCTAssertTrue(document.endEditing())
+        XCTAssertTrue(document.endEditingAndWait())
         XCTAssertFalse(document.isEditing)
         XCTAssertTrue(host.hostedContentViewController === reader)
         XCTAssertNil(host.editorPaneControllerForTesting)
@@ -358,7 +375,7 @@ final class DocumentEditModeTests: XCTestCase {
 
         // Leaving edit mode in a background tab does not touch the window.
         host.selectTab(at: 1)
-        XCTAssertTrue(document.endEditing())
+        XCTAssertTrue(document.endEditingAndWait())
         XCTAssertEqual(window.frame, readingFrame)
         host.selectTab(at: 0)
         XCTAssertNil(host.editorPaneControllerForTesting)
@@ -372,7 +389,7 @@ final class DocumentEditModeTests: XCTestCase {
         defer { document.close() }
 
         document.beginEditing()
-        XCTAssertTrue(document.endEditing())
+        XCTAssertTrue(document.endEditingAndWait())
 
         let after = try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
         XCTAssertEqual(before, after)
@@ -404,29 +421,78 @@ final class DocumentEditModeTests: XCTestCase {
         conflictResolution = .overwrite
         monitors.last?.onChange()
 
-        waitUntil("conflict resolved") { self.conflicts == [.changedOnDisk] }
+        waitUntil("conflict resolved") { (try? String(contentsOf: url, encoding: .utf8)) == "one\nmine" }
+        XCTAssertEqual(conflicts, [.changedOnDisk])
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "one\nmine")
     }
 
-    func testCancelledConflictBlocksClosingAndNavigation() throws {
+    func testCancelledChangedFileConflictBlocksClosingAndNavigation() throws {
+        try assertCancelBlocksClosingAndNavigation(fileIsMissing: false)
+    }
+
+    func testCancelledMissingFileConflictBlocksClosingAndNavigation() throws {
+        try assertCancelBlocksClosingAndNavigation(fileIsMissing: true)
+    }
+
+    private func assertCancelBlocksClosingAndNavigation(fileIsMissing: Bool) throws {
         let url = try directory.createTextFile(named: "Doc.md", contents: "one\n")
         let other = try directory.createTextFile(named: "Other.md", contents: "other\n")
-        let (document, _) = try makeDocument(for: url, autosaveDelay: 60)
-        defer {
-            conflictResolution = .discardMine
-            document.close()
-        }
+        let (document, _) = try makeDocument(for: url, autosaveDelay: 60, resolveConflict: { kind, fileURL in
+            let prompt = MarkdownEditSession.ConflictAlert(kind, fileURL: fileURL)
+            guard let index = prompt.alert.buttons.firstIndex(where: { $0.title == "Cancel" }) else {
+                XCTFail("The production conflict alert must offer Cancel")
+                return .cancel
+            }
+            let response = NSApplication.ModalResponse(rawValue: NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + index)
+            return prompt.resolution(for: response) ?? .cancel
+        })
+        defer { document.close() }
         let host = try XCTUnwrap(document.windowControllers.first as? DocumentHostWindowController)
+        let window = try XCTUnwrap(host.window)
         document.beginEditing()
         try type("mine", in: document)
-        try Data("theirs\n".utf8).write(to: url)
-        conflictResolution = .cancel
+        let editor = try XCTUnwrap(document.editorControllerForTesting)
+        let revision = editor.revision
+        if fileIsMissing {
+            try FileManager.default.moveItem(at: url, to: directory.url.appendingPathComponent("Moved.md"))
+        } else {
+            try Data("theirs\n".utf8).write(to: url)
+        }
 
-        XCTAssertFalse(host.prepareToCloseWindow())
+        let closePrompt = expectation(description: "close conflict presented")
+        duringConflictPrompt = { closePrompt.fulfill() }
+        window.performClose(nil)
+        wait(for: [closePrompt], timeout: 5)
+        let expectedConflict: EditConflictKind = fileIsMissing ? .missingOnDisk : .changedOnDisk
+        XCTAssertEqual(conflicts, [expectedConflict])
+        XCTAssertTrue(host.tabs.contains { $0.document === document })
+        XCTAssertEqual(document.windowControllers.count, 1)
+        XCTAssertEqual(editor.text, "one\nmine")
+        XCTAssertEqual(editor.revision, revision)
+        let navigationPrompt = expectation(description: "navigation conflict presented")
+        duringConflictPrompt = { navigationPrompt.fulfill() }
         document.navigateInCurrentWindow(to: other)
+        wait(for: [navigationPrompt], timeout: 5)
+        duringConflictPrompt = nil
         XCTAssertEqual(document.fileURL, url)
         XCTAssertTrue(document.isEditing)
-        XCTAssertEqual(conflicts, [.changedOnDisk, .changedOnDisk])
+        XCTAssertTrue(document.editorControllerForTesting === editor)
+        XCTAssertEqual(editor.text, "one\nmine")
+        XCTAssertEqual(editor.revision, revision)
+        let revert = NSMenuItem(title: "Revert Edits", action: #selector(MarkdownReaderDocument.revertEdits(_:)), keyEquivalent: "")
+        XCTAssertTrue(document.validateUserInterfaceItem(revert))
+        XCTAssertTrue(document.navigationHistory.backEntries.isEmpty)
+        XCTAssertTrue(document.navigationHistory.forwardEntries.isEmpty)
+        XCTAssertEqual(conflicts, [expectedConflict, expectedConflict])
+        XCTAssertEqual(try String(contentsOf: other, encoding: .utf8), "other\n")
+        if fileIsMissing {
+            XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+            XCTAssertEqual(try String(contentsOf: directory.url.appendingPathComponent("Moved.md"), encoding: .utf8), "one\n")
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.url.path).sorted(), ["Moved.md", "Other.md"])
+        } else {
+            XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "theirs\n")
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.url.path).sorted(), ["Doc.md", "Other.md"])
+        }
     }
 
     func testNavigationSavesFirstAndKeepsEditingTheNextFile() throws {
@@ -439,10 +505,10 @@ final class DocumentEditModeTests: XCTestCase {
 
         document.navigateInCurrentWindow(to: second)
 
-        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "first\nmore", "saved before leaving")
         waitUntil("second file loaded into the editor") {
             document.fileURL?.lastPathComponent == "Second.md" && document.editorControllerForTesting?.text == "second\n"
         }
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "first\nmore", "saved before leaving")
         XCTAssertTrue(document.isEditing)
         XCTAssertEqual(document.editorControllerForTesting?.undoManagerForTesting.canUndo, false)
     }
@@ -558,7 +624,7 @@ final class DocumentEditModeTests: XCTestCase {
         try type("B", in: document)
 
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { writer.release() }
-        XCTAssertTrue(document.flushEdits(interactive: true))
+        XCTAssertTrue(document.flushEditsAndWait(interactive: true))
 
         XCTAssertEqual(writer.writes, ["one\nA", "one\nAB"])
         XCTAssertEqual(writer.wroteOnMainThread.first, false, "autosave writes off the main thread")
@@ -637,9 +703,14 @@ final class DocumentEditModeTests: XCTestCase {
         waitUntil("autosave is writing") { writer.isHolding }
         try type("B", in: document)
 
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { writer.release() }
         document.close()
-
+        writer.release()
+        let closed = expectation(description: "close flush completed")
+        document.flushEdits(interactive: true) { success in
+            XCTAssertTrue(success)
+            closed.fulfill()
+        }
+        wait(for: [closed], timeout: 5)
         XCTAssertEqual(writer.writes, ["one\nA", "one\nAB"])
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "one\nAB")
     }
@@ -665,7 +736,7 @@ final class DocumentEditModeTests: XCTestCase {
 
         XCTAssertEqual(editor.text, "x\ny\nza\nb")
         XCTAssertEqual(textView.selectedRange(), NSRange(location: 8, length: 0), "the insertion point follows the pasted text")
-        XCTAssertTrue(document.flushEdits(interactive: true))
+        XCTAssertTrue(document.flushEditsAndWait(interactive: true))
         XCTAssertEqual(try Data(contentsOf: url), Data("x\r\ny\r\nza\r\nb".utf8), "no CR is doubled")
 
         editor.undoManagerForTesting.undo()
@@ -720,7 +791,7 @@ final class DocumentEditModeTests: XCTestCase {
         XCTAssertTrue(document.validateUserInterfaceItem(item))
         XCTAssertEqual(item.state, .on)
         XCTAssertTrue(document.validateUserInterfaceItem(saveItem))
-        document.endEditing()
+        document.endEditingAndWait()
     }
 }
 
@@ -1221,7 +1292,7 @@ final class EditModeEndToEndTests: XCTestCase {
             (try? String(contentsOf: url, encoding: .utf8)) == "# Title\n\nPara one edited\n\nPara two\n"
         }
 
-        XCTAssertTrue(document.endEditing())
+        XCTAssertTrue(document.endEditingAndWait())
         waitUntil("annotations removed in place") {
             self.evaluate("document.querySelectorAll('[data-source-line]').length", in: reader) as? Int == 0
         }

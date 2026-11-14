@@ -35,10 +35,85 @@ final class RemoteAssetURLGuardTests: XCTestCase {
         for host in ["8.8.8.8", "172.32.0.1", "100.128.0.1", "[2606:4700:4700::1111]", "[::ffff:8.8.8.8]", "public.test"] {
             try guardPolicy.validate(URL(string: "https://\(host)/image.png"))
         }
-        try guardPolicy.validate(URL(string: "http://public.test/image.png"))
         for url in ["file:///tmp/image.png", "ftp://public.test/image.png", "wafer-local://asset", "https:///", "data:image/png,abc"] {
             XCTAssertThrowsError(try guardPolicy.validate(URL(string: url)), url)
         }
+    }
+
+    func testRejectsHTTPBeforeResolvingHosts() {
+        let policy = RemoteAssetURLGuard(resolve: { _ in
+            XCTFail("HTTP URLs must be rejected before DNS")
+            return ["8.8.8.8"]
+        })
+        for url in ["http://public.test/image.png", "http://8.8.8.8/image.png", "HTTP://[2606:4700:4700::1111]/image.png"] {
+            XCTAssertThrowsError(try policy.validate(URL(string: url)), url) { error in
+                guard case RemoteAssetURLGuard.Rejection.invalidURL = error else {
+                    return XCTFail("Expected invalidURL for \(url), got \(error)")
+                }
+            }
+        }
+    }
+
+    func testRejectsSpecialPurposeIPv4Ranges() {
+        let ranges = [
+            ("192.0.0.0/24", ["192.0.0.0", "192.0.0.9", "192.0.0.10", "192.0.0.255"]),
+            ("192.0.2.0/24", ["192.0.2.0", "192.0.2.255"]),
+            ("192.88.99.0/24", ["192.88.99.0", "192.88.99.2", "192.88.99.255"]),
+            ("198.18.0.0/15", ["198.18.0.0", "198.19.255.255"]),
+            ("198.51.100.0/24", ["198.51.100.0", "198.51.100.255"]),
+            ("203.0.113.0/24", ["203.0.113.0", "203.0.113.255"]),
+            ("240.0.0.0/4", ["240.0.0.0", "255.255.255.254"]),
+            ("255.255.255.255/32", ["255.255.255.255"]),
+        ]
+        let literalPolicy = RemoteAssetURLGuard(resolve: { _ in
+            XCTFail("Literal IPs must not use DNS")
+            return []
+        })
+        for (range, addresses) in ranges {
+            for address in addresses {
+                XCTAssertThrowsError(try literalPolicy.validate(URL(string: "https://\(address)/image.png")), "\(range): \(address)")
+                XCTAssertThrowsError(try literalPolicy.validate(URL(string: "https://[::ffff:\(address)]/image.png")), "mapped \(range): \(address)")
+                let resolvedPolicy = RemoteAssetURLGuard(resolve: { _ in ["8.8.8.8", address] })
+                XCTAssertThrowsError(try resolvedPolicy.validate(URL(string: "https://named.test/image.png")), "DNS \(range): \(address)")
+            }
+        }
+    }
+
+    func testRejectsSpecialPurposeIPv6Ranges() {
+        let ranges = [
+            ("100::/64", ["100::", "100::ffff:ffff:ffff:ffff"]),
+            ("100:0:0:1::/64", ["100:0:0:1::", "100:0:0:1:ffff:ffff:ffff:ffff"]),
+            ("2001:2::/48", ["2001:2::", "2001:2:0:ffff:ffff:ffff:ffff:ffff"]),
+            ("2001:10::/28", ["2001:10::", "2001:1f:ffff:ffff:ffff:ffff:ffff:ffff"]),
+            ("2001:db8::/32", ["2001:db8::", "2001:db8:ffff:ffff:ffff:ffff:ffff:ffff"]),
+            ("3fff::/20", ["3fff::", "3fff:fff:ffff:ffff:ffff:ffff:ffff:ffff"]),
+            ("5f00::/16", ["5f00::", "5f00:ffff:ffff:ffff:ffff:ffff:ffff:ffff"]),
+        ]
+        let literalPolicy = RemoteAssetURLGuard(resolve: { _ in
+            XCTFail("Literal IPs must not use DNS")
+            return []
+        })
+        for (range, addresses) in ranges {
+            for address in addresses {
+                XCTAssertThrowsError(try literalPolicy.validate(URL(string: "https://[\(address)]/image.png")), "\(range): \(address)")
+                let resolvedPolicy = RemoteAssetURLGuard(resolve: { _ in ["2606:4700:4700::1111", address] })
+                XCTAssertThrowsError(try resolvedPolicy.validate(URL(string: "https://named.test/image.png")), "DNS \(range): \(address)")
+            }
+        }
+    }
+
+    func testAllowsAddressesOutsideBlockedSpecialPurposeRanges() throws {
+        let addresses = [
+            "191.255.255.255", "192.0.1.0", "192.0.1.255", "192.0.3.0",
+            "192.88.98.255", "192.88.100.0", "198.17.255.255", "198.20.0.0",
+            "198.51.99.255", "198.51.101.0", "203.0.112.255", "203.0.114.0",
+            "192.31.196.1", "192.52.193.1", "192.175.48.1",
+            "2001:1::1", "2001:3::1", "2001:4:112::1", "2001:4860:4860::8888",
+        ]
+        for address in addresses {
+            XCTAssertTrue(RemoteAssetURLGuard.isPublicAddress(address), address)
+        }
+        try RemoteAssetURLGuard().validate(URL(string: "HTTPS://8.8.8.8/image.png"))
     }
 
     func testRejectsNamesIfAnyResolvedAddressIsNonPublicOrResolutionFails() {

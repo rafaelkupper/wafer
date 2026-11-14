@@ -45,12 +45,12 @@ final class MarkdownSourceLoader {
     var deferredReload: Bool?
     private let load: Load
     private let diskState: MarkdownDiskState
-    private let finishPendingSave: @MainActor () -> Void
+    private let finishPendingSave: @MainActor (@escaping @MainActor () -> Void) -> Void
 
     init(
         load: @escaping Load,
         diskState: MarkdownDiskState = MarkdownDiskState(),
-        finishPendingSave: @escaping @MainActor () -> Void = {}
+        finishPendingSave: @escaping @MainActor (@escaping @MainActor () -> Void) -> Void = { $0() }
     ) {
         self.load = load
         self.diskState = diskState
@@ -74,18 +74,42 @@ final class MarkdownSourceLoader {
             let result = Result { try loader(url) }
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.loadGeneration == generation else { return }
-                // Applying a read may wait for a save. Finish it before
-                // checking the revision, including its undelivered result.
-                self.finishPendingSave()
-                guard self.loadGeneration == generation else { return }
-                guard self.diskState.revision == diskRevision else {
-                    self.read(state, completion: completion)
-                    return
+                // Deliver save bookkeeping before checking the revision,
+                // without blocking the main actor on the worker.
+                self.finishPendingSave {
+                    guard self.loadGeneration == generation else { return }
+                    guard self.diskState.revision == diskRevision else {
+                        self.read(state, completion: completion)
+                        return
+                    }
+                    self.state = .idle
+                    completion(Self.explainingSandboxDenial(of: result, for: state))
                 }
-                self.state = .idle
-                completion(result)
             }
         }
+    }
+
+    /// Under the App Sandbox, a read the sandbox refused (`EPERM`) fails with
+    /// a `FolderAccessDeniedError`, whose alert offers Grant Access…, in
+    /// every state. The refusal also drops a stale session selection for
+    /// the file, such as a recent document saved without the sandbox. A
+    /// refused reload records the file for its window's notice as well.
+    static func explainingSandboxDenial(
+        of result: Result<LoadedMarkdownSource, Error>, for state: LoadState
+    ) -> Result<LoadedMarkdownSource, Error> {
+        let store = FolderAccessStore.shared
+        guard store.isSandboxed, let url = state.url else { return result }
+        guard case .failure(let error) = result else {
+            // A file that reads again no longer needs a grant for itself.
+            store.noteReadSucceeded(url)
+            return result
+        }
+        guard FolderAccessDeniedError.isPermissionDenied(error) else { return result }
+        store.noteReadRefused(url)
+        if case .reloading = state {
+            store.recordUnreadableFile(url, forDocumentAt: url)
+        }
+        return .failure(FolderAccessDeniedError(fileURL: url))
     }
 
     /// Discards the read in progress, if any.

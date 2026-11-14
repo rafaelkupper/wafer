@@ -114,7 +114,7 @@ def verify(app, expected_identity=None):
         entitlements = plistlib.loads(raw) if raw else {}
         if any(entitlements.get(key) for key in FORBIDDEN_HELPER_ENTITLEMENTS):
             raise SystemExit(f"Unexpected sandbox or debug entitlement on Sparkle helper: {helper}")
-    run(ROOT / "scripts/verify-appex.sh", app)
+    run(ROOT / "scripts/verify-appex.sh", "--release-identity", app)
     run("xcrun", "stapler", "validate", app)
     run("spctl", "--assess", "--type", "execute", "--verbose=4", app)
 

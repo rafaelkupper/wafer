@@ -156,6 +156,27 @@ final class LinkTargetOpenerTests: XCTestCase {
         XCTAssertEqual(revealed, [tool])
     }
 
+    func testFilesOutsideTheGrantedFoldersAskForAccessBeforeOpening() throws {
+        let image = try makeFile("photo.png")
+        _ = installSandboxedFolderAccess()
+        let opener = makeOpener()
+
+        FolderAccessFlow.chooseFolder = { _, _, completion in completion(nil) }
+        opener.handle(.otherFile(image))
+        XCTAssertEqual(opened, [])
+
+        var requests: [FolderAccessRequest] = []
+        FolderAccessFlow.chooseFolder = { request, _, completion in
+            requests.append(request)
+            completion(request.suggestedFolder)
+        }
+        opener.handle(.otherFile(image))
+
+        XCTAssertEqual(requests.map(\.suggestedFolder?.path), [directory.url.path])
+        XCTAssertEqual(opened, [image])
+        XCTAssertEqual(asked, [])
+    }
+
     func testMarkdownAndUnresolvedTargets() throws {
         let opener = makeOpener()
         let note = try makeFile("Note.md")
