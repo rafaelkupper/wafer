@@ -33,12 +33,14 @@ final class AppMenuBuilderTests: XCTestCase {
         let appMenu = try XCTUnwrap(menu.items[0].submenu)
         XCTAssertEqual(
             appMenu.items.map(\.title),
-            ["Check for Updates…", "Automatically Check for Updates", "", "Quit Wafer"]
+            ["Check for Updates…", "Automatically Check for Updates", "", "Folder Access…", "", "Quit Wafer"]
         )
         XCTAssertEqual(appMenu.items[0].action, #selector(UpdateController.checkForUpdates(_:)))
         XCTAssertTrue(appMenu.items[0].target === UpdateController.shared)
         XCTAssertEqual(appMenu.items[1].action, #selector(UpdateController.toggleAutomaticallyChecksForUpdates(_:)))
         XCTAssertTrue(appMenu.items[1].target === UpdateController.shared)
+        XCTAssertEqual(appMenu.items[3].action, #selector(FolderAccessWindowController.showFolderAccess(_:)))
+        XCTAssertTrue(appMenu.items[3].target is FolderAccessWindowController)
 
         let themeMenu = try XCTUnwrap(menu.items[4].submenu)
         XCTAssertTrue(themeMenu.delegate is AppearanceMenuController)

@@ -724,6 +724,61 @@ private final class FolderAccessLoadCounter: @unchecked Sendable {
     }
 }
 
+@MainActor
+final class FolderAccessWindowControllerTests: XCTestCase {
+    func testTheWindowListsGrantsWithTheirAccessAndRemovesTheSelectedOne() throws {
+        let notes = try TemporaryTestDirectory()
+        defer { notes.remove() }
+        let library = try TemporaryTestDirectory()
+        defer { library.remove() }
+        let unmounted = URL(fileURLWithPath: "/Volumes/WaferTestUnmounted-\(UUID().uuidString)/Notes", isDirectory: true)
+        let defaults = makeTestUserDefaults()
+        defaults.set([["id": "away", "path": unmounted.path, "bookmark": FakeSecurityScopedBookmarks.bookmark(for: unmounted), "readOnly": true]],
+                     forKey: "folderAccessGrants")
+        let bookmarks = FakeSecurityScopedBookmarks()
+        bookmarks.unresolvablePaths = [unmounted.path]
+        let access = installSandboxedFolderAccess(defaults: defaults, bookmarks: bookmarks)
+        access.store.grantAccess(to: notes.url)
+        access.store.grantAccess(to: library.url, mode: .readWrite)
+        let controller = FolderAccessWindowController()
+        defer { controller.windowForTesting?.close() }
+
+        controller.showFolderAccess(nil)
+
+        XCTAssertEqual(controller.windowForTesting?.title, "Folder Access")
+        XCTAssertEqual(Set(controller.rowsForTesting), [
+            [notes.url.path, "Read only", ""], [library.url.path, "Read and write", ""], [unmounted.path, "Read only", "Not available"],
+        ])
+        XCTAssertFalse(controller.isRemoveEnabledForTesting, "nothing selected")
+        let row = try XCTUnwrap(controller.rowsForTesting.firstIndex { $0[0] == notes.url.path })
+        controller.selectRowForTesting(row)
+        XCTAssertTrue(controller.isRemoveEnabledForTesting)
+
+        controller.removeSelectedForTesting()
+
+        XCTAssertFalse(controller.rowsForTesting.contains { $0[0] == notes.url.path })
+        XCTAssertFalse(access.store.covers(notes.url.appendingPathComponent("Plan.md")))
+        XCTAssertEqual(bookmarks.stopped, [notes.url.path])
+        XCTAssertFalse((defaults.array(forKey: "folderAccessGrants") as? [[String: Any]] ?? []).contains { $0["path"] as? String == notes.url.path },
+                       "the bookmark is deleted")
+
+        access.store.grantAccess(to: notes.url)
+        XCTAssertTrue(controller.rowsForTesting.contains { $0[0] == notes.url.path }, "the list follows new grants")
+    }
+
+    func testOutsideTheSandboxTheWindowExplainsThatNothingIsGranted() {
+        let store = FolderAccessStore(defaults: makeTestUserDefaults(), bookmarks: FakeSecurityScopedBookmarks(), isSandboxed: false)
+        let controller = FolderAccessWindowController(store: { store })
+        defer { controller.windowForTesting?.close() }
+
+        controller.showFolderAccess(nil)
+
+        XCTAssertTrue(controller.rowsForTesting.isEmpty)
+        XCTAssertTrue(controller.summaryForTesting.contains("not sandboxed"))
+        XCTAssertFalse(controller.isRemoveEnabledForTesting)
+    }
+}
+
 /// The window notice, sidebar summaries, and in-window navigation under a
 /// sandboxed store.
 @MainActor

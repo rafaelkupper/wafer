@@ -8,6 +8,7 @@ enum AppMenuBuilder {
     private static let appearanceMenuController = AppearanceMenuController()
     private static let libraryMenuController = LibraryMenuController()
     private static let quickOpenPanelController = QuickOpenPanelController()
+    private static let folderAccessWindowController = FolderAccessWindowController()
 
     static func makeMainMenu(windowsMenu: NSMenu, appDelegate: AppDelegate) -> NSMenu {
         let mainMenu = NSMenu(title: "MainMenu")
@@ -121,6 +122,15 @@ enum AppMenuBuilder {
         )
         automaticUpdateChecksItem.target = UpdateController.shared
         menu.addItem(automaticUpdateChecksItem)
+
+        menu.addItem(.separator())
+        let folderAccessItem = NSMenuItem(
+            title: "Folder Access…",
+            action: #selector(FolderAccessWindowController.showFolderAccess(_:)),
+            keyEquivalent: ""
+        )
+        folderAccessItem.target = folderAccessWindowController
+        menu.addItem(folderAccessItem)
 
         menu.addItem(.separator())
         menu.addItem(
