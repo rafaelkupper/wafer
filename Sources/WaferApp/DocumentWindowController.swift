@@ -5,6 +5,7 @@ import WebKit
 
 @MainActor
 private final class DocumentWindow: NSWindow {
+    private var closeInFlight = false
     weak var findResponder: WebKitReaderViewController?
     weak var librarySearchResponder: DocumentWindowController?
     weak var exportResponder: DocumentWindowController?
@@ -60,9 +61,19 @@ private final class DocumentWindow: NSWindow {
     /// Close button and Cmd-W on the last tab: save editor text first; a
     /// cancelled save keeps the window open.
     override func performClose(_ sender: Any?) {
-        if let controller = windowController as? DocumentWindowController, !controller.prepareToCloseWindow() {
+        guard !closeInFlight else { return }
+        guard let controller = windowController as? DocumentWindowController else {
+            super.performClose(sender)
             return
         }
+        closeInFlight = true
+        controller.prepareToCloseWindow { success in
+            self.closeInFlight = false
+            if success { self.finishPerformClose(sender) }
+        }
+    }
+
+    private func finishPerformClose(_ sender: Any?) {
         super.performClose(sender)
     }
 
@@ -329,8 +340,9 @@ class DocumentWindowController: NSWindowController, ThemeApplying, NSUserInterfa
     #endif
 
     /// Saves unsaved editor text before the window closes.
-    func prepareToCloseWindow() -> Bool {
-        (document as? MarkdownReaderDocument)?.flushEdits(interactive: true) ?? true
+    func prepareToCloseWindow(completion: @escaping @MainActor (Bool) -> Void) {
+        guard let document = document as? MarkdownReaderDocument else { completion(true); return }
+        document.flushEdits(interactive: true, completion: completion)
     }
 
     func installTabStrip(_ stripView: NSView, height: CGFloat) {

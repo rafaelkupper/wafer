@@ -45,12 +45,12 @@ final class MarkdownSourceLoader {
     var deferredReload: Bool?
     private let load: Load
     private let diskState: MarkdownDiskState
-    private let finishPendingSave: @MainActor () -> Void
+    private let finishPendingSave: @MainActor (@escaping @MainActor () -> Void) -> Void
 
     init(
         load: @escaping Load,
         diskState: MarkdownDiskState = MarkdownDiskState(),
-        finishPendingSave: @escaping @MainActor () -> Void = {}
+        finishPendingSave: @escaping @MainActor (@escaping @MainActor () -> Void) -> Void = { $0() }
     ) {
         self.load = load
         self.diskState = diskState
@@ -74,16 +74,17 @@ final class MarkdownSourceLoader {
             let result = Result { try loader(url) }
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.loadGeneration == generation else { return }
-                // Applying a read may wait for a save. Finish it before
-                // checking the revision, including its undelivered result.
-                self.finishPendingSave()
-                guard self.loadGeneration == generation else { return }
-                guard self.diskState.revision == diskRevision else {
-                    self.read(state, completion: completion)
-                    return
+                // Deliver save bookkeeping before checking the revision,
+                // without blocking the main actor on the worker.
+                self.finishPendingSave {
+                    guard self.loadGeneration == generation else { return }
+                    guard self.diskState.revision == diskRevision else {
+                        self.read(state, completion: completion)
+                        return
+                    }
+                    self.state = .idle
+                    completion(Self.explainingSandboxDenial(of: result, for: state))
                 }
-                self.state = .idle
-                completion(Self.explainingSandboxDenial(of: result, for: state))
             }
         }
     }

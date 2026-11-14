@@ -18,7 +18,7 @@ final class MarkdownSaveBoundsTests: XCTestCase {
             expectedFingerprint: originalFingerprint, format: .default, overwrite: false
         )
 
-        let result = MarkdownSaveWorker().perform(request)
+        let result = MarkdownSaveWorker().performAndWait(request)
 
         guard case .conflict(.changedOnDisk, let diskData) = result else {
             return XCTFail("An oversized disk file must be reported as changed on disk")
@@ -78,7 +78,7 @@ final class MarkdownSaveBoundsTests: XCTestCase {
             }
         )
         let text = String(repeating: "x", count: MarkdownSourceLoader.maximumSourceByteCount + 1)
-        XCTAssertEqual(session.save(text, interactive: true), .keptInMemory)
+        XCTAssertEqual(session.saveAndWait(text, interactive: true), .keptInMemory)
         XCTAssertEqual(prompts, 2)
         XCTAssertTrue(session.hasUnsavedChanges(text))
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "original")
@@ -94,11 +94,11 @@ final class MarkdownSaveBoundsTests: XCTestCase {
             fileURL: url, text: "original", fingerprint: FileFingerprint.sha256Hex(for: Data("original".utf8)),
             format: format, resolveConflict: { kind, _ in errors.append(kind); return .cancel }
         )
-        XCTAssertEqual(session.save(text, interactive: true), .saved)
+        XCTAssertEqual(session.saveAndWait(text, interactive: true), .saved)
         XCTAssertEqual(try url.resourceValues(forKeys: [.fileSizeKey]).fileSize, MarkdownSourceLoader.maximumSourceByteCount)
         let savedFingerprint = session.savedFingerprint
         let oversized = text + extra
-        XCTAssertEqual(session.save(oversized, interactive: true), .keptInMemory)
+        XCTAssertEqual(session.saveAndWait(oversized, interactive: true), .keptInMemory)
         XCTAssertTrue(session.hasUnsavedChanges(oversized))
         XCTAssertTrue(session.savedText == text)
         XCTAssertEqual(session.savedFingerprint, savedFingerprint)
@@ -115,7 +115,7 @@ final class MarkdownSaveBoundsTests: XCTestCase {
             fileURL: url, snapshot: .init(text: oversized, revision: nil), savedText: text,
             expectedFingerprint: savedFingerprint, format: format, overwrite: true
         )
-        guard case .conflict(.writeFailed, _) = MarkdownSaveWorker().perform(overwrite) else {
+        guard case .conflict(.writeFailed, _) = MarkdownSaveWorker().performAndWait(overwrite) else {
             return XCTFail("Overwrite must enforce the same encoded limit")
         }
     }

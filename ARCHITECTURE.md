@@ -88,15 +88,15 @@ The editor keeps its text LF-only: pasted, dropped, or inserted CR and CRLF beco
 
 When the save runs:
 
-- Autosave is a 1 s debounce after the last edit. It saves in the background (below); if that finds a conflict, an interactive save on the main thread asks.
+- Autosave is a 1 s debounce after the last edit. It saves in the background (below); if that finds a conflict, an interactive save asks on the main actor.
 - App deactivation saves in the background without prompting.
-- `Cmd-S`, leaving edit mode, `Cmd-R`, tab close, window close (`DocumentWindow.performClose` and `prepareToCloseWindow`), and quit (`applicationShouldTerminate`) save interactively, wait for the result, and can be cancelled.
+- `Cmd-S`, leaving edit mode, `Cmd-R`, tab close, window close (`DocumentWindow.performClose` and `prepareToCloseWindow`), and quit (`applicationShouldTerminate`) save interactively and resume from a completion after the write, without waiting on the main thread. Cancel keeps unsaved text in the editor and cancels the action.
 - Navigation saves before it reads the next file, and again before the editor switches to it, because the editor stays editable while the file is read. If that second save fails or is cancelled, the navigation is abandoned and the current file, text, and history stay.
-- `close()` makes a final non-interactive attempt.
+- `close()` also defers teardown until an interactive flush completes; cancellation keeps the document open. Repeated close requests share one flush. Tab and window close hooks continue only after their flush succeeds. Quit returns `.terminateLater`, then calls `reply(toApplicationShouldTerminate:)` once all editors are settled; another quit request joins that operation, including when a close is already saving.
 
 How the write is made:
 
-1. The main thread copies the editor text and its revision (a snapshot). The file I/O runs on `MarkdownSaveWorker`, one serial queue per document, so saves never overlap. A save that waits for its result first lets a save in flight finish, then writes only newer text. Results and conflict prompts are handled on the main actor. A background save requested while one runs starts when it finishes.
+1. The main thread copies the editor text and its revision (a snapshot). The file I/O runs on `MarkdownSaveWorker`, one serial queue per document, so saves never overlap. A flush asynchronously waits for earlier writes and their bookkeeping, then saves newer editor text until no unsaved revision remains. Repeated flush requests coalesce and receive their completions together. Results and conflict prompts are handled on the main actor; overwrite and Save a Copy writes also run on the worker. A background save requested while one runs starts when it finishes. A window close or quit rechecks earlier documents after flushing later ones, since editors remain usable during the writes.
 2. Unchanged text writes nothing. Before staging a save or writing a copy, the save path checks the encoded byte count against the same 32,000,000-byte limit used for opening, including byte-order marks, UTF-16, and restored CRLF line endings. An oversized save leaves the original and unsaved editor text intact and asks the user to shorten the document.
 3. The encoded bytes are written to an item-replacement directory. Immediately before they replace the file, the worker reads and hashes the file on disk through `BoundedFileReader`, with the same 32 MB limit as opening. An oversized disk version is a changed-on-disk conflict without retaining its bytes. A mismatch with the last loaded or saved fingerprint is a conflict, and so are a missing file and a read or write failure. The file's identity, size, and modification time are compared before and after that read, so a write that lands while it is hashed is caught too; only the moment between that check and the swap remains. NSFileCoordinator is not used, because most programs that write these files (editors, agents) do not coordinate.
 4. `FileManager.replaceItemAt` swaps the new file in, keeping permissions and creation date. Symlinks are resolved first. There is no in-place fallback: when the replacement fails, the original is left as it was (and moved back if the failed swap moved it aside), and the error reaches the prompt as a write failure.
@@ -109,7 +109,7 @@ Measured on 2026-11-13 with `EditSavePerformanceTests` (`WAFER_PERF_TESTS=1`; a 
 | Debug | 19.8 and 20.0 ms median, 22.6 to 38.3 ms max | 3.6 ms median, 4.6 to 14.1 ms max |
 | Release | 19.5 ms median, 99.2 ms max | 4.2 ms median, 8.0 ms max |
 
-The main thread still copies the text for the snapshot and applies the result. Saves that wait for their result (`Cmd-S`, closing) still take about 17 to 20 ms on the main thread for this document.
+The main thread still copies the text for the snapshot and applies the result. These historical measurements predate asynchronous interactive flushes (2026-11-14). Interactive saves and reload delivery no longer synchronously drain the worker. A reload waits through a completion for save bookkeeping, then checks the captured disk revision and repeats a read made stale by a save. Deterministic blocked-writer tests cover this ordering and main-actor responsiveness; no new throughput or latency measurements were made.
 
 The file monitor stays active while editing:
 

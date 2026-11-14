@@ -22,6 +22,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let workspaceNotificationCenter: NotificationCenter
     private let retryUnavailableAccess: @MainActor () -> Void
     private var volumeMountObserver: NSObjectProtocol?
+    private var terminationSaveInFlight = false
+    var flushForTermination: @MainActor (@escaping @MainActor (Bool) -> Void) -> Void = MarkdownReaderDocument.flushAllEdits
+    var replyToTermination: @MainActor (NSApplication, Bool) -> Void = { $0.reply(toApplicationShouldTerminate: $1) }
 
     init(
         openURLs: @escaping URLOpenHandler = MarkdownDocumentOpener.open(urls:),
@@ -92,7 +95,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Edit mode autosaves; flush anything typed in the last second and let a
     /// cancelled save-conflict prompt cancel the quit.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        MarkdownReaderDocument.flushAllEdits() ? .terminateNow : .terminateCancel
+        guard !terminationSaveInFlight else { return .terminateLater }
+        terminationSaveInFlight = true
+        // Reply on a later turn even when all documents are already saved.
+        DispatchQueue.main.async {
+            self.flushForTermination { success in
+                self.terminationSaveInFlight = false
+                self.replyToTermination(sender, success)
+            }
+        }
+        return .terminateLater
     }
 
     func applicationWillTerminate(_ notification: Notification) {
