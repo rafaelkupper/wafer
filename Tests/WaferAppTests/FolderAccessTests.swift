@@ -777,7 +777,9 @@ final class FolderAccessFlowTests: XCTestCase {
         XCTAssertNil(requests.first?.outOfRange?.startingFolder, "the panel never opens in a hidden folder")
     }
 
-    func testCancelledOrUnrelatedChoicesDoNotResume() throws {
+    /// A folder that does not hold the file is not granted: the chooser is
+    /// asked again with the reason, until the user picks one that does or cancels.
+    func testAChosenFolderWithoutTheFileIsNotGrantedAndTheUserMayChooseAgainOrCancel() throws {
         let directory = try TemporaryTestDirectory()
         defer { directory.remove() }
         let unrelated = try TemporaryTestDirectory()
@@ -785,13 +787,75 @@ final class FolderAccessFlowTests: XCTestCase {
         let target = directory.url.appendingPathComponent("Linked.md")
         let document = directory.url.appendingPathComponent("Plan.md")
         let access = installSandboxedFolderAccess()
+        var requests: [FolderAccessRequest] = []
+        var choices: [URL?] = []
+        FolderAccessFlow.chooseFolder = { request, _, completion in
+            requests.append(request)
+            completion(choices.isEmpty ? nil : choices.removeFirst())
+        }
 
-        FolderAccessFlow.chooseFolder = { _, _, completion in completion(nil) }
         XCTAssertFalse(FolderAccessFlow.ensureAccess(to: target, requestedBy: document, window: nil) { XCTFail("resumed after cancel") })
-        FolderAccessFlow.chooseFolder = { _, _, completion in completion(unrelated.url) }
+        XCTAssertEqual(requests.count, 1)
+
+        requests = []
+        choices = [unrelated.url, nil]
         XCTAssertFalse(FolderAccessFlow.ensureAccess(to: target, requestedBy: document, window: nil) { XCTFail("resumed for another folder") })
 
+        let folder = target.deletingLastPathComponent()
+        XCTAssertEqual(requests.map(\.retry), [nil, FolderAccessRequest.Retry(
+            title: "“\(unrelated.url.lastPathComponent)” doesn't contain “Linked.md”",
+            message: "Wafer remembers a folder only if it contains the file. Choose “\(folder.lastPathComponent)” (\(folder.path)) or a folder above it."
+        )], "a folder without the file asks again, saying why")
+        XCTAssertEqual(Set(requests.map(\.suggestedFolder)), [folder], "choosing again starts at the file's folder")
+        XCTAssertEqual(Set(requests.map(\.message)).count, 1)
+        XCTAssertTrue(access.store.folderGrants.isEmpty, "the folder without the file is not remembered")
+        XCTAssertFalse(access.store.covers(unrelated.url.appendingPathComponent("Other.md")))
         XCTAssertEqual(access.store.unreadableFiles(neededByDocumentAt: document), [FileIdentity.normalized(target)])
+
+        requests = []
+        choices = [unrelated.url, directory.url]
+        var resumed = 0
+        XCTAssertFalse(FolderAccessFlow.ensureAccess(to: target, requestedBy: document, window: nil) { resumed += 1 })
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(resumed, 1, "the folder that holds the file is granted and the link resumes")
+        XCTAssertEqual(access.store.folderGrants.map(\.folderURL.path), [directory.url.path])
+    }
+
+    func testGrantAccessForADocumentDoesNotGrantAFolderWithNoneOfTheFilesItNeeds() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let unrelated = try TemporaryTestDirectory()
+        defer { unrelated.remove() }
+        let document = directory.url.appendingPathComponent("Plan.md")
+        let images = directory.url.appendingPathComponent("Images", isDirectory: true)
+        let access = installSandboxedFolderAccess()
+        access.store.recordRefusedImage(images.appendingPathComponent("image.png"), forDocumentAt: document)
+        access.store.recordLinkedFiles([directory.url.appendingPathComponent("Next.md")], forDocumentAt: document)
+        var requests: [FolderAccessRequest] = []
+        var choices: [URL?] = [unrelated.url, nil]
+        FolderAccessFlow.chooseFolder = { request, _, completion in
+            requests.append(request)
+            completion(choices.isEmpty ? nil : choices.removeFirst())
+        }
+        var granted: [Bool] = []
+
+        FolderAccessFlow.requestAccess(forDocumentAt: document, window: nil) { granted.append($0) }
+
+        XCTAssertEqual(requests.map(\.retry), [nil, FolderAccessRequest.Retry(
+            title: "“\(unrelated.url.lastPathComponent)” doesn't contain the files “Plan.md” needs",
+            message: "Wafer remembers a folder only if it contains one of them. Choose “\(directory.url.lastPathComponent)” (\(directory.url.path)) or a folder above it."
+        )])
+        XCTAssertEqual(granted, [false])
+        XCTAssertTrue(access.store.folderGrants.isEmpty)
+
+        requests = []
+        choices = [images]
+        FolderAccessFlow.requestAccess(forDocumentAt: document, window: nil) { granted.append($0) }
+
+        XCTAssertEqual(requests.count, 1, "a folder that holds some of them is enough")
+        XCTAssertEqual(granted, [false, true])
+        XCTAssertEqual(access.store.folderGrants.map(\.folderURL.path), [images.path])
+        XCTAssertEqual(access.store.unreadableFiles(neededByDocumentAt: document), [FileIdentity.normalized(directory.url.appendingPathComponent("Next.md"))])
     }
 
     func testGrantAccessForADocumentOffersItsSuggestedFolder() throws {
