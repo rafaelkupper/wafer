@@ -812,9 +812,14 @@ final class MarkdownReaderDocument: NSDocument {
         // user's grant first; the navigation resumes once it covers the file.
         // While editing, the file opens in the editor, so the grant must let
         // Wafer save it too.
+        // A Back or Forward that waits for a grant carries history from now;
+        // if another navigation finished meanwhile, it opens as a new step.
+        let requestGeneration = navigationGeneration
         guard FolderAccessFlow.ensureAccess(to: normalizedURL, requestedBy: fileURL, window: windowForSheet,
                                             access: isEditing ? .readWrite : .readOnly, onGranted: { [weak self] in
-            self?.navigate(to: url, anchorID: anchorID, historyAfterNavigation: historyAfterNavigation)
+            guard let self else { return }
+            let history = self.navigationGeneration == requestGeneration ? historyAfterNavigation : nil
+            self.navigate(to: url, anchorID: anchorID, historyAfterNavigation: history)
         }) else {
             return
         }

@@ -253,26 +253,41 @@ final class AsyncSaveFlushTests: XCTestCase {
         defer { directory.remove() }
         let url = try directory.createTextFile(named: "Note.md", contents: "old")
         let gate = ControlledSaveWriter()
-        gate.release()
-        var document: MarkdownReaderDocument?
         var conflicts = 0
-        let created = try makeDocument(at: url, gate: gate, resolveConflict: { _, _ in
+        let document = try makeDocument(at: url, gate: gate, resolveConflict: { _, _ in
             conflicts += 1
-            // Typing that landed while the conflicting write was on the worker.
-            if conflicts == 1 { document?.editorControllerForTesting?.replaceAllUndoably(with: "mine, then more") }
             return .discardMine
         })
-        document = created
-        defer { gate.release(); created.close() }
-        created.editorControllerForTesting?.replaceAllUndoably(with: "mine")
+        defer { gate.release(); document.close() }
+        let editor = try XCTUnwrap(document.editorControllerForTesting)
+        editor.replaceAllUndoably(with: "mine")
         try Data("theirs".utf8).write(to: url)
 
-        XCTAssertTrue(created.flushEditsAndWait(interactive: true))
+        let flushed = expectation(description: "the flush stops so the raced text stays recoverable")
+        document.flushEdits(interactive: true) { success in
+            XCTAssertFalse(success, "a navigation, close or quit waiting on this flush must not continue")
+            flushed.fulfill()
+        }
+        wait(for: [gate.entered], timeout: 5)
+        // Typing that lands while the conflicting write is on the worker,
+        // in its own run-loop turn so it is its own undo step.
+        editor.replaceAllUndoably(with: "mine, then more")
+        let typed = expectation(description: "typing turn ended")
+        DispatchQueue.main.async { typed.fulfill() }
+        wait(for: [typed], timeout: 5)
+        gate.release()
+        wait(for: [flushed], timeout: 5)
+
         XCTAssertEqual(conflicts, 1)
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "theirs",
                        "the disk version the user chose must not be overwritten")
-        XCTAssertEqual(created.editorControllerForTesting?.text, "theirs")
+        XCTAssertEqual(editor.text, "theirs")
         XCTAssertEqual(gate.writes, [])
+        XCTAssertEqual(editor.undoManagerForTesting.undoActionName, "Use Disk Version")
+        editor.undoManagerForTesting.undo()
+        XCTAssertEqual(editor.text, "mine, then more", "the newer text is one Undo away")
+        // Test-owned cleanup: settle on the disk text before close flushes.
+        editor.load(text: "theirs")
     }
 
     func testUnsupportedNavigationLeavesAnInFlightNavigationAlone() throws {

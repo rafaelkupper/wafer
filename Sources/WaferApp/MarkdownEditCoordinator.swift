@@ -189,17 +189,23 @@ final class MarkdownEditCoordinator {
             case .unchanged, .saved:
                 break
             case .reverted(let text):
-                // The user chose the disk version. Text typed while the save
-                // or copy was on the worker belongs to the discarded edits; it
-                // must not be saved over the disk version, so it stays one
-                // Undo away instead.
                 if editor.revision == snapshot.revision {
                     editor.replaceTextPreservingPosition(text)
+                    session.editorShowsSavedText(revision: editor.revision)
+                    self.renderLive()
                 } else {
-                    editor.replaceAllUndoably(with: text)
+                    // The user chose the disk version, or saved a copy of the
+                    // snapshot, while newer text was typed. Never save that
+                    // text over the disk version: show the disk version with
+                    // the newer text one Undo away, and stop the action that
+                    // asked for the flush (navigation, close, quit) so the
+                    // undo history survives.
+                    editor.replaceAllUndoably(with: text, actionName: "Use Disk Version")
+                    session.editorShowsSavedText(revision: editor.revision)
+                    self.renderLive()
+                    self.completeFlush(false)
+                    return
                 }
-                session.editorShowsSavedText(revision: editor.revision)
-                self.renderLive()
             case .keptInMemory:
                 self.completeFlush(false)
                 return

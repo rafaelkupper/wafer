@@ -226,8 +226,8 @@ final class MarkdownSourceEditorViewController: NSViewController, NSTextViewDele
         isApplyingProgrammaticScroll = false
     }
 
-    /// Replaces all text as one undoable edit (Revert Edits).
-    func replaceAllUndoably(with text: String) {
+    /// Replaces all text as one undoable edit.
+    func replaceAllUndoably(with text: String, actionName: String = "Revert Edits") {
         loadViewIfNeeded()
         let fullRange = NSRange(location: 0, length: textStorage.length)
         guard textView.shouldChangeText(in: fullRange, replacementString: text) else {
@@ -235,7 +235,7 @@ final class MarkdownSourceEditorViewController: NSViewController, NSTextViewDele
         }
         textStorage.replaceCharacters(in: fullRange, with: text)
         textView.didChangeText()
-        editorUndoManager.setActionName("Revert Edits")
+        editorUndoManager.setActionName(actionName)
     }
 
     func focus() {

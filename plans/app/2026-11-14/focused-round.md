@@ -90,6 +90,17 @@ Findings:
   - IPv4: `192.0.0.0/24`, the TEST-NETs, `198.18.0.0/15` and broadcast;
   - IPv6: documentation and discard-only.
 - N2: `reset(for:)` clears the in-flight scroll sync. Callbacks check their generation before touching current-page state.
+- Single-reviewer check (Fable, `f14abb3..68fd739`): all seven findings were fixed. It found one blocking defect and four low ones, all fixed in `d3d7b6d` and `8135054`, with regression tests that fail without the fixes:
+  - A, blocking: "Use Disk Version" or "Save a Copy…" after a conflict could save text typed during the conflicting write over the disk version.
+  - B: an unsupported navigation, or one waiting for a grant, stranded an in-flight navigation.
+  - C: metadata-only changes counted as content changes.
+  - D: Retry Library no longer forced a full reread.
+  - E: the Library rule covered only the user's own `~/Library`, not `/Library` or other users' Library folders.
+- The re-check of `d3d7b6d` found no blocking issues once `8135054` was included. Its follow-ups were fixed:
+  - A raced revert now stops the waiting action (navigation, close, quit). The newer text stays recoverable as "Undo Use Disk Version", and a test covers it.
+  - A Back or Forward that waits for a grant drops its stale history if another navigation finished meanwhile.
+  - The Library-rule docs and comments were updated.
+- Not covered by tests: the controller and menu wiring for metadata-only snapshot updates and for Retry Library's full reread. The scanner and diff behavior is tested. On APFS a same-size, same-mtime edit always changes the status-change time, so a controller-level test would need a non-APFS volume.
 - Not done: the Open Recent `open(2)` probe is still on the main thread (its caller is in `AppMenuBuilder.swift`). File > Retry Library while the library's drive is disconnected still offers the folder panel.
 
 ## Verification

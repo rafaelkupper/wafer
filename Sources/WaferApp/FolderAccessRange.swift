@@ -17,8 +17,9 @@ enum FolderAccessSuggestion: Equatable {
 /// folder, a volume root, a top-level folder such as /Users, or anything
 /// above them), or one that holds settings and secrets rather than
 /// documents: a hidden folder (a path component starting with "."), such
-/// as ~/.ssh, or anything in the home folder's Library, such as Keychains
-/// or Application Support. The cloud drives macOS keeps in the Library are
+/// as ~/.ssh, or a Library folder or anything in it (the home folder's,
+/// such as Keychains or Application Support, another user's, or the system
+/// `/Library`). The cloud drives macOS keeps in a home Library are
 /// the exception: folders inside iCloud Drive (`Mobile Documents/com~apple~CloudDocs`)
 /// and inside a cloud storage provider's folder (`CloudStorage/<provider>`)
 /// may be offered, but not those roots, which are whole drives, like a disk.
