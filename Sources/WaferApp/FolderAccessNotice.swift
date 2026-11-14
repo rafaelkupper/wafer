@@ -168,9 +168,12 @@ enum FolderAccessFlow {
     private static func outOfRangeRequest(for file: URL, requestedBy documentURL: URL?, range: FolderAccessRange) -> FolderAccessRequest {
         let name = file.lastPathComponent
         let documentFolder = documentURL.map { FileIdentity.normalized($0).deletingLastPathComponent() }
+        // File > Open… grants a Markdown document by itself, with no folder.
+        let alternative = MarkdownDocumentOpener.supports(url: file)
+            ? " To read only this document, open it with File > Open…." : ""
         return FolderAccessRequest(
             suggestedFolder: nil,
-            message: "“\(name)” (\(file.path)) is outside the folders Wafer offers. Wafer never offers your home folder, a whole disk, or a folder above them, because a document's links decide which file is asked for. To allow it anyway, choose a folder that contains it yourself.",
+            message: "“\(name)” (\(file.path)) is outside the folders Wafer offers. Wafer never offers your home folder, a whole disk, or a folder above them, because a document's links decide which file is asked for.\(alternative) To allow it anyway, choose a folder that contains it yourself.",
             outOfRange: .init(
                 title: "“\(name)” is outside the folders Wafer offers",
                 panelMessage: "Choose a folder that contains “\(name)” (\(file.path)).",

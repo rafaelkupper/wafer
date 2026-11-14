@@ -648,6 +648,7 @@ final class FolderAccessFlowTests: XCTestCase {
             XCTAssertEqual(request.outOfRange?.startingFolder, documentFolder,
                            "a panel the user asks for anyway opens at the document's folder, not \(target.path)")
             XCTAssertTrue(request.message.contains("(\(target.path)) is outside the folders Wafer offers"), request.message)
+            XCTAssertTrue(request.message.contains("open it with File > Open…"), "a document can be opened by itself")
         }
 
         requests = []
