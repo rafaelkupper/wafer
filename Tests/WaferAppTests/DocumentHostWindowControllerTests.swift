@@ -58,7 +58,7 @@ final class DocumentHostWindowControllerTests: XCTestCase {
         XCTAssertFalse(library.isScanning)
         XCTAssertEqual(library.files.count, 2)
 
-        let firstDocument = MarkdownReaderDocument(scrollStateStore: scrollStore)
+        let firstDocument = MarkdownReaderDocument(librarySnapshotProvider: { library.snapshot }, scrollStateStore: scrollStore)
         let host = DocumentHostWindowController(
             tab: DocumentTab(document: firstDocument, readerController: RecordingReaderViewController()),
             libraryController: library,
