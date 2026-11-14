@@ -19,6 +19,12 @@ struct LinkTargetOpener {
     var revealInFinder: @MainActor (URL) -> Void = { NSWorkspace.shared.activateFileViewerSelecting([$0]) }
     var confirmOpeningFile: @MainActor (URL) -> FileDecision = LinkTargetOpener.askBeforeOpening
     var openMarkdownFile: @MainActor (URL) -> Void = { MarkdownDocumentOpener.open(urls: [$0]) }
+    /// True when the file is readable now. Otherwise asks for a folder grant
+    /// and calls the closure once one covers the file. Another app can open,
+    /// and Finder can show, only files the App Sandbox lets Wafer read.
+    var ensureAccess: @MainActor (URL, _ onGranted: @escaping @MainActor () -> Void) -> Bool = { url, onGranted in
+        FolderAccessFlow.ensureAccess(to: url, requestedBy: nil, window: NSApp.keyWindow, onGranted: onGranted)
+    }
 
     func handle(_ target: LinkTarget) {
         switch target {
@@ -30,6 +36,9 @@ struct LinkTargetOpener {
         case .markdownFile(let url):
             openMarkdownFile(url)
         case .otherFile(let url):
+            guard ensureAccess(url, { handle(target) }) else {
+                return
+            }
             if Self.opensWithoutConfirmation(url) {
                 openURL(url)
                 return

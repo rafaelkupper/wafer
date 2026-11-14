@@ -524,6 +524,35 @@ final class FolderAccessNoticeTests: XCTestCase {
         XCTAssertEqual(selected, [linked])
     }
 
+    func testNavigatingToAFileOutsideTheGrantsResumesAfterTheGrant() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let fileURL = try directory.createTextFile(named: "Plan.md", contents: "# Plan")
+        let nextFolder = directory.url.appendingPathComponent("Other", isDirectory: true)
+        try FileManager.default.createDirectory(at: nextFolder, withIntermediateDirectories: true)
+        let next = nextFolder.appendingPathComponent("Next.md")
+        try Data("# Next".utf8).write(to: next)
+        let access = installSandboxedFolderAccess()
+        access.store.noteUserSelected([fileURL])
+        let (document, _, _) = try makeHostedDocument(fileURL)
+        defer { document.close() }
+
+        FolderAccessFlow.chooseFolder = { _, _, completion in completion(nil) }
+        document.navigateInCurrentWindow(to: next)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        XCTAssertEqual(document.fileURL, fileURL)
+
+        var requests: [FolderAccessRequest] = []
+        FolderAccessFlow.chooseFolder = { request, _, completion in
+            requests.append(request)
+            completion(request.suggestedFolder)
+        }
+        document.navigateInCurrentWindow(to: next)
+
+        XCTAssertEqual(requests.map(\.suggestedFolder.path), [nextFolder.path])
+        waitUntil { document.fileURL == FileIdentity.normalized(next) }
+    }
+
     private static func webView(in view: NSView) -> WKWebView? {
         if let webView = view as? WKWebView { return webView }
         return view.subviews.lazy.compactMap { webView(in: $0) }.first

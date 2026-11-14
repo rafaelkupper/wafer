@@ -635,10 +635,13 @@ final class MarkdownReaderDocument: NSDocument {
         if sameDocumentAnchorID(for: url) == nil,
            let host,
            case .markdownFile(let markdownURL) = assetResolver.classify(url) {
-            host.openTab(
-                for: MarkdownDocumentOpener.normalizedFileURL(for: markdownURL),
-                anchorID: MarkdownDocumentOpener.anchorID(in: url)
-            )
+            let targetURL = MarkdownDocumentOpener.normalizedFileURL(for: markdownURL)
+            let anchorID = MarkdownDocumentOpener.anchorID(in: url)
+            // Under the App Sandbox a target outside the granted folders opens after a grant.
+            guard FolderAccessFlow.ensureAccess(to: targetURL, requestedBy: fileURL, window: host.window, onGranted: { [weak host] in
+                host?.openTab(for: targetURL, anchorID: anchorID)
+            }) else { return }
+            host.openTab(for: targetURL, anchorID: anchorID)
             return
         }
 
@@ -823,6 +826,14 @@ final class MarkdownReaderDocument: NSDocument {
                 navigateToAnchor(id: anchorID)
             }
             runDeferredReload()
+            return
+        }
+
+        // Under the App Sandbox a file outside the granted folders needs the
+        // user's grant first; the navigation resumes once it covers the file.
+        guard FolderAccessFlow.ensureAccess(to: normalizedURL, requestedBy: fileURL, window: windowForSheet, onGranted: { [weak self] in
+            self?.navigate(to: url, anchorID: anchorID, historyAfterNavigation: historyAfterNavigation)
+        }) else {
             return
         }
 
