@@ -11,8 +11,11 @@ protocol FileChangeMonitoring: AnyObject {
 @MainActor
 final class FileChangeMonitor: FileChangeMonitoring {
     private let fileURL: URL
+    private let maximumDeliveryDelay: TimeInterval
+    private var firstPendingEventTime: TimeInterval?
     private let debounceInterval: TimeInterval
     private let rearmPollInterval: TimeInterval
+    private let scheduler: LibraryRescanScheduler
     private let onChange: () -> Void
 
     private var isStarted = false
@@ -25,10 +28,14 @@ final class FileChangeMonitor: FileChangeMonitoring {
     init(
         fileURL: URL,
         debounceInterval: TimeInterval = 0.25,
+        maximumDeliveryDelay: TimeInterval = 1,
         rearmPollInterval: TimeInterval = 0.5,
+        scheduler: LibraryRescanScheduler = .main,
         onChange: @escaping () -> Void
     ) {
+        self.scheduler = scheduler
         self.fileURL = fileURL
+        self.maximumDeliveryDelay = maximumDeliveryDelay
         self.debounceInterval = debounceInterval
         self.rearmPollInterval = rearmPollInterval
         self.onChange = onChange
@@ -47,6 +54,7 @@ final class FileChangeMonitor: FileChangeMonitoring {
         isStarted = false
         pendingDebounceWorkItem?.cancel()
         pendingDebounceWorkItem = nil
+        firstPendingEventTime = nil
         stopRearmLoop()
         tearDownSource()
     }
@@ -55,6 +63,7 @@ final class FileChangeMonitor: FileChangeMonitoring {
 
     #if DEBUG
     var rearmDelayForTesting: TimeInterval { rearmDelay }
+    func writeEventForTesting() { handleFileEvent(.write) }
     func pollForReappearanceForTesting() { tryRearm() }
     #endif
 
@@ -140,14 +149,15 @@ final class FileChangeMonitor: FileChangeMonitoring {
     private func scheduleDebouncedChange() {
         pendingDebounceWorkItem?.cancel()
 
-        let workItem = DispatchWorkItem { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, self.isStarted else { return }
-                self.pendingDebounceWorkItem = nil
-                self.onChange()
-            }
+        let now = scheduler.now()
+        let firstEvent = firstPendingEventTime ?? now
+        firstPendingEventTime = firstEvent
+        let delay = min(debounceInterval, max(0, firstEvent + maximumDeliveryDelay - now))
+        pendingDebounceWorkItem = scheduler.schedule(delay) { [weak self] in
+            guard let self, self.isStarted else { return }
+            self.pendingDebounceWorkItem = nil
+            self.firstPendingEventTime = nil
+            self.onChange()
         }
-        pendingDebounceWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + debounceInterval, execute: workItem)
     }
 }
