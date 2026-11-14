@@ -240,7 +240,7 @@ final class MarkdownEditSession {
                 return discardEdits(diskData: restorableDiskData)
             case .saveCopy(let copyURL):
                 do {
-                    try format.encode(snapshot.text).write(to: copyURL, options: .atomic)
+                    try MarkdownSaveWorker.encodedData(for: snapshot.text, format: format).write(to: copyURL, options: .atomic)
                 } catch {
                     conflict = .writeFailed(error.localizedDescription)
                     continue
@@ -489,8 +489,8 @@ final class MarkdownSaveWorker: Sendable {
         }
 
         let target = request.fileURL.resolvingSymlinksInPath()
-        let data = request.format.encode(request.snapshot.text)
         do {
+            let data = try encodedData(for: request.snapshot.text, format: request.format)
             try writer(target, data) {
                 if !request.overwrite {
                     try verifyUnchanged(target, fingerprint: request.expectedFingerprint)
@@ -502,6 +502,18 @@ final class MarkdownSaveWorker: Sendable {
         } catch {
             return .conflict(.writeFailed(error.localizedDescription), diskData: nil)
         }
+    }
+
+    static func encodedData(for text: String, format: MarkdownTextFormat) throws -> Data {
+        let data = format.encode(text)
+        let limit = MarkdownSourceLoader.maximumSourceByteCount
+        guard data.count <= limit else {
+            let size = ByteCountFormatter.string(fromByteCount: Int64(limit), countStyle: .file)
+            throw CocoaError(.fileWriteUnknown, userInfo: [
+                NSLocalizedDescriptionKey: "Wafer saves Markdown files up to \(size) after encoding and line-ending conversion. Shorten the document before saving. Your unsaved edits remain in the editor.",
+            ])
+        }
+        return data
     }
 
     /// Throws a `DiskConflict` unless the file still holds the bytes with
