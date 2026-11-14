@@ -35,9 +35,12 @@ struct FolderAccessScope: Sendable {
         self.roots = roots
     }
 
+    /// Resolves `url` once and checks it against every root.
     func covers(_ url: URL) -> Bool {
         guard let roots else { return true }
-        return url.isFileURL && roots.contains { $0.contains(url) }
+        guard url.isFileURL else { return false }
+        let candidate = FileContainment.Candidate(url)
+        return roots.contains { $0.contains(candidate) }
     }
 }
 
@@ -111,9 +114,15 @@ final class FolderAccessStore {
     private let bookmarks: SecurityScopedBookmarking
     /// The container, its temporary folder, and the app bundle.
     private let alwaysReadable: [FileContainment]
-    private var grants: [Grant] = []
+    private var grants: [Grant] = [] {
+        didSet { cachedScope = nil }
+    }
     /// Files the user opened this session (Finder, Open, Open Recent).
-    private var userSelections: [String: FileContainment] = [:]
+    private var userSelections: [String: FileContainment] = [:] {
+        didSet { cachedScope = nil }
+    }
+    /// `scope`, built once until the grants or selections change.
+    private var cachedScope: FolderAccessScope?
     private var hasRestored = false
     /// Linked documents each document shows; replaced on every render.
     private var linkNeeds: [String: Set<URL>] = [:]
@@ -254,7 +263,10 @@ final class FolderAccessStore {
     var scope: FolderAccessScope {
         guard isSandboxed else { return .unrestricted }
         restoreGrants()
-        return FolderAccessScope(roots: alwaysReadable + Array(userSelections.values) + grants.compactMap(\.containment))
+        if let cachedScope { return cachedScope }
+        let scope = FolderAccessScope(roots: alwaysReadable + Array(userSelections.values) + grants.compactMap(\.containment))
+        cachedScope = scope
+        return scope
     }
 
     /// True when the sandbox lets Wafer read `url`: it lies in a granted

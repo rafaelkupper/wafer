@@ -103,7 +103,8 @@ enum LocalAssetLoader {
     }
 
     private static func isAllowed(fileURL: URL, in roots: [FileContainment]) -> Bool {
-        roots.contains { $0.contains(fileURL) }
+        let candidate = FileContainment.Candidate(fileURL)
+        return roots.contains { $0.contains(candidate) }
     }
 
     private static func resolvedFileURL(forPath path: String) -> URL {
