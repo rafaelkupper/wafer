@@ -12,7 +12,7 @@ enum LocalAssetLoader {
     static func load(
         from requestURL: URL,
         allowedRootDirectories: [URL],
-        maximumByteCount: Int = 25 * 1024 * 1024
+        maximumByteCount: Int = WaferLimits.assetByteCount
     ) throws -> LocalAssetResponse {
         let fileURL = try fileURL(for: requestURL, allowedRootDirectories: allowedRootDirectories)
         let data = try read(fileURL, allowedRootDirectories: allowedRootDirectories, maximumByteCount: maximumByteCount)
@@ -86,7 +86,7 @@ enum LocalAssetLoader {
         guard isAllowed(fileURL: openedURL, in: roots) else { throw CocoaError(.fileReadNoPermission) }
         guard info.st_size <= maximumByteCount else { throw BoundedFileReader.ReadError.tooLarge }
         var data = Data()
-        while let chunk = try handle.read(upToCount: min(maximumByteCount - data.count + 1, 64 * 1024)), !chunk.isEmpty {
+        while let chunk = try handle.read(upToCount: min(maximumByteCount - data.count + 1, WaferLimits.fileReadChunkByteCount)), !chunk.isEmpty {
             guard chunk.count <= maximumByteCount - data.count else { throw BoundedFileReader.ReadError.tooLarge }
             data.append(chunk)
         }

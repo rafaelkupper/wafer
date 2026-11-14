@@ -1,4 +1,5 @@
 import Foundation
+import WaferCore
 import WebKit
 
 struct RemoteImageResponse: Sendable {
@@ -36,7 +37,7 @@ extension RemoteImageFetching {
 
 @MainActor
 final class RemoteImageSchemeHandler: NSObject, WKURLSchemeHandler {
-    nonisolated static let defaultMaximumByteCount = 25 * 1024 * 1024
+    nonisolated static let defaultMaximumByteCount = WaferLimits.assetByteCount
 
     var remoteImagesEnabled: Bool {
         get {

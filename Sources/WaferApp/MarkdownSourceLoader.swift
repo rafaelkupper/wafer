@@ -117,7 +117,7 @@ final class MarkdownSourceLoader {
     /// above real notes and generated references, and small enough that
     /// parsing, rendering, and the editor stay usable. Larger files are
     /// refused as a whole, never read, shown, or edited in part.
-    nonisolated static let maximumSourceByteCount = 32_000_000
+    nonisolated static let maximumSourceByteCount = WaferLimits.documentSourceByteCount
 
     /// The production source loader: reads, decodes, and fingerprints a file.
     nonisolated static func loadSource(from fileURL: URL) throws -> LoadedMarkdownSource {

@@ -18,7 +18,7 @@ final class WebKitLocalAssetSchemeHandler: NSObject, WKURLSchemeHandler {
     #if DEBUG
     static var readConcurrencyForTesting: Int { readQueue.maxConcurrentOperationCount }
     #endif
-    static let maximumByteCount = 25 * 1024 * 1024
+    static let maximumByteCount = WaferLimits.assetByteCount
     private let queue: OperationQueue
     private let byteLimit: Int
     private var activeTasks: [ObjectIdentifier: Operation] = [:]
