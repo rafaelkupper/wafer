@@ -17,6 +17,7 @@ final class MarkdownRenderThemeRaceTests: XCTestCase {
         var completions: [(WebKitRenderOutput) -> Void] = []
         var palettes: [ReaderThemePalette] = []
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { _, _, palette, _, completion in
                 palettes.append(palette)

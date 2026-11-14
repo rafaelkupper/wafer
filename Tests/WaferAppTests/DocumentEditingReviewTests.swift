@@ -17,6 +17,7 @@ final class DocumentEditingReviewTests: XCTestCase {
         var awaitsReloadRender = false
         var renderedSources: [String] = []
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { source, _, _, _, completion in
                 renderedSources.append(source)

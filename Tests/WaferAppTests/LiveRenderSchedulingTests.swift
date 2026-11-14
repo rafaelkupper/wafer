@@ -11,6 +11,7 @@ final class LiveRenderSchedulingTests: XCTestCase {
         var completions: [(WebKitRenderOutput) -> Void] = []
         var items: [DispatchWorkItem] = []
         let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
             scrollStateStore: makeTestScrollStateStore(),
             renderScheduler: { source, _, _, _, completion in
                 sources.append(source)

@@ -104,11 +104,14 @@ final class MarkdownReaderDocument: NSDocument {
     }
 
     override convenience init() {
-        // Every dependency takes its production default.
-        self.init(scrollStateStore: ScrollStateStore())
+        self.init(
+            librarySnapshotProvider: MarkdownDocumentOpener.librarySnapshot,
+            scrollStateStore: MarkdownDocumentOpener.scrollStateStore
+        )
     }
 
     init(
+        librarySnapshotProvider: @escaping LibrarySnapshotProvider,
         assetResolver: AssetResolver = AssetResolver(),
         scrollStateStore: ScrollStateStore,
         renderScheduler: RenderScheduler? = nil,
@@ -124,7 +127,6 @@ final class MarkdownReaderDocument: NSDocument {
         },
         scrollPersistenceDebounceInterval: TimeInterval = 1.0,
         wikiLinkIndexProvider: WikiLinkIndexProvider? = nil,
-        librarySnapshotProvider: @escaping LibrarySnapshotProvider = { LibraryController.shared.snapshot },
         sourceLoadErrorHandler: @escaping @MainActor (Error) -> Void = { NSApp.presentError($0) },
         editConflictResolver: @escaping EditConflictResolver = MarkdownEditSession.presentConflict,
         editFileWriter: @escaping MarkdownEditSession.FileWriter = MarkdownEditSession.replaceContents,
