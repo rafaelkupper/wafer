@@ -116,7 +116,7 @@ Owns `WebKitReaderViewController.swift`, `DocumentWindowController.swift`, `Docu
 
 Integration branch `review-fixes-integration`, 2026-11-13, after merging L, R, W, D and K:
 
-- `swift test`: passed five consecutive runs; each 671 tests (257 core, 407 app with 1 opt-in perf test skipped, 7 Quick Look), 0 failures, no Auto Layout conflict warnings.
+- `swift test`: passed five consecutive runs; each 671 tests (257 core, 407 app with 1 opt-in perf test skipped, 7 Quick Look), 0 failures. Correction (found by Astra in round 3): every run logs one "Conflicting constraints detected" warning from `testSidebarToggleDoesNotChangeWindowFrameWidth` (`DocumentChromeViewController.swift:614`); my log check searched for the older "Unable to simultaneously satisfy" wording. The warning also reproduces in isolation at `170c299`, so it predates this round.
 - Real `dev.wafer.scroll-state` key count: 2,633 before and after each of the five runs.
 - `scripts/check.sh`: passed (Swift tests, 40 Python release tests, Node tests, 25 vendored asset checksums).
 - `scripts/build-app.sh release` and `scripts/verify-appex.sh build/Wafer.app`: passed. Bundles: `Contents/Resources/Wafer_WaferApp.bundle`, `Contents/Resources/Wafer_WaferCore.bundle`, appex `Wafer_WaferCore.bundle`. dSYMs: `build/Wafer.dSYM`, `build/WaferQuickLook.dSYM`.

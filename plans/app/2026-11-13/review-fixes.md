@@ -109,7 +109,7 @@ Review threads: Astra, Fable, and Muse (xhigh) delegated reviews, 2026-11-13. Th
 
 Integration branch `review-fixes-integration`, 2026-11-13:
 
-- `swift test`: passed five consecutive runs; each 635 tests (249 core, 379 app with 1 opt-in perf test skipped, 7 Quick Look), 0 failures, no Auto Layout conflict warnings.
+- `swift test`: passed five consecutive runs; each 635 tests (249 core, 379 app with 1 opt-in perf test skipped, 7 Quick Look), 0 failures, no "Unable to simultaneously satisfy" warnings. Correction 2026-11-13: the sidebar-toggle test logs a "Conflicting constraints detected" warning when run in isolation at this commit; the log check did not search for that wording.
 - `python3 -m unittest discover -s Tests/ReleaseTools`: passed, 20 tests.
 - Node tests (`Tests/JavaScript/*/*.cjs`): all 3 passed.
 - `scripts/build-app.sh release` and `scripts/verify-appex.sh build/Wafer.app`: passed.
