@@ -1,0 +1,54 @@
+Building for debugging...
+[Computing dependencies]
+[1 / 1]
+[2 / 30] WaferCore
+[4 / 32] WaferCore
+[15 / 27] WaferQuickLookTests-product
+[23 / 34] Wafer-product
+[31 / 40] Wafer-product
+[32 / 40] Wafer-product
+[34 / 35] WaferAppTests-product
+[37 / 37] WaferQuickLook-product
+Build complete! (2,82 secs)
+Test Suite 'Selected tests' started at 2026-11-14 06:12:46.036.
+Test Suite 'WaferQuickLookTests.xctest' started at 2026-11-14 06:12:46.037.
+Test Suite 'WaferQuickLookTests.xctest' passed at 2026-11-14 06:12:46.037.
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.000) seconds
+Test Suite 'Selected tests' passed at 2026-11-14 06:12:46.037.
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.001) seconds
+Test Suite 'Selected tests' started at 2026-11-14 06:12:46.106.
+Test Suite 'WaferCoreTests.xctest' started at 2026-11-14 06:12:46.106.
+Test Suite 'LibraryIndexTests' started at 2026-11-14 06:12:46.106.
+Test Case '-[WaferCoreTests.LibraryIndexTests testRecoveryScanReusesUnchangedFilesWithoutParsing]' started.
+/Volumes/Pegasus/.t3/worktrees/wafer/t3-0521f609-371b8fb90afef587/Tests/WaferCoreTests/LibraryIndexTests.swift:16: error: -[WaferCoreTests.LibraryIndexTests testRecoveryScanReusesUnchangedFilesWithoutParsing] : XCTAssertEqual failed: ("2") is not equal to ("0") - a recovery walk must reuse unchanged parsed entries
+/Volumes/Pegasus/.t3/worktrees/wafer/t3-0521f609-371b8fb90afef587/Tests/WaferCoreTests/LibraryIndexTests.swift:24: error: -[WaferCoreTests.LibraryIndexTests testRecoveryScanReusesUnchangedFilesWithoutParsing] : XCTAssertEqual failed: ("2") is not equal to ("1")
+Test Case '-[WaferCoreTests.LibraryIndexTests testRecoveryScanReusesUnchangedFilesWithoutParsing]' failed (0.116 seconds).
+Test Suite 'LibraryIndexTests' failed at 2026-11-14 06:12:46.222.
+	 Executed 1 test, with 2 failures (0 unexpected) in 0.116 (0.116) seconds
+Test Suite 'WaferCoreTests.xctest' failed at 2026-11-14 06:12:46.222.
+	 Executed 1 test, with 2 failures (0 unexpected) in 0.116 (0.116) seconds
+Test Suite 'Selected tests' failed at 2026-11-14 06:12:46.222.
+	 Executed 1 test, with 2 failures (0 unexpected) in 0.116 (0.117) seconds
+Test Suite 'Selected tests' started at 2026-11-14 06:12:46.294.
+Test Suite 'WaferAppTests.xctest' started at 2026-11-14 06:12:46.294.
+Test Suite 'LibraryControllerTests' started at 2026-11-14 06:12:46.294.
+Test Case '-[WaferAppTests.LibraryControllerTests testChangeDuringDebounceSurvivesActiveScanPublication]' started.
+/Volumes/Pegasus/.t3/worktrees/wafer/t3-0521f609-371b8fb90afef587/Tests/WaferAppTests/LibraryControllerTests.swift:268: error: -[WaferAppTests.LibraryControllerTests testChangeDuringDebounceSurvivesActiveScanPublication] : Asynchronous wait failed: Exceeded timeout of 2 seconds, with unfulfilled expectations: "initial scan published during debounce".
+Test Case '-[WaferAppTests.LibraryControllerTests testChangeDuringDebounceSurvivesActiveScanPublication]' failed (2.197 seconds).
+Test Case '-[WaferAppTests.LibraryControllerTests testContinuousChangesPublishEachActiveScanBeforeOneFollowUp]' started.
+/Volumes/Pegasus/.t3/worktrees/wafer/t3-0521f609-371b8fb90afef587/Tests/WaferAppTests/LibraryControllerTests.swift:225: error: -[WaferAppTests.LibraryControllerTests testContinuousChangesPublishEachActiveScanBeforeOneFollowUp] : XCTAssertEqual failed: ("[]") is not equal to ("["First"]") - writes must not discard the active scan
+/Volumes/Pegasus/.t3/worktrees/wafer/t3-0521f609-371b8fb90afef587/Tests/WaferAppTests/LibraryControllerTests.swift:226: error: -[WaferAppTests.LibraryControllerTests testContinuousChangesPublishEachActiveScanBeforeOneFollowUp] : XCTAssertEqual failed: ("[]") is not equal to ("[["First"]]") - the initial scan must publish before its follow-up
+/Volumes/Pegasus/.t3/worktrees/wafer/t3-0521f609-371b8fb90afef587/Tests/WaferAppTests/LibraryControllerTests.swift:225: error: -[WaferAppTests.LibraryControllerTests testContinuousChangesPublishEachActiveScanBeforeOneFollowUp] : XCTAssertEqual failed: ("[]") is not equal to ("["Second"]") - writes must not discard the active scan
+/Volumes/Pegasus/.t3/worktrees/wafer/t3-0521f609-371b8fb90afef587/Tests/WaferAppTests/LibraryControllerTests.swift:226: error: -[WaferAppTests.LibraryControllerTests testContinuousChangesPublishEachActiveScanBeforeOneFollowUp] : XCTAssertEqual failed: ("[]") is not equal to ("[["First"]]") - the initial scan must publish before its follow-up
+Test Case '-[WaferAppTests.LibraryControllerTests testContinuousChangesPublishEachActiveScanBeforeOneFollowUp]' failed (0.002 seconds).
+Test Suite 'LibraryControllerTests' failed at 2026-11-14 06:12:48.494.
+	 Executed 2 tests, with 5 failures (0 unexpected) in 2.199 (2.199) seconds
+Test Suite 'WaferAppTests.xctest' failed at 2026-11-14 06:12:48.494.
+	 Executed 2 tests, with 5 failures (0 unexpected) in 2.199 (2.199) seconds
+Test Suite 'Selected tests' failed at 2026-11-14 06:12:48.494.
+	 Executed 2 tests, with 5 failures (0 unexpected) in 2.199 (2.200) seconds
+WAFER_TEST_DEFAULTS_SUITE dev.wafer.tests.hygiene.29E2A3FE-14B6-4A59-A24D-3C80EFB7BD24.96732E8C-110B-4F88-8277-EB278E211F74
+WAFER_TEST_DEFAULTS_SUITE dev.wafer.tests.hygiene.29E2A3FE-14B6-4A59-A24D-3C80EFB7BD24.33864817-97CD-4453-A268-97E0FD66C78A
+Note: Some test targets reported failures:
+  - WaferCoreTests (XCTest)
+  - WaferAppTests (XCTest)
