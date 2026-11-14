@@ -21,14 +21,10 @@ public struct LibraryFile: Equatable, Sendable {
     public let displayTitle: String
     public let outlineItems: [DocumentOutlineItem]
     public let plainText: String
-    public var searchableText: String {
-        plainText.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).lowercased()
-    }
+    public var searchableText: String { searchFields.body }
     public let contentFingerprint: LibraryFileFingerprint
     public let outgoingReferences: [OutgoingReference]
 
-    /// Source-compatible initializer. Search text is now derived from the readable body;
-    /// the supplied folded text is no longer retained.
     public init(
         fileURL: URL,
         relativePathComponents: [String],
@@ -39,27 +35,11 @@ public struct LibraryFile: Equatable, Sendable {
         contentFingerprint: LibraryFileFingerprint,
         outgoingReferences: [OutgoingReference] = []
     ) {
-        self.init(
-            fileURL: fileURL, relativePathComponents: relativePathComponents,
-            displayTitle: displayTitle, outlineItems: outlineItems, plainText: plainText,
-            contentFingerprint: contentFingerprint, outgoingReferences: outgoingReferences
-        )
-    }
-
-    public init(
-        fileURL: URL,
-        relativePathComponents: [String],
-        displayTitle: String,
-        outlineItems: [DocumentOutlineItem],
-        plainText: String,
-        contentFingerprint: LibraryFileFingerprint,
-        outgoingReferences: [OutgoingReference] = []
-    ) {
         self.identity = FileIdentity.identity(for: fileURL)
         self.relativePath = relativePathComponents.joined(separator: "/")
         self.searchFields = LibrarySearchFields(
             fileURL: fileURL, relativePath: relativePathComponents.joined(separator: "/"),
-            title: displayTitle, headings: outlineItems
+            title: displayTitle, headings: outlineItems, body: searchableText
         )
         self.fileURL = fileURL
         self.relativePathComponents = relativePathComponents
@@ -178,6 +158,7 @@ public enum LibraryScanner {
             displayTitle: DocumentSidebarDataBuilder.documentDisplayTitle(for: document, fallbackURL: normalizedURL),
             outlineItems: DocumentSidebarDataBuilder.outlineItems(from: document),
             plainText: plainText,
+            searchableText: plainText.libraryFoldedSearchText,
             contentFingerprint: LibraryFileFingerprint(modificationDate: date, fileSize: UInt64(data.count), contentDigest: document.fingerprint),
             outgoingReferences: OutgoingReferenceCollector.collect(from: document, assetResolver: AssetResolver())
         )

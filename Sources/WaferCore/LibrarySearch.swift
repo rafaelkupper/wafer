@@ -28,8 +28,7 @@ public enum LibrarySearch {
         return files.compactMap { file -> FileMatch? in
             guard cancellation?.isCancelled != true else { return nil }
             let searchableFields = file.searchFields
-            let body = file.searchableText
-            guard tokens.allSatisfy({ searchableFields.contains($0, body: body) }) else {
+            guard tokens.allSatisfy({ searchableFields.contains($0) }) else {
                 return nil
             }
 
@@ -40,11 +39,11 @@ public enum LibrarySearch {
             } else if tokens.allSatisfy({ searchableFields.filename.contains($0) || searchableFields.relativePath.contains($0) }) {
                 score = 40_000 + max(0, 1_000 - searchableFields.relativePath.count)
             } else if tokens.allSatisfy({ searchableFields.title.contains($0) }) {
-                score = 30_000 + searchableFields.bodyMatchCount(tokens: tokens, body: body)
+                score = 30_000 + searchableFields.bodyMatchCount(tokens: tokens)
             } else if let headingMatch {
                 score = 20_000 + (headingMatch.matchedTokenCount * 100) - headingMatch.index
             } else {
-                score = 10_000 + searchableFields.bodyMatchCount(tokens: tokens, body: body)
+                score = 10_000 + searchableFields.bodyMatchCount(tokens: tokens)
             }
 
             return FileMatch(
@@ -220,25 +219,27 @@ struct LibrarySearchFields: Equatable, Sendable {
     let filename: String
     let relativePath: String
     let title: String
+    let body: String
     let headings: [String]
     let quickPath: [QuickOpenCharacter]
     let quickName: [QuickOpenCharacter]
 
-    init(fileURL: URL, relativePath: String, title: String, headings: [DocumentOutlineItem]) {
+    init(fileURL: URL, relativePath: String, title: String, headings: [DocumentOutlineItem], body: String) {
         let filename = fileURL.deletingPathExtension().lastPathComponent
         self.filename = filename.libraryFoldedSearchText
         self.relativePath = relativePath.libraryFoldedSearchText
         self.title = title.libraryFoldedSearchText
+        self.body = body
         self.headings = headings.map { $0.title.libraryFoldedSearchText }
         self.quickPath = LibrarySearch.quickOpenCharacters(for: relativePath)
         self.quickName = LibrarySearch.quickOpenCharacters(for: filename)
     }
 
-    func bodyMatchCount(tokens: [String], body: String) -> Int {
+    func bodyMatchCount(tokens: [String]) -> Int {
         tokens.reduce(0) { $0 + body.matchCount(of: $1) }
     }
 
-    func contains(_ token: String, body: String) -> Bool {
+    func contains(_ token: String) -> Bool {
         filename.contains(token)
             || relativePath.contains(token)
             || title.contains(token)
