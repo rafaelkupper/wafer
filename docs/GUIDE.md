@@ -60,6 +60,7 @@ Edit mode puts the Markdown source next to the rendered document. It is off by d
 - Edits save automatically about a second after you stop typing, and also when you switch documents, close the tab or window, switch to another app, leave edit mode, or quit. File > Save (`Cmd-S`) saves immediately. File > Revert Edits restores the text from when the file was opened in the editor; it is an ordinary edit, so Undo brings your changes back.
 - Saving keeps the file's encoding (UTF-8 or UTF-16), byte-order mark, line endings, and permissions. If you never change anything, the file is never rewritten.
 - If the file changes on disk while you have no unsaved edits, the editor takes the new version. If both changed, Wafer asks whether to keep your edits, use the disk version, or save your version as a copy. It never overwrites an external change without asking. A disk version that grows beyond the 32 MB opening limit also triggers this conflict check.
+- If the file changed, moved, or was deleted while you were editing, choose **Cancel** in the save conflict alert (or press Escape) to keep your unsaved edits open and leave the file on disk untouched. This also cancels the close, navigation, or other action that triggered the save. Cancelling the **Save a Copy…** panel returns to the conflict alert, where you can choose another option or Cancel.
 - Undo and redo are per editor and reset when another file is loaded into it.
 - Read-only files cannot be opened in edit mode.
 
