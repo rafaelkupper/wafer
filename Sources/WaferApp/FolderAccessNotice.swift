@@ -4,7 +4,7 @@ import WaferCore
 
 /// What a folder prompt asks for.
 struct FolderAccessRequest: Equatable {
-    /// A file whose folder is too broad to offer (see `FolderAccessRange`).
+    /// A file whose folder a prompt may not offer (see `FolderAccessRange`).
     struct OutOfRange: Equatable {
         /// The explanation's title.
         let title: String
@@ -15,6 +15,14 @@ struct FolderAccessRequest: Equatable {
         let startingFolder: URL?
     }
 
+    /// The folder chosen last time holds none of the files asked for, so it
+    /// was not granted. The chooser says so first, and opens the panel again
+    /// only if the user asks to choose again.
+    struct Retry: Equatable {
+        let title: String
+        let message: String
+    }
+
     /// Where the panel opens; Grant Access with nothing selected chooses
     /// it. Nil for a file outside the range Wafer offers, which is explained
     /// first, with a panel only if the user asks for one.
@@ -22,6 +30,7 @@ struct FolderAccessRequest: Equatable {
     let message: String
     var prompt = "Grant Access"
     var outOfRange: OutOfRange?
+    var retry: Retry?
 }
 
 /// Asking for a folder grant and refreshing documents once it arrives.
@@ -58,15 +67,17 @@ enum FolderAccessFlow {
 
     /// Asks for a folder that holds `url`, even when Wafer believes it can
     /// read it (after a refused read), and calls `onGranted` once a grant
-    /// allows `access`. The panel offers only the file's own folder, never
-    /// one too broad to offer. It may be a sheet, so callers continue only
-    /// from `onGranted`, never after this returns.
+    /// allows `access`. The panel offers only the file's own folder, and
+    /// only one a prompt may offer. A chosen folder that does not hold the
+    /// file is not granted (see `choose`). The panel may be a sheet, so
+    /// callers continue only from `onGranted`, never after this returns.
     static func requestAccess(
         to url: URL, requestedBy documentURL: URL? = nil, window: NSWindow?,
         access: FolderAccessMode = .readOnly, onGranted: @escaping @MainActor () -> Void
     ) {
         let store = FolderAccessStore.shared
-        chooseFolder(request(opening: url, requestedBy: documentURL, access: access, range: store.range), window) { chosen in
+        let request = request(opening: url, requestedBy: documentURL, access: access, range: store.range)
+        choose(request, holdingAnyOf: [url], window: window) { chosen in
             guard let chosen else { return }
             refreshDocuments(store.grantAccess(to: chosen, mode: access))
             if allows(access, url, in: store) { onGranted() }
@@ -74,7 +85,8 @@ enum FolderAccessFlow {
     }
 
     /// Grant Access… in a document window: offers the document's folder,
-    /// widened within the range Wafer offers to hold the files it needs.
+    /// widened within the range Wafer offers to hold the files it needs. A
+    /// chosen folder that holds none of them is not granted (see `choose`).
     /// The grant is read-only unless the document is being edited.
     static func requestAccess(
         forDocumentAt documentURL: URL, window: NSWindow?,
@@ -86,13 +98,40 @@ enum FolderAccessFlow {
             return
         }
         let access = accessMode(requestedBy: documentURL)
-        chooseFolder(request(showing: documentURL, suggestion: suggestion, access: access, range: store.range), window) { chosen in
+        let request = request(showing: documentURL, suggestion: suggestion, access: access, range: store.range)
+        choose(request, holdingAnyOf: store.unreadableFiles(neededByDocumentAt: documentURL),
+               documentName: documentURL.lastPathComponent, window: window) { chosen in
             guard let chosen else {
                 completion(false)
                 return
             }
             refreshDocuments(store.grantAccess(to: chosen, mode: access))
             completion(true)
+        }
+    }
+
+    /// Asks `chooseFolder` for a folder. One that holds none of `files` is
+    /// not granted: the chooser is asked again, with the reason in
+    /// `FolderAccessRequest.retry`, until the user chooses a folder that
+    /// holds one of them or cancels (nil). With no files, any folder will do.
+    private static func choose(
+        _ request: FolderAccessRequest, holdingAnyOf files: [URL], documentName: String? = nil, window: NSWindow?,
+        completion: @escaping @MainActor (URL?) -> Void
+    ) {
+        chooseFolder(request, window) { chosen in
+            guard let chosen, let first = files.first else { return completion(chosen) }
+            let folder = FileContainment(rootDirectory: chosen)
+            guard !files.contains(where: { folder.contains($0) }) else { return completion(chosen) }
+            FolderAccessStore.log.info("Did not grant a chosen folder that holds none of the files asked for")
+            let subject = files.count > 1 ? documentName.map { "the files “\($0)” needs" } : nil
+            let choice = request.suggestedFolder.map { "Choose “\($0.lastPathComponent)” (\($0.path)) or a folder above it." }
+                ?? request.outOfRange?.panelMessage ?? ""
+            var again = request
+            again.retry = .init(
+                title: "“\(chosen.lastPathComponent)” doesn't contain \(subject ?? "“\(first.lastPathComponent)”")",
+                message: "Wafer remembers a folder only if it contains \(subject == nil ? "the file" : "one of them"). \(choice)"
+            )
+            choose(again, holdingAnyOf: files, documentName: documentName, window: window, completion: completion)
         }
     }
 
@@ -159,9 +198,9 @@ enum FolderAccessFlow {
     }
 
     /// Mentions a parent folder only while the suggestion is narrow: not
-    /// once it was widened, and not when its parent is too broad to offer.
+    /// once it was widened, and not when a prompt may not offer its parent.
     private static func parentFolderHint(for folder: URL, isWidened: Bool, range: FolderAccessRange) -> String {
-        guard !isWidened, !range.isTooBroad(folder.deletingLastPathComponent()) else { return "" }
+        guard !isWidened, range.mayOffer(folder.deletingLastPathComponent()) else { return "" }
         return " Choosing a parent folder instead covers more of your documents."
     }
 
@@ -173,42 +212,51 @@ enum FolderAccessFlow {
             ? " To read only this document, open it with File > Open…." : ""
         return FolderAccessRequest(
             suggestedFolder: nil,
-            message: "“\(name)” (\(file.path)) is outside the folders Wafer offers. Wafer never offers your home folder, a whole disk, or a folder above them, because a document's links decide which file is asked for.\(alternative) To allow it anyway, choose a folder that contains it yourself.",
+            message: "“\(name)” (\(file.path)) is outside the folders Wafer offers. Wafer never offers your home folder, a whole disk or cloud drive, a folder above them, a hidden folder, or a folder in your Library, because a document's links decide which file is asked for.\(alternative) To allow it anyway, choose a folder that contains it yourself.",
             outOfRange: .init(
                 title: "“\(name)” is outside the folders Wafer offers",
                 panelMessage: "Choose a folder that contains “\(name)” (\(file.path)).",
-                startingFolder: documentFolder.flatMap { range.isTooBroad($0) ? nil : $0 }
+                startingFolder: documentFolder.flatMap { range.mayOffer($0) ? $0 : nil }
             )
         )
     }
 
     /// The default chooser: a folder-only open panel at the suggested
-    /// folder, or for a file outside the range Wafer offers, an explanation
-    /// and a panel only if the user asks for one. Each is a sheet when a
+    /// folder. For a file outside the range Wafer offers, or after a chosen
+    /// folder that did not hold the file, an explanation comes first, and
+    /// the panel opens only if the user asks for it. Each is a sheet when a
     /// window is free for one.
     static func runOpenPanel(_ request: FolderAccessRequest, window: NSWindow?, completion: @escaping @MainActor (URL?) -> Void) {
-        guard let outOfRange = request.outOfRange, request.suggestedFolder == nil else {
-            presentPanel(prompt: request.prompt, message: request.message, startingAt: request.suggestedFolder,
-                         window: window, completion: completion)
-            return
+        let outOfRange = request.suggestedFolder == nil ? request.outOfRange : nil
+        let showPanel: @MainActor () -> Void = {
+            presentPanel(prompt: request.prompt, message: outOfRange?.panelMessage ?? request.message,
+                         startingAt: outOfRange?.startingFolder ?? request.suggestedFolder, window: window, completion: completion)
         }
-        let alert = NSAlert()
-        alert.messageText = outOfRange.title
-        alert.informativeText = request.message
-        alert.addButton(withTitle: "OK")
-        alert.addButton(withTitle: "Choose Folder…")
-        let respond: @MainActor (NSApplication.ModalResponse) -> Void = { response in
-            guard response == .alertSecondButtonReturn else {
-                completion(nil)
-                return
+        if let retry = request.retry {
+            presentAlert(title: retry.title, message: retry.message, buttons: ["Choose Again…", "Cancel"], window: window) { response in
+                if response == .alertFirstButtonReturn { showPanel() } else { completion(nil) }
             }
-            presentPanel(prompt: request.prompt, message: outOfRange.panelMessage, startingAt: outOfRange.startingFolder,
-                         window: window, completion: completion)
-        }
-        if let window, window.isVisible, window.attachedSheet == nil {
-            alert.beginSheetModal(for: window) { respond($0) }
+        } else if let outOfRange {
+            presentAlert(title: outOfRange.title, message: request.message, buttons: ["OK", "Choose Folder…"], window: window) { response in
+                if response == .alertSecondButtonReturn { showPanel() } else { completion(nil) }
+            }
         } else {
-            respond(alert.runModal())
+            showPanel()
+        }
+    }
+
+    private static func presentAlert(
+        title: String, message: String, buttons: [String], window: NSWindow?,
+        completion: @escaping @MainActor (NSApplication.ModalResponse) -> Void
+    ) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        for button in buttons { alert.addButton(withTitle: button) }
+        if let window, window.isVisible, window.attachedSheet == nil {
+            alert.beginSheetModal(for: window) { completion($0) }
+        } else {
+            completion(alert.runModal())
         }
     }
 
