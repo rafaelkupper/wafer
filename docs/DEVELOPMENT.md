@@ -4,9 +4,9 @@ Notes for building, testing, and releasing Wafer from source. For the design, se
 
 ## Source build identity
 
-The package, app, and Quick Look extension use Wafer names and the `dev.wafer.app` bundle identifier. This identity has separate preferences and macOS registration from earlier distributions. The app runs in the App Sandbox, so its preferences and custom themes live in its container, `~/Library/Containers/dev.wafer.app/Data` (themes in `Library/Application Support/Wafer/Themes`). The first sandboxed launch moves the unsandboxed `dev.wafer.app` preferences, scroll positions, and themes folder there; it does not migrate support folders of earlier distributions.
+Local and CI bundles use `dev.wafer.app.dev`, with Quick Look under `dev.wafer.app.dev.quicklook`. Their preferences and themes live in `~/Library/Containers/dev.wafer.app.dev/Data`. They omit the release migration manifest and update feed, so opening a development build leaves release preferences in place.
 
-The app manifest carries the project's update feed and public key, so a local build checks the same feed as the released app. To distribute your own builds, replace both as described in [the update guide](UPDATES.md). Packaging variables use the `WAFER_` prefix. The existing notarization Keychain profile may still be named `VibeMD`.
+`package-release.sh` explicitly passes `--release-identity` to assemble `dev.wafer.app` and `dev.wafer.app.quicklook`. That bundle retains the project's feed, public key and migration manifest. Its first sandboxed launch moves the unsandboxed release preferences, scroll positions and themes into `~/Library/Containers/dev.wafer.app/Data`. Never launch that identity for development or smoke tests. Packaging variables use the `WAFER_` prefix. The existing notarization Keychain profile may still be named `VibeMD`.
 
 ## Build
 
@@ -19,7 +19,7 @@ scripts/build-app.sh release
 scripts/verify-app.sh build/Wafer.app
 ```
 
-Launching `build/Wafer.app` creates the real `~/Library/Containers/dev.wafer.app` container on first launch and moves your existing Wafer preferences, scroll positions, and themes into it, where an older unsandboxed Wafer no longer sees them. For experiments, use the sandboxed smoke copy described in [App Sandbox](#app-sandbox), which has its own bundle identifier.
+Launching `build/Wafer.app` uses the development container. To test migration and release-style updates, use the disposable smoke copies in [App Sandbox](#app-sandbox).
 
 For local installation, copy `build/Wafer.app` into `~/Applications` or `/Applications`.
 An ad hoc signature has no Developer ID, so a copy downloaded from elsewhere still needs the usual manual approval steps.
@@ -46,7 +46,7 @@ Runtime failures that are handled without user interaction are written to unifie
 
 [CI](../.github/workflows/ci.yml) runs separate debug and release test jobs on macOS 15. The debug job also assembles the release app and verifies its Quick Look extension. `scripts/select-xcode.sh` selects the newest installed Xcode 26 with Swift 6.2.3 or newer from `/Applications` or the current `xcode-select` directory, and fails clearly if none is usable. Checkout and cache actions are pinned to full commit SHAs. The `.build` cache key includes the runner platform, configuration, Xcode and Swift versions, and `Package.resolved`. Push builds run only for `main`; pull requests run once per configuration. Performance assertions remain opt-in because hosted runners have variable load. The app retains its macOS 14 deployment target.
 
-`scripts/build-app.sh` locates executables, resource bundles, and Sparkle through `swift build --show-bin-path` for the selected configuration, including toolchain-specific product directories. Quick Look request coordination lives in `WaferQuickLookSupport`; its tests run without importing the extension executable or its `_NSExtensionMain` linker flag. The extension still links QuickLookUI, excludes WebKit, and uses the app sandbox.
+`scripts/build-app.sh` builds all package products once, then locates executables, resource bundles, and Sparkle through `swift build --show-bin-path` for the selected configuration, including toolchain-specific product directories. Quick Look request coordination lives in `WaferQuickLookSupport`; its tests run without importing the extension executable or its `_NSExtensionMain` linker flag. The extension still links QuickLookUI, excludes WebKit, and uses the app sandbox.
 
 ## App Sandbox
 
@@ -56,19 +56,41 @@ Signing:
 
 - `scripts/build-app.sh` signs the Quick Look extension and then the app ad hoc, each with its entitlements. Ad hoc signatures have no team identity, so local builds leave out the hardened runtime, whose library validation needs one.
 - `scripts/package-release.sh` signs Sparkle's helpers, the extension, and the app inside out with Developer ID, the hardened runtime, and a secure timestamp; the app gets `App/Wafer.entitlements`.
-- `scripts/verify-app.sh [--distribution] [app]` fails unless the signed entitlements are exactly `App/Wafer.entitlements`, the Sparkle mach-lookup names match the bundle identifier, `SUEnableInstallerLauncherService` is set and the Downloader service is not, `Installer.xpc` is present, and the bundled `container-migration.plist` matches `App/`. `--distribution` also requires a Developer ID Application signature with the hardened runtime. CI runs it after assembling the app, and packaging runs it with `--distribution`. `check.sh` runs its release-tool tests.
+- `scripts/verify-app.sh [--distribution|--release-identity] [app]` defaults to the development identity. It fails unless the signed entitlements are exactly `App/Wafer.entitlements` with the selected identity's mach names, the Sparkle mach-lookup names match the bundle identifier, `SUEnableInstallerLauncherService` is set and the Downloader service is not, `Installer.xpc` is present, and the migration manifest matches `App/` in release mode or is absent in development mode. Development verification also rejects the release feed and key. `verify-appex.sh` accepts the same identity flags and checks both the containing app and nested extension IDs. `--distribution` also requires a Developer ID Application signature with the hardened runtime. CI runs it after assembling the app, and packaging runs it with `--distribution`. `check.sh` runs its release-tool tests.
 
 Unit tests run unsandboxed, so they cover the logic only (with a fake bookmark store and an injected folder panel). The sandbox itself is covered by a smoke test of the built app:
 
 ```sh
 scripts/build-app.sh release
-scripts/sandbox-smoke.sh prepare   # copy as dev.wafer.app.sandbox-smoke, sign, create fixtures
-scripts/sandbox-smoke.sh open      # opens /tmp/wafer-sandbox-smoke/Documents/Notes/Plan.md
-scripts/sandbox-smoke.sh check     # container, migration, grants, sandbox and Wafer logs
-scripts/sandbox-smoke.sh clean     # quit and remove what the smoke test created
+export WAFER_SMOKE_BUNDLE_ID=dev.wafer.app.sandbox-smoke-$(date +%Y%m%d%H%M%S)
+export WAFER_SMOKE_DIR=/tmp/wafer-sandbox-smoke-$(date +%Y%m%d%H%M%S)
+scripts/sandbox-smoke.sh run       # prepare, open fixture folder, relaunch, assert
+scripts/sandbox-smoke.sh clean     # remove owned fixtures; keep evidence
 ```
 
-The copy uses its own bundle identifier (set `WAFER_SMOKE_BUNDLE_ID` for a fresh container) and no Quick Look extension, so the real `dev.wafer.app` container and preferences are never touched. Before its first launch, `prepare` saves fixture preferences (a custom theme selection, the line statistic, and an older install's `libraryFolderPath`) and a fixture theme folder, and the copy's migration manifest moves them into its container. A container is migrated only once; macOS keeps an emptied container after `clean`, which Finder can delete. Opening a folder with `scripts/sandbox-smoke.sh open /tmp/wafer-sandbox-smoke/Documents` works like dropping it on the app: it becomes the library and a stored folder grant.
+Use a fresh ID and work directory for each run. `prepare` refuses existing fixture paths and containers. The smoke copy has no Quick Look extension or release update feed. Its manifest migrates only private seeded preferences, scroll state and themes. The real `dev.wafer.app` preferences and scroll suite are never seeded or launched.
+
+`check` has four failure exits: **20** for container creation, **21** for migrated fixture preferences, scroll state or themes, **22** for a missing bookmark or failed relaunch access, and **23** for sandbox violations or unavailable unified logs. There is no denial allowlist. It reads `com.apple.sandbox.reporting` and Wafer's `access` category for the original and relaunched processes. A separate sandboxed probe under the smoke ID resolves the persisted bookmark and reads the sibling image without a new user-selection event; its bytes must match the fixture. This proves OS access alongside Wafer's restoration log, without asserting that WebKit visibly painted the image.
+
+Evidence stays in `build/sandbox-smoke-evidence/<bundle-id>` after `clean`, including unified JSON, the read-back image and probe diagnostics. Cleanup requires the work directory's ownership marker. If macOS refuses container deletion, the script prints the remaining path and saves `cleanup.log`; delete that private container in Finder if desired.
+
+For manual checks, use `prepare`, `open [FILE...]`, `relaunch`, `check`, then `clean`. Opening the fixture Documents folder grants it without a panel. Opening just `Notes/Plan.md` first tests the notice. `check --migration-only` checks migration and sandbox logs before any grants. Full `check` requires a recorded relaunch.
+
+CI runs the no-click `run` on the macOS debug job, prints its unified log to the job output and cleans the copy on exit. It needs a GUI login session that LaunchServices can use; SSH daemons without one cannot run this gate. The hosted-runner configuration has not been exercised locally. CI fails if launch or sandbox checks fail, rather than silently skipping them. Migration, relaunch access and the local update smoke remain required on a logged-in Mac before release, even if CI is green.
+
+Test the sandboxed Sparkle installation without publishing a feed:
+
+```sh
+scripts/sandbox-update-smoke.sh
+```
+
+The script assembles smoke builds `900001` and `900002` with the same private ID and matching Sparkle mach-lookup exceptions. It generates a throwaway Ed25519 key using OpenSSL, passes the raw seed through `sign_update --ed-key-file`, and signs both archive and appcast. It never calls `generate_keys` or reads or writes signing keys in the Keychain. The HTTP server binds only loopback and stops on exit. The private key, archives and apps are deleted after the run.
+
+Sparkle 2.10.1 [rejects `file://` downloads](https://github.com/sparkle-project/Sparkle/blob/2.10.1/Downloader/SPUDownloader.m#L59-L75). The script uses `http://localhost` with `NSAllowsLocalNetworking` confined to the smoke copies. Sparkle's [App Transport Security guide](https://sparkle-project.org/documentation/app-transport-security/) requires HTTPS or an appropriate exception. The release feed stays HTTPS.
+
+For unattended installation, the old copy runs `scripts/sandbox-update-driver.m` in its sandbox, using the embedded Sparkle and smoke entitlements. It supplies the install choices, waits for the archive to validate, defers installation, then quits. The target archive contains Wafer's actual executable. This follows the [installer XPC configuration](https://sparkle-project.org/documentation/sandboxing/) and the [install-on-quit API](https://sparkle-project.org/documentation/api-reference/Protocols/SPUUserDriver.html). It exercises Sparkle installation, not Wafer's menu or production `UpdateController`, which disables automatic downloads. The normal update prompts still need a manual release check.
+
+Success requires `Installer.xpc` process evidence, the installer-ready callback, the on-disk build changing from `900001` to `900002`, and a valid resulting signature. The script retains `driver.log`, `http.log`, `processes.log`, `installer.log`, the signed appcast, public key and installed Info.plist under the same evidence root. No clicks were needed on the controller Mac on 2026-11-14. This ad hoc run does not qualify Developer ID, hardened runtime, Gatekeeper or notarization.
 
 Watch the logs with:
 
@@ -76,7 +98,7 @@ Watch the logs with:
 log stream --level debug --predicate 'subsystem == "dev.wafer.app" OR sender == "Sandbox" OR subsystem == "com.apple.sandbox.reporting"'
 ```
 
-On macOS 27, `sandboxd` reports app sandbox denials under `com.apple.sandbox.reporting`; `sender == "Sandbox"` shows the kernel's reports. Reads the sandbox refuses outside the granted folders are often not reported at all, so the `access` category records the files Wafer refused and the grants it restored or added. The only denial seen in the smoke runs on 2026-11-13 and 2026-11-14 was WebKit's `mach-lookup com.apple.Safari.SafeBrowsing.Service`, which the reader does not need.
+On macOS 27, `sandboxd` reports app sandbox denials under `com.apple.sandbox.reporting`; `sender == "Sandbox"` shows the kernel's reports. Reads the sandbox refuses outside the granted folders are often not reported at all, so the `access` category records the files Wafer refused and the grants it restored or added. Earlier smoke runs saw WebKit's `mach-lookup com.apple.Safari.SafeBrowsing.Service` denied. The reader now disables that unnecessary lookup; the current gate permits no denials.
 
 Steps that need clicks:
 
@@ -86,7 +108,7 @@ Steps that need clicks:
 - Edit and save, Save a Copy..., Export as HTML and PDF, and Print.
 - Switch the theme, and Reveal Themes Folder in Finder opens the container's themes folder.
 - Scroll, quit with Cmd-Q, relaunch, and confirm the position; File > Open Recent reopens a file.
-- Wafer > Check for Updates... against a published feed (not testable before a release).
+- Wafer > Check for Updates... with the standard UI against a reviewed test or published feed. The scripted local feed covers the sandboxed installer separately.
 
 ## Development Files
 
@@ -144,6 +166,8 @@ test -f build/Wafer.app/Contents/Resources/Wafer_WaferCore.bundle/Contents/Resou
 ```
 
 These resource paths match Swift 6.4.2. Earlier SwiftPM toolchains use a flat resource bundle; the build and verification scripts accept that layout.
+
+Required release gates: run `scripts/sandbox-smoke.sh run` with a fresh smoke ID and `scripts/sandbox-update-smoke.sh` on a logged-in Mac, and retain their evidence. Prove the migration assertion once by removing the migration manifest from a fresh smoke copy before launch, re-signing it, and confirming `check --migration-only` exits 21. An unmodified fresh copy must pass. Never launch `dev.wafer.app` for this check.
 
 Then do a short single-machine smoke pass. Run the sandbox items with `scripts/sandbox-smoke.sh` (see [App Sandbox](#app-sandbox)), and the rest with the copy it prepares or with the installed app:
 

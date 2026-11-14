@@ -95,8 +95,14 @@ if [[ "$SKIP_TESTS" != "1" ]]; then
   "$ROOT_DIR/scripts/check.sh"
 fi
 
+# Required release checklist (docs/DEVELOPMENT.md#release-confidence-checks):
+# - sandbox-smoke.sh run: fresh private ID, migration, relaunch/bookmark read, logs
+# - sandbox-update-smoke.sh: signed localhost feed, Installer.xpc, version change
+# - standard update UI, folder-grant UI, exports and Finder previews on a logged-in Mac
+# CI runs the no-click sandbox gate; it does not qualify Developer ID updates.
+# Never launch the release-identity bundle below as a smoke test.
 step "Building release app bundle"
-"$BUILD_SCRIPT" release
+"$BUILD_SCRIPT" release --release-identity
 
 [[ -d "$APP_BUNDLE" ]] || fail "expected app bundle was not built: $APP_BUNDLE"
 [[ -f "$INFO_PLIST" ]] || fail "expected Info.plist was not found: $INFO_PLIST"
@@ -134,14 +140,14 @@ codesign --force --timestamp --options runtime --sign "$SIGN_IDENTITY" "$APP_BUN
 
 step "Signing Quick Look extension"
 codesign --force --timestamp --options runtime --entitlements "$QUICKLOOK_ENTITLEMENTS" --sign "$SIGN_IDENTITY" "$QUICKLOOK_APPEX"
-"$VERIFY_APPEX_SCRIPT" "$APP_BUNDLE"
+"$VERIFY_APPEX_SCRIPT" --release-identity "$APP_BUNDLE"
 
 # The app runs in the App Sandbox; App/Wafer.entitlements is its exact set.
 step "Signing $APP_NAME $VERSION ($BUILD_NUMBER)"
 codesign --force --timestamp --options runtime --entitlements "$APP_ENTITLEMENTS" --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
 
 step "Verifying code signature"
-"$VERIFY_APPEX_SCRIPT" "$APP_BUNDLE"
+"$VERIFY_APPEX_SCRIPT" --release-identity "$APP_BUNDLE"
 "$VERIFY_APP_SCRIPT" --distribution "$APP_BUNDLE"
 codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
 codesign --display --verbose=4 "$APP_BUNDLE"
@@ -176,7 +182,7 @@ step "Creating final distribution zip"
 ditto -c -k --norsrc --noextattr --noacl --keepParent "$APP_BUNDLE" "$FINAL_ZIP"
 
 step "Verifying final app"
-"$VERIFY_APPEX_SCRIPT" "$APP_BUNDLE"
+"$VERIFY_APPEX_SCRIPT" --release-identity "$APP_BUNDLE"
 "$VERIFY_APP_SCRIPT" --distribution "$APP_BUNDLE"
 codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
 if [[ "$SKIP_NOTARIZATION" != "1" ]]; then

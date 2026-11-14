@@ -6,7 +6,14 @@ ROOT_DIR=${0:A:h:h}
 # Bundle name only; the Quick Look appex keeps its SwiftPM product name.
 APP_NAME=Wafer
 QUICKLOOK_NAME=WaferQuickLook
+EXPECTED_ID=dev.wafer.app.dev
+if [[ "${1:-}" == --release-identity || "${1:-}" == --distribution ]]; then
+  EXPECTED_ID=dev.wafer.app
+  shift
+fi
 APP_BUNDLE=${1:-"$ROOT_DIR/build/$APP_NAME.app"}
+APP_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_BUNDLE/Contents/Info.plist")
+[[ "$APP_ID" == "$EXPECTED_ID" ]] || { print -u2 -- "error: app identifier '$APP_ID', expected '$EXPECTED_ID'"; exit 1; }
 QUICKLOOK_APPEX="$APP_BUNDLE/Contents/PlugIns/$QUICKLOOK_NAME.appex"
 INFO_PLIST="$QUICKLOOK_APPEX/Contents/Info.plist"
 EXECUTABLE="$QUICKLOOK_APPEX/Contents/MacOS/$QUICKLOOK_NAME"
@@ -55,7 +62,7 @@ unused_resources=("$CORE_RESOURCE_BUNDLE"/mermaid* "$CORE_RESOURCE_BUNDLE"/katex
 
 plutil -lint "$INFO_PLIST" >/dev/null
 require_plist_value ":CFBundleExecutable" "$QUICKLOOK_NAME"
-require_plist_value ":CFBundleIdentifier" "dev.wafer.app.quicklook"
+require_plist_value ":CFBundleIdentifier" "$EXPECTED_ID.quicklook"
 require_plist_value ":CFBundlePackageType" "XPC!"
 require_plist_value ":NSExtension:NSExtensionPointIdentifier" "com.apple.quicklook.preview"
 require_plist_value ":NSExtension:NSExtensionPrincipalClass" "PreviewProvider"

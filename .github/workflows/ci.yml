@@ -44,3 +44,13 @@ jobs:
       - name: Verify app signature and sandbox entitlements
         if: matrix.configuration == 'debug'
         run: scripts/verify-app.sh build/Wafer.app
+      - name: Run sandbox migration and relaunch smoke (no clicks)
+        if: matrix.configuration == 'debug'
+        timeout-minutes: 3
+        env:
+          WAFER_SMOKE_BUNDLE_ID: dev.wafer.app.ci-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          WAFER_SMOKE_DIR: ${{ runner.temp }}/wafer-sandbox-smoke
+          WAFER_SMOKE_EVIDENCE: ${{ runner.temp }}/wafer-sandbox-evidence
+        run: |
+          trap 'cat "$WAFER_SMOKE_EVIDENCE/unified.json" 2>/dev/null; scripts/sandbox-smoke.sh clean' EXIT
+          scripts/sandbox-smoke.sh run
