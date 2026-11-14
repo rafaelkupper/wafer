@@ -390,7 +390,6 @@ final class MarkdownReaderDocument: NSDocument {
         let palette = ReaderTheme.current
         let wikiLinkIndex = wikiLinkIndexProvider()
         lastRenderedWikiLinkIndex = wikiLinkIndex
-        renderedPalette = palette
         let workItem = scheduleRender(source.sourceText, fileURL, palette, wikiLinkIndex) { [weak self] output in
             guard let self, self.renderToken == token else {
                 return
@@ -421,6 +420,7 @@ final class MarkdownReaderDocument: NSDocument {
             if let anchorID = self.pendingAnchor.id {
                 self.pendingAnchor = .afterPageLoad(anchorID)
             }
+            self.renderedPalette = palette
             self.readerController?.apply(renderOutput: output, initialScrollFraction: restoreFraction)
         }
         if renderToken == token, isRendering { renderWorkItem = workItem }
