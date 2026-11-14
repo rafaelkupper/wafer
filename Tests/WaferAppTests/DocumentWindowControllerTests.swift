@@ -7,7 +7,7 @@ import XCTest
 @MainActor
 final class DocumentWindowControllerTests: XCTestCase {
     func testWindowUsesUnifiedTitlebarChromeAndWrapsContentController() throws {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let store = DocumentStatisticPreferenceStore(defaults: defaults)
         let contentViewController = NSViewController()
         let windowController = DocumentWindowController(
@@ -83,7 +83,7 @@ final class DocumentWindowControllerTests: XCTestCase {
 
     func testThemeChangeUpdatesWindowAppearanceAndNativeChrome() throws {
         defer { ReaderTheme.resetToDefaultForTesting() }
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let store = AppearancePreferenceStore(defaults: defaults, systemIsDark: { false })
         store.appearanceSelection = .dark
         let contentViewController = RecordingThemeApplyingViewController()
@@ -108,7 +108,7 @@ final class DocumentWindowControllerTests: XCTestCase {
     func testEffectiveAppearanceChangeFollowsSystemSelectionOnly() {
         defer { ReaderTheme.resetToDefaultForTesting() }
         let systemAppearance = SystemAppearanceStub(isDark: false)
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let store = AppearancePreferenceStore(defaults: defaults, systemIsDark: { systemAppearance.isDark })
         let windowController = DocumentWindowController(
             contentViewController: NSViewController(),
@@ -196,7 +196,7 @@ final class DocumentWindowControllerTests: XCTestCase {
     }
 
     func testStatsAccessoryFormatsUpdatedStatistics() {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let store = DocumentStatisticPreferenceStore(defaults: defaults)
         let windowController = DocumentWindowController(
             contentViewController: NSViewController(),
@@ -522,7 +522,7 @@ private func testWindowController(
 @MainActor
 private func testAppearancePreferenceStore(systemIsDark: Bool = true) -> AppearancePreferenceStore {
     AppearancePreferenceStore(
-        defaults: UserDefaults(suiteName: UUID().uuidString)!,
+        defaults: makeTestUserDefaults(),
         missingCustomThemeNotifier: { _ in },
         systemIsDark: { systemIsDark }
     )

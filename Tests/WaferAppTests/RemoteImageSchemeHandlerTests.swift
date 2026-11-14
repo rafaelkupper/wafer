@@ -49,7 +49,7 @@ final class RemoteImageSchemeHandlerTests: XCTestCase {
 
     func testPreferenceChangeAppliesToSubsequentFetches() {
         let fetcher = FakeRemoteImageFetcher()
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let preferenceStore = ReaderBehaviorPreferenceStore(defaults: defaults)
         let handler = RemoteImageSchemeHandler(fetcher: fetcher, preferenceStore: preferenceStore)
         let task = FakeURLSchemeTask(url: proxyURL(for: "https://example.com/image.png"))
@@ -209,7 +209,7 @@ final class RemoteImageSchemeHandlerTests: XCTestCase {
         maximumByteCount: Int = RemoteImageSchemeHandler.defaultMaximumByteCount,
         loadsRemoteImages: Bool = true
     ) -> RemoteImageSchemeHandler {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let preferenceStore = ReaderBehaviorPreferenceStore(defaults: defaults)
         preferenceStore.loadsRemoteImages = loadsRemoteImages
         return RemoteImageSchemeHandler(

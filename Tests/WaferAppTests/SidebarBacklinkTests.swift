@@ -17,7 +17,7 @@ final class SidebarBacklinkTests: XCTestCase {
 
         let center = NotificationCenter()
         let controller = LibraryController(
-            preferenceStore: LibraryPreferenceStore(defaults: UserDefaults(suiteName: UUID().uuidString)!),
+            preferenceStore: LibraryPreferenceStore(defaults: makeTestUserDefaults()),
             notificationCenter: center,
             monitorFactory: { _, _ in StubDirectoryMonitor() }
         )

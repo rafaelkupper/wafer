@@ -57,9 +57,7 @@ final class ReviewRegressionTests: XCTestCase {
     }
     func testInactiveTabAdoptsThemeWhenSelectedWithoutAnotherRender() throws {
         defer { ReaderTheme.resetToDefaultForTesting() }
-        let suite = UUID().uuidString
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let defaults = makeTestUserDefaults()
         let appearance = AppearancePreferenceStore(defaults: defaults, systemIsDark: { true })
         appearance.appearanceSelection = .dark
         let firstReader = RecordingReaderViewController()

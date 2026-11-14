@@ -102,7 +102,7 @@ final class DocumentExportControllerTests: XCTestCase {
         let tempDirectory = try TemporaryTestDirectory()
         defer { tempDirectory.remove() }
         let outputURL = tempDirectory.url.appendingPathComponent("RemoteDisabled.html")
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = makeTestUserDefaults()
         let preferenceStore = ReaderBehaviorPreferenceStore(defaults: defaults)
         preferenceStore.loadsRemoteImages = false
         let fetcher = RecordingRemoteImageFetcher()

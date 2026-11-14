@@ -284,7 +284,7 @@ never contains unresolved `wafer-*` image URLs. The total raw inlined image payl
 
 The HTML export controller keeps UI-facing state on the main actor, but the heavy sanitize, inline, and atomic-write stage runs in a detached utility-priority task. The inliner is created inside that background task so its mutable state never crosses actor boundaries, and completion hops back to the main actor only to clear the re-entry guard or present errors.
 
-Document construction requires an explicit `ScrollStateStore`. Production openers pass the persistent store; tests use unique preferences suites removed after each test, including nested document factories.
+Document construction requires an explicit `ScrollStateStore`. Production openers pass the persistent store; tests use the shared `makeTestUserDefaults` helper for unique preferences suites, including nested document factories. The helper keeps values in a thread-safe, in-memory `UserDefaults` subclass because cfprefsd can recreate deleted suite files after cleanup. Test teardown clears the values and checks that the generated suite never reached disk.
 
 Reader scroll positions are persisted by `ScrollStateStore` with one key per document path; the fingerprint is stored in the entry and must match on load. Saving another version replaces that entry. Initialization prunes legacy fingerprint-keyed entries, so launch-time age pruning needs no app change. Scroll updates use a trailing debounce in `MarkdownReaderDocument`, flush immediately when a document closes or navigates in the current window, and prune entries older than 180 days once per app launch.
 
