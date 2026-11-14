@@ -24,8 +24,8 @@ public enum PreviewComposerError: Error, Equatable {
 }
 
 public struct PreviewComposer {
-    public static let sourceByteLimit = 2 * 1024 * 1024
-    public static let attachmentByteLimit = 10 * 1024 * 1024
+    public static let sourceByteLimit = WaferLimits.previewSourceByteCount
+    public static let attachmentByteLimit = WaferLimits.previewAttachmentByteCount
 
     private let allowsLocalImages: Bool
 

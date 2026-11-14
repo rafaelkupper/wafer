@@ -85,9 +85,9 @@ public enum LibraryScanner {
     ]
 
     public static func scan(
-        rootURL: URL, fileLimit: Int = 2_000, existingFiles: [LibraryFile] = [],
+        rootURL: URL, fileLimit: Int = WaferLimits.libraryFileCount, existingFiles: [LibraryFile] = [],
         changedPaths: Set<String>? = [], cancellation: WorkCancellation? = nil,
-        maximumFileByteCount: Int = 2 * 1024 * 1024, maximumLibraryByteCount: Int = 128 * 1024 * 1024
+        maximumFileByteCount: Int = WaferLimits.libraryFileByteCount, maximumLibraryByteCount: Int = WaferLimits.libraryByteCount
     ) -> Result {
         guard fileLimit > 0 else {
             var traversal = LibraryTraversal(rootURL: FileIdentity.normalized(rootURL), fileLimit: 1)
