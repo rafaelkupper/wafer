@@ -84,10 +84,14 @@ extension XCTestCase {
     @MainActor
     func installSandboxedFolderAccess(
         defaults: UserDefaults? = nil,
-        bookmarks: FakeSecurityScopedBookmarks = FakeSecurityScopedBookmarks()
+        bookmarks: FakeSecurityScopedBookmarks = FakeSecurityScopedBookmarks(),
+        canOpenForReading: @escaping @MainActor (URL) -> Bool = { _ in true }
     ) -> SandboxedFolderAccess {
         let defaults = defaults ?? makeTestUserDefaults()
-        let store = FolderAccessStore(defaults: defaults, bookmarks: bookmarks, isSandboxed: true, alwaysReadableRoots: [])
+        let store = FolderAccessStore(
+            defaults: defaults, bookmarks: bookmarks, isSandboxed: true, alwaysReadableRoots: [],
+            canOpenForReading: canOpenForReading
+        )
         FolderAccessTestSupport.install(store)
         addTeardownBlock {
             await MainActor.run { FolderAccessTestSupport.restore() }
@@ -386,6 +390,60 @@ final class FolderAccessFlowTests: XCTestCase {
         read(missing, .opening(url))
 
         XCTAssertEqual(offersGrant, [true, true, false], "other read failures keep their own error")
+    }
+
+    /// Recents saved by the unsandboxed 2.1.1 have no sandbox bookmark, so
+    /// a session selection can claim a file the sandbox still refuses.
+    func testARefusedReadOfACoveredFileDropsTheStaleSelectionAndOffersGrantAccess() {
+        let access = installSandboxedFolderAccess()
+        let url = URL(fileURLWithPath: "/tmp/wafer-stale-recent/Plan.md")
+        let refusing = MarkdownSourceLoader(load: { _ in
+            throw CocoaError(.fileReadNoPermission, userInfo: [NSUnderlyingErrorKey: POSIXError(.EPERM) as NSError])
+        })
+
+        for state in [MarkdownSourceLoader.LoadState.opening(url), .navigating(url), .reloading(url)] {
+            access.store.noteUserSelected([url])
+            XCTAssertTrue(access.store.covers(url))
+            var result: Result<LoadedMarkdownSource, Error>?
+            let finished = expectation(description: "read finished")
+            refusing.read(state) { result = $0; finished.fulfill() }
+            wait(for: [finished], timeout: 10)
+
+            guard case .failure(let error)? = result else { return XCTFail("\(state): the read succeeded") }
+            XCTAssertTrue(error is FolderAccessDeniedError, "\(state) offers Grant Access…, not \(error)")
+            XCTAssertFalse(access.store.covers(url), "\(state) drops the stale selection")
+        }
+    }
+
+    func testOpenRecentTrustsOnlyARecentDocumentThatIsReadableNow() throws {
+        NSDocumentController.shared.clearRecentDocuments(nil)
+        defer { NSDocumentController.shared.clearRecentDocuments(nil) }
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let recent = try directory.createTextFile(named: "Recent.md", contents: "# Recent")
+        NSDocumentController.shared.noteNewRecentDocumentURL(recent)
+        // Saved by Wafer 2.1.1 without the sandbox: AppKit has no bookmark for it.
+        let access = installSandboxedFolderAccess(canOpenForReading: { _ in false })
+        var requests: [FolderAccessRequest] = []
+        FolderAccessFlow.chooseFolder = { request, _, completion in
+            requests.append(request)
+            completion(nil)
+        }
+        let menu = AppMenuBuilder.makeMainMenu(windowsMenu: NSMenu(title: "Window"), appDelegate: AppDelegate(openURLs: { _ in }))
+        let openRecent = try XCTUnwrap(menu.items[1].submenu?.items[1].submenu)
+        openRecent.delegate?.menuNeedsUpdate?(openRecent)
+        let item = try XCTUnwrap(openRecent.items.first { $0.title == "Recent.md" })
+
+        XCTAssertTrue(NSApplication.shared.sendAction(try XCTUnwrap(item.action), to: item.target, from: item))
+
+        XCTAssertFalse(access.store.covers(recent), "an unreadable recent is not a session selection")
+        XCTAssertEqual(requests.map { $0.suggestedFolder.resolvingSymlinksInPath().path },
+                       [directory.url.resolvingSymlinksInPath().path], "opening it asks for its folder")
+        XCTAssertEqual(MarkdownDocumentOpener.retainedDocumentCountForTesting, 0)
+
+        let readable = installSandboxedFolderAccess(canOpenForReading: { _ in true })
+        readable.store.noteRecentDocumentOpened(recent)
+        XCTAssertTrue(readable.store.covers(recent), "a recent AppKit restored access to counts as opened")
     }
 }
 

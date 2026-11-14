@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import os
 import Security
@@ -112,6 +113,7 @@ final class FolderAccessStore {
     private let defaults: UserDefaults
     private let notificationCenter: NotificationCenter
     private let bookmarks: SecurityScopedBookmarking
+    private let canOpenForReading: @MainActor (URL) -> Bool
     /// The container, its temporary folder, and the app bundle.
     private let alwaysReadable: [FileContainment]
     private var grants: [Grant] = [] {
@@ -134,12 +136,14 @@ final class FolderAccessStore {
         notificationCenter: NotificationCenter = .default,
         bookmarks: SecurityScopedBookmarking = SystemSecurityScopedBookmarks(),
         isSandboxed: Bool = AppSandbox.isActive,
-        alwaysReadableRoots: [URL] = FolderAccessStore.defaultAlwaysReadableRoots()
+        alwaysReadableRoots: [URL] = FolderAccessStore.defaultAlwaysReadableRoots(),
+        canOpenForReading: @escaping @MainActor (URL) -> Bool = FolderAccessStore.canOpenForReading
     ) {
         self.defaults = defaults
         self.notificationCenter = notificationCenter
         self.bookmarks = bookmarks
         self.isSandboxed = isSandboxed
+        self.canOpenForReading = canOpenForReading
         self.alwaysReadable = isSandboxed ? alwaysReadableRoots.map { FileContainment(rootDirectory: $0) } : []
     }
 
@@ -246,6 +250,37 @@ final class FolderAccessStore {
         for url in urls where url.isFileURL {
             userSelections[FileIdentity.identity(for: url)] = FileContainment(rootDirectory: url)
         }
+    }
+
+    /// A document chosen from Open Recent. AppKit restores access to recent
+    /// documents from its own bookmarks, but recents saved without the
+    /// sandbox (Wafer 2.1.1) have none, so only a file that opens now counts
+    /// as opened by the user. Opening another one asks for its folder.
+    func noteRecentDocumentOpened(_ url: URL) {
+        guard isSandboxed, url.isFileURL else { return }
+        guard canOpenForReading(url) else {
+            Self.log.info("The recent document \(url.lastPathComponent, privacy: .private) is not readable without a folder grant")
+            return
+        }
+        noteUserSelected([url])
+    }
+
+    /// The sandbox refused to read `fileURL`, so a session selection for it
+    /// no longer applies, whatever the store believed.
+    func noteReadRefused(_ fileURL: URL) {
+        guard isSandboxed,
+              userSelections.removeValue(forKey: FileIdentity.identity(for: fileURL)) != nil else { return }
+        Self.log.info("Dropped the session access to \(fileURL.lastPathComponent, privacy: .private) after the sandbox refused a read")
+    }
+
+    /// Whether the sandbox lets this process open `url` for reading now.
+    /// A refusal is reported as a sandbox violation, so call it only where
+    /// access is genuinely unknown.
+    nonisolated static func canOpenForReading(_ url: URL) -> Bool {
+        let descriptor = open(url.path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
+        guard descriptor >= 0 else { return false }
+        close(descriptor)
+        return true
     }
 
     /// Stops access started for grants. Called when the app terminates.

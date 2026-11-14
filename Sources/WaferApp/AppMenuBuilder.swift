@@ -567,8 +567,9 @@ final class RecentDocumentsMenuController: NSObject, NSMenuDelegate {
             return
         }
 
-        // AppKit restores access to recent documents from its own bookmarks.
-        FolderAccessStore.shared.noteUserSelected([url])
+        // AppKit restores access to recent documents from its own bookmarks,
+        // except for recents saved without the sandbox; those ask for their folder.
+        FolderAccessStore.shared.noteRecentDocumentOpened(url)
         MarkdownDocumentOpener.open(urls: [url])
     }
 }
