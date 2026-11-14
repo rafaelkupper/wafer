@@ -61,6 +61,8 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
     private(set) var lastFindQueryForTesting: String?
     private(set) var lastFindDirectionForTesting: String?
     private(set) var lastFindMatchFoundForTesting: Bool?
+    /// Re-installed on every reader load, after the reader's own user scripts.
+    var additionalUserScriptsForTesting: [WKUserScript] = []
     #endif
 
     var onOpenLink: ((URL) -> Void)?
@@ -305,6 +307,9 @@ class WebKitReaderViewController: NSViewController, WKNavigationDelegate, WKScri
               postMessage: function() { document.dispatchEvent(new Event('wafer-content-ready')); }
             };
             """, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page))
+        #if DEBUG
+        additionalUserScriptsForTesting.forEach(controller.addUserScript)
+        #endif
         currentNavigation = webView.loadHTMLString(html, baseURL: readerURL)
     }
 

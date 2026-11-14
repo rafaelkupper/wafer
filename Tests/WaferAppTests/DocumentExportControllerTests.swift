@@ -108,7 +108,7 @@ final class DocumentExportControllerTests: XCTestCase {
             reader.loadHTMLForTesting(htmlDocument(body: ""))
         }
         let webView = try XCTUnwrap(reader.webViewForExport)
-        webView.configuration.userContentController.addUserScript(WKUserScript(
+        reader.additionalUserScriptsForTesting = [WKUserScript(
             source: """
             window.blockedImages = [];
             document.addEventListener('securitypolicyviolation', event => {
@@ -118,7 +118,7 @@ final class DocumentExportControllerTests: XCTestCase {
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true,
             in: .defaultClient
-        ))
+        )]
         waitForNavigation(in: reader) {
             reader.loadHTMLForTesting(htmlDocument(body: """
                 <img src="https://example.com/blocked.png">
