@@ -445,6 +445,61 @@ final class FolderAccessFlowTests: XCTestCase {
         readable.store.noteRecentDocumentOpened(recent)
         XCTAssertTrue(readable.store.covers(recent), "a recent AppKit restored access to counts as opened")
     }
+
+    func testGrantAccessRecoveryReopensTheFileFromTheGrantEvenWhenThePanelIsASheet() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let fileURL = try directory.createTextFile(named: "Plan.md", contents: "# Plan")
+        let access = installSandboxedFolderAccess()
+        // Covered as far as the store knows; the refused read asks anyway.
+        access.store.noteUserSelected([fileURL])
+        var pendingChoice: (@MainActor (URL?) -> Void)?
+        var requests: [FolderAccessRequest] = []
+        FolderAccessFlow.chooseFolder = { request, _, completion in
+            requests.append(request)
+            pendingChoice = completion  // a sheet: the choice arrives later
+        }
+        let loads = FolderAccessLoadCounter()
+        let document = MarkdownReaderDocument(
+            librarySnapshotProvider: emptyTestLibrarySnapshot,
+            scrollStateStore: makeTestScrollStateStore(),
+            renderScheduler: { _, _, _, _, _ in DispatchWorkItem {} },
+            readerControllerFactory: { RecordingReaderViewController() },
+            sourceLoader: { url in
+                loads.increment()
+                return try MarkdownSourceLoader.loadSource(from: url)
+            },
+            fileMonitorFactory: { _, _ in FolderAccessTestFileMonitor() }
+        )
+        document.fileURL = fileURL
+        try document.read(from: Data("# Plan".utf8), ofType: "dev.wafer.markdown")
+        OpenDocumentRegistry.shared.retain(document)
+        defer { document.close() }
+
+        XCTAssertFalse(FolderAccessDeniedError(fileURL: fileURL).attemptRecovery(optionIndex: 0))
+        XCTAssertEqual(requests.count, 1)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        XCTAssertEqual(loads.value, 0, "nothing reopens before the choice")
+
+        pendingChoice?(directory.url)
+        let deadline = Date(timeIntervalSinceNow: 5)
+        while loads.value == 0, Date() < deadline {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        }
+        XCTAssertEqual(loads.value, 1, "the grant reopens the file")
+    }
+}
+
+/// Counts source loads from the background read queue.
+private final class FolderAccessLoadCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int { lock.withLock { count } }
+
+    func increment() {
+        lock.withLock { count += 1 }
+    }
 }
 
 /// The window notice, sidebar summaries, and in-window navigation under a

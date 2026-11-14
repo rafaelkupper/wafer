@@ -34,6 +34,16 @@ enum FolderAccessFlow {
         if let documentURL {
             store.recordUnreadableFile(url, forDocumentAt: documentURL)
         }
+        requestAccess(to: url, window: window, onGranted: onGranted)
+        return false
+    }
+
+    /// Asks for a folder that holds `url`, even when Wafer believes it can
+    /// read it (after a refused read), and calls `onGranted` once a grant
+    /// covers it. The panel may be a sheet, so callers continue only from
+    /// `onGranted`, never after this returns.
+    static func requestAccess(to url: URL, window: NSWindow?, onGranted: @escaping @MainActor () -> Void) {
+        let store = FolderAccessStore.shared
         let folder = FileIdentity.normalized(url).deletingLastPathComponent()
         let request = FolderAccessRequest(suggestedFolder: folder, message: message(
             opening: url.lastPathComponent, folderName: folder.lastPathComponent
@@ -43,7 +53,6 @@ enum FolderAccessFlow {
             refreshDocuments(store.grantAccess(to: chosen))
             if store.covers(url) { onGranted() }
         }
-        return false
     }
 
     /// Grant Access… in a document window: offers the document's folder, or
@@ -134,29 +143,24 @@ struct FolderAccessDeniedError: LocalizedError, CustomNSError, RecoverableError 
         ["Grant Access…", "Cancel"]
     }
 
-    /// Runs on the main thread after the error's alert closes.
+    /// Runs on the main thread after the error's alert closes. The read was
+    /// refused, so the panel opens even if Wafer believed it could read the
+    /// file. The grant's completion reopens the file, so this works whether
+    /// the panel runs modally or as a sheet; the result only says nothing was
+    /// recovered before returning.
     func attemptRecovery(optionIndex recoveryOptionIndex: Int) -> Bool {
         guard recoveryOptionIndex == 0 else { return false }
         let fileURL = fileURL
-        return MainActor.assumeIsolated {
-            let reopen = {
+        MainActor.assumeIsolated {
+            FolderAccessFlow.requestAccess(to: fileURL, window: nil) {
                 if let document = OpenDocumentRegistry.shared.document(for: fileURL) {
                     document.reloadDocument(nil)
                 } else {
                     MarkdownDocumentOpener.open(urls: [fileURL])
                 }
             }
-            var granted = false
-            // Without a window the panel is app-modal, so this returns after it.
-            if FolderAccessFlow.ensureAccess(to: fileURL, requestedBy: nil, window: nil, onGranted: {
-                granted = true
-                reopen()
-            }) {
-                reopen()
-                return true
-            }
-            return granted
         }
+        return false
     }
 
     /// A read refused for permission. The sandbox reports EPERM; a POSIX
