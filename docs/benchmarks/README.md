@@ -26,9 +26,9 @@ Footprint fell about 62%. The all-match `needle` query without snippets improved
 To build the runner on each revision:
 
 ```sh
-python3 Tests/Fixtures/WaferCore/Benchmarks/library-index.py /tmp/wafer-index-before
+python3 docs/benchmarks/library-index.py /tmp/wafer-index-before
 # After applying the index change:
-python3 Tests/Fixtures/WaferCore/Benchmarks/library-index.py /tmp/wafer-index-after
+python3 docs/benchmarks/library-index.py /tmp/wafer-index-after
 ```
 
 Run those binaries in alternating fresh processes five times; each prints one JSON record. The build helper supports both SwiftPM native and Swift Build output layouts. The initial standalone compilation needed that layout adjustment; its failed compilation is excluded from measurements.
@@ -37,6 +37,6 @@ To check missing-resource degradation with the release core, put the binary in a
 
 ```sh
 mkdir -p /tmp/wafer-missing-resources
-python3 Tests/Fixtures/WaferCore/Benchmarks/library-index.py /tmp/wafer-missing-resources/check Tests/Fixtures/WaferCore/Benchmarks/missing-resources.swift
+python3 docs/benchmarks/library-index.py /tmp/wafer-missing-resources/check docs/benchmarks/missing-resources.swift
 /tmp/wafer-missing-resources/check
 ```
