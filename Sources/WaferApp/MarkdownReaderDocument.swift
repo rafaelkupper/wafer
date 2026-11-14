@@ -39,9 +39,7 @@ final class MarkdownReaderDocument: NSDocument {
 
     private let assetResolver: AssetResolver
     private let scrollStateStore: ScrollStateStore
-    private let renderWorker = MarkdownRenderWorker()
-    /// Replaces the render worker in tests.
-    private let injectedRenderScheduler: RenderScheduler?
+    private let rendering: DocumentRenderCoordinator
     private let markdownLinkOpener: MarkdownLinkOpener
     private let linkTargetHandler: LinkTargetHandler
     private let readerControllerFactory: ReaderControllerFactory
@@ -65,10 +63,6 @@ final class MarkdownReaderDocument: NSDocument {
     private weak var readerController: WebKitReaderViewController?
     private weak var documentWindowController: DocumentWindowController?
     private var fileMonitor: FileChangeMonitoring?
-    private var renderWorkItem: DispatchWorkItem?
-    private var isRendering = false
-    private var pendingLiveRender = false
-    private var renderToken = UUID()
     private var initialSourceFailureHandler: (@MainActor () -> Void)?
     private var currentStatistics: DocumentStatistics?
     private var currentSidebarEntries: [DocumentSidebarEntry] = []
@@ -81,7 +75,6 @@ final class MarkdownReaderDocument: NSDocument {
     private(set) var navigationHistory = WindowNavigationHistory()
     private var lastRenderedWikiLinkIndex: WikiLinkIndex?
     private var lastOutputHadWikiLinks = false
-    private var renderedPalette: ReaderThemePalette?
     var initialCascadeSourceWindow: NSWindow?
     var hasLoadedSource: Bool { source != nil }
 
@@ -135,7 +128,13 @@ final class MarkdownReaderDocument: NSDocument {
     ) {
         self.assetResolver = assetResolver
         self.scrollStateStore = scrollStateStore
-        self.injectedRenderScheduler = renderScheduler
+        if let renderScheduler {
+            self.rendering = DocumentRenderCoordinator { request, completion in
+                renderScheduler(request.source, request.baseURL, request.palette, request.wikiLinkIndex, completion)
+            }
+        } else {
+            self.rendering = DocumentRenderCoordinator()
+        }
         self.markdownLinkOpener = markdownLinkOpener
         self.linkTargetHandler = linkTargetHandler
         self.readerControllerFactory = readerControllerFactory
@@ -264,9 +263,7 @@ final class MarkdownReaderDocument: NSDocument {
             _ = flushEdits(interactive: false)
         }
         editMode.stop()
-        renderToken = UUID()
-        isRendering = false
-        pendingLiveRender = false
+        rendering.cancel()
         sourceLoading.abandon()
         initialSourceFailureHandler = nil
         sourceLoading.deferredReload = nil
@@ -274,8 +271,6 @@ final class MarkdownReaderDocument: NSDocument {
         stopFileMonitor()
         persistCurrentScrollFraction()
         scrollPersistenceWorkItem?.cancel()
-        renderWorkItem?.cancel()
-        renderWorker.cancel()
         readerController?.shutdown()
         MarkdownDocumentOpener.release(document: self)
         super.close()
@@ -352,19 +347,25 @@ final class MarkdownReaderDocument: NSDocument {
         showsLoadingPlaceholder: Bool = true,
         live: Bool = false
     ) {
-        guard let source, let readerController else {
-            return
+        rendering.request(live: live) { [weak self] in
+            guard let self, let source = self.source, let readerController = self.readerController else {
+                return nil
+            }
+            return self.renderRequest(
+                source: source, readerController: readerController,
+                initialScrollFractionOverride: initialScrollFractionOverride,
+                showsLoadingPlaceholder: showsLoadingPlaceholder, live: live
+            )
         }
+    }
 
-        // Typing coalesces behind the active render; navigation and explicit
-        // refreshes still supersede it through the generation token.
-        if live, isRendering {
-            pendingLiveRender = true
-            return
-        }
-        pendingLiveRender = false
-        isRendering = true
-
+    private func renderRequest(
+        source: LoadedMarkdownSource,
+        readerController: WebKitReaderViewController,
+        initialScrollFractionOverride: Double?,
+        showsLoadingPlaceholder: Bool,
+        live: Bool
+    ) -> DocumentRenderCoordinator.Request {
         let fileURL = fileURL
         let restoreFraction: Double?
         if live {
@@ -376,10 +377,6 @@ final class MarkdownReaderDocument: NSDocument {
         } else {
             restoreFraction = nil
         }
-        let token = UUID()
-        renderToken = token
-
-        renderWorkItem?.cancel()
         if showsLoadingPlaceholder {
             currentStatistics = nil
             currentActiveHeadingID = nil
@@ -392,21 +389,11 @@ final class MarkdownReaderDocument: NSDocument {
         let palette = ReaderTheme.current
         let wikiLinkIndex = wikiLinkIndexProvider()
         lastRenderedWikiLinkIndex = wikiLinkIndex
-        let workItem = scheduleRender(source.sourceText, fileURL, palette, wikiLinkIndex) { [weak self] output in
-            guard let self, self.renderToken == token else {
-                return
-            }
-
-            self.isRendering = false
-            self.renderWorkItem = nil
-            defer {
-                if self.pendingLiveRender {
-                    self.pendingLiveRender = false
-                    self.scheduleRenderIfPossible(
-                        initialScrollFractionOverride: nil, showsLoadingPlaceholder: false, live: true
-                    )
-                }
-            }
+        return DocumentRenderCoordinator.Request(
+            source: source.sourceText, baseURL: fileURL, palette: palette,
+            wikiLinkIndex: wikiLinkIndex, annotatesSourceLines: isEditing
+        ) { [weak self] output in
+            guard let self else { return }
             self.lastOutputHadWikiLinks = output.hasWikiLinks
             if live {
                 self.applyLiveRender(output)
@@ -422,33 +409,8 @@ final class MarkdownReaderDocument: NSDocument {
             if let anchorID = self.pendingAnchor.id {
                 self.pendingAnchor = .afterPageLoad(anchorID)
             }
-            self.renderedPalette = palette
             self.readerController?.apply(renderOutput: output, initialScrollFraction: restoreFraction)
         }
-        if renderToken == token, isRendering { renderWorkItem = workItem }
-    }
-
-    /// Edit-mode renders carry source-line annotations; each request says so
-    /// itself, so the worker keeps no flag between requests.
-    private func scheduleRender(
-        _ source: String,
-        _ baseURL: URL?,
-        _ palette: ReaderThemePalette,
-        _ wikiLinkIndex: WikiLinkIndex?,
-        completion: @escaping @MainActor @Sendable (WebKitRenderOutput) -> Void
-    ) -> DispatchWorkItem {
-        if let injectedRenderScheduler {
-            return injectedRenderScheduler(source, baseURL, palette, wikiLinkIndex, completion)
-        }
-
-        return renderWorker.schedule(
-            source: source,
-            baseURL: baseURL,
-            palette: palette,
-            wikiLinkIndex: wikiLinkIndex,
-            annotatesSourceLines: isEditing,
-            completion: completion
-        )
     }
 
     /// Typing must stay cheap: only chrome state that changed is pushed,
@@ -503,10 +465,10 @@ final class MarkdownReaderDocument: NSDocument {
     }
 
     func applyThemeIfNeeded() {
-        let palette = ReaderTheme.current
-        guard palette != renderedPalette, let readerController, readerController.isContentReadyForExport else { return }
-        renderedPalette = palette
-        readerController.updateTheme(palette)
+        guard let readerController else { return }
+        rendering.applyThemeIfNeeded(ReaderTheme.current, isContentReady: readerController.isContentReadyForExport) {
+            readerController.updateTheme($0)
+        }
     }
 
     private func rerenderPreservingScroll() {

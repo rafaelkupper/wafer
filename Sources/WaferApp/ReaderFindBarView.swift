@@ -28,19 +28,19 @@ final class ReaderFindBarView: NSView {
             previousButton,
             target: target,
             symbolName: "chevron.up",
-            action: #selector(WebKitReaderViewController.findPreviousMatch(_:))
+            action: #selector(ReaderFindController.findPreviousMatch(_:))
         )
         configureFindButton(
             nextButton,
             target: target,
             symbolName: "chevron.down",
-            action: #selector(WebKitReaderViewController.findNextMatch(_:))
+            action: #selector(ReaderFindController.findNextMatch(_:))
         )
         configureFindButton(
             closeButton,
             target: target,
             symbolName: "xmark",
-            action: #selector(WebKitReaderViewController.hideFindInterface(_:))
+            action: #selector(ReaderFindController.hideFindInterface(_:))
         )
 
         let buttonStack = NSStackView(views: [previousButton, nextButton, closeButton])
