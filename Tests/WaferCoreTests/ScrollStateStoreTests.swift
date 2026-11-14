@@ -4,9 +4,7 @@ import XCTest
 
 final class ScrollStateStoreTests: XCTestCase {
     func testConstructionDoesNotEnumerateDefaultsAndMigrationIsExplicit() throws {
-        let suite = "dev.wafer.tests.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(CountingDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let defaults = try XCTUnwrap(CountingDefaults(suiteName: "dev.wafer.tests.counting.\(UUID().uuidString)"))
         defaults.set("obsolete", forKey: "scroll-state:legacy")
         defaults.set("keep", forKey: "unrelated")
         for _ in 0..<20 { _ = ScrollStateStore(defaults: defaults) }
@@ -75,11 +73,18 @@ final class ScrollStateStoreTests: XCTestCase {
     }
 }
 
+/// In-memory, so the suite never reaches ~/Library/Preferences. Single-threaded test use only.
 private final class CountingDefaults: UserDefaults, @unchecked Sendable {
     var enumerationCount = 0
+    private var values: [String: Any] = [:]
+
+    override func object(forKey defaultName: String) -> Any? { values[defaultName] }
+    override func set(_ value: Any?, forKey defaultName: String) { values[defaultName] = value }
+    override func removeObject(forKey defaultName: String) { values.removeValue(forKey: defaultName) }
+    override func synchronize() -> Bool { true }
 
     override func dictionaryRepresentation() -> [String: Any] {
         enumerationCount += 1
-        return super.dictionaryRepresentation()
+        return values
     }
 }
