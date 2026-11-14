@@ -97,7 +97,7 @@ final class DocumentSidebarViewController: NSViewController, NSTextFieldDelegate
     private(set) var mode: DocumentSidebarMode = .documents
 
     init(
-        libraryController: LibraryController = .shared,
+        libraryController: LibraryController = LibraryController(),
         notificationCenter: NotificationCenter = .default,
         librarySearchRunner: LibrarySearchRunner? = nil
     ) {
@@ -735,13 +735,14 @@ final class DocumentSidebarViewController: NSViewController, NSTextFieldDelegate
 
     @objc
     private func handleLibraryDidChangeNotification(_ notification: Notification) {
+        guard let change = LibraryChange.value(from: notification) else { return }
         modeToggleView.setLibraryAvailable(libraryController.hasLibrary)
         if !libraryController.hasLibrary, mode == .library {
             setMode(.documents)
             return
         }
-        guard LibraryChange.value(from: notification)?.contentChanged != false else {
-            if LibraryChange.value(from: notification)?.availabilityChanged == true,
+        guard change.contentChanged else {
+            if change.availabilityChanged,
                isViewLoaded, mode == .library { rebuildRows() }
             return
         }

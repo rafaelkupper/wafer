@@ -301,8 +301,8 @@ final class LibraryControllerTests: XCTestCase {
             }
             XCTAssertFalse(change.truncated)
             XCTAssertFalse(change.availabilityChanged)
-            XCTAssertEqual(notification.userInfo?["contentChanged"] as? Bool, change.contentChanged)
-            XCTAssertEqual(notification.userInfo?["availabilityChanged"] as? Bool, change.availabilityChanged)
+            XCTAssertEqual(notification.userInfo?.count, 1)
+            XCTAssertNotNil(notification.userInfo?.values.first as? LibraryChange)
             if change.rootURL == nil {
                 XCTAssertTrue(change.files.isEmpty)
                 XCTAssertFalse(change.isScanning)
@@ -322,6 +322,20 @@ final class LibraryControllerTests: XCTestCase {
         await fulfillment(of: [scanned], timeout: 2)
         controller.closeLibrary()
         await fulfillment(of: [closed], timeout: 2)
+    }
+
+    func testLibraryChangeRejectsUnrelatedAndUntypedNotifications() {
+        let change = LibraryChange(
+            rootURL: nil, files: [], truncated: false, isScanning: false,
+            contentChanged: true, availabilityChanged: false, diff: nil
+        )
+        XCTAssertNil(LibraryChange.value(from: Notification(
+            name: Notification.Name("unrelated"), userInfo: change.userInfo
+        )))
+        XCTAssertNil(LibraryChange.value(from: Notification(name: .libraryDidChange)))
+        XCTAssertNil(LibraryChange.value(from: Notification(
+            name: .libraryDidChange, userInfo: ["change": "invalid"]
+        )))
     }
 
     func testOpeningNonDirectoryThrows() {

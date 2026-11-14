@@ -22,7 +22,7 @@ final class DocumentChromeViewController: NSViewController, ThemeApplying {
     private let tabStripContainerView = NSView()
     private var tabStripHeightConstraint: NSLayoutConstraint?
     private var installedTabStripHeight: CGFloat = 0
-    private let sidebarViewController = DocumentSidebarViewController()
+    private let sidebarViewController: DocumentSidebarViewController
     private let sidebarContainerView = NSView()
     private let sidebarRevealView = NSView()
     private let titlebarBackgroundView = PassthroughTitlebarView()
@@ -63,7 +63,12 @@ final class DocumentChromeViewController: NSViewController, ThemeApplying {
         set { sidebarViewController.onSelectOutlineItem = newValue }
     }
 
-    init(contentViewController: NSViewController, onEffectiveAppearanceChange: @escaping () -> Void = {}) {
+    init(
+        contentViewController: NSViewController,
+        libraryController: LibraryController = LibraryController(),
+        onEffectiveAppearanceChange: @escaping () -> Void = {}
+    ) {
+        self.sidebarViewController = DocumentSidebarViewController(libraryController: libraryController)
         self.contentViewController = contentViewController
         self.onEffectiveAppearanceChange = onEffectiveAppearanceChange
         super.init(nibName: nil, bundle: nil)
