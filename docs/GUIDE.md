@@ -5,6 +5,7 @@ This guide describes Wafer's behavior in detail. For an overview and screenshots
 ## Behavior
 
 - Finder-open markdown documents via `.md`, `.markdown`, `.mdown`, and `.mkd`
+- Runs in the macOS App Sandbox: Wafer reads only the files and folders you choose. When a document needs other files, a bar in its window offers Grant Access… (see [Folder access](#folder-access))
 - Multi-window AppKit document UI that reads by default, with an optional edit mode
 - Edit mode (Edit > Edit Markdown, `Cmd-E`, or the pencil button in the titlebar): the window widens to the left for a syntax-colored Markdown source editor, and the reader becomes a live preview that updates in place as you type; the two panes scroll together (see [Edit Mode](#edit-mode))
 - In-app updates through Sparkle: Wafer > Check for Updates..., with optional scheduled checks (Wafer > Automatically Check for Updates). Nothing is downloaded until you choose to install, and no system profile is sent
@@ -64,6 +65,19 @@ Edit mode puts the Markdown source next to the rendered document. It is off by d
 
 Limits: the panes are aligned by their top line, so a tall diagram or image can leave the line you are typing on below the bottom of the preview. With several tabs, the window takes the width of the selected tab at once when you switch between an editing tab and a reading one. Files with mixed line endings are saved with their most common ending once edited.
 
+## Folder access
+
+Wafer runs in the macOS App Sandbox, so it can read only what you choose. Opening a Markdown file from Finder, the Dock, File > Open..., or File > Open Recent lets Wafer read that file. Images next to it, notes it links to, and the previews of those notes need access to their folder.
+
+- When a document needs such files, a bar appears below the titlebar: "Allow Wafer to read the folder “Notes” to show linked files and images", with **Grant Access…** and a close button. The bar is part of the window, not the document, and never blocks reading.
+- Grant Access… opens a folder panel at the document's folder (or the closest folder that also holds the linked files). Click **Grant Access** to choose that folder, or go up and choose a parent folder: one grant for a parent folder covers every document inside it, so you are not asked again for them.
+- After the grant, images, linked-note previews, and links work at once, without reopening the document.
+- Clicking a link to a note or file outside the folders you granted asks for its folder first, then opens it. In the Documents sidebar, linked notes Wafer cannot read yet say "Needs folder access"; selecting one asks for the grant.
+- Grants are remembered across launches. Documents in your library folder are already covered.
+- If Wafer cannot read a document at all, its error alert offers Grant Access… as well.
+
+The first launch of the sandboxed version moves your preferences, scroll positions, and custom themes into Wafer's container, `~/Library/Containers/dev.wafer.app`. Nothing needs to be redone except choosing the library folder once (below).
+
 ## Folder Library
 
 Open a folder with File > Open Folder... or by dropping a folder on the app. Wafer indexes markdown files with extensions `.md`, `.markdown`, `.mdown`, and `.mkd`, skips hidden files plus `.git`, `.build`, `build`, `dist`, and `node_modules`, and caps the visible library at 2,000 markdown files. If the cap is reached, the Library sidebar shows a quiet truncation footer. Files that cannot be read, or that exceed the indexing budget (2 MiB per file, 128 MiB for the whole library), are left out of the index and counted in a footer such as "3 files skipped (unreadable or too large)". One unreadable file never empties the library; a file that becomes unreadable keeps its last indexed entry.
@@ -72,7 +86,9 @@ Folder changes refresh the library after 500 ms without another change. If anoth
 
 When a folder is opened without an existing reader window, Wafer opens the first markdown file from the completed background scan as the visible entry point for the library.
 
-The Library sidebar mode shows a collapsible folder tree. Selecting a file replaces the current document in the same window, and the current file stays highlighted as you browse. The selected folder is persisted and restored on next launch.
+The Library sidebar mode shows a collapsible folder tree. Selecting a file replaces the current document in the same window, and the current file stays highlighted as you browse. The selected folder is persisted and restored on next launch. Opening it with File > Open Folder... (or by dropping it) also grants Wafer access to the folder, so its notes, images, and links work in later launches.
+
+After you update from a version without the App Sandbox, Wafer asks once to choose your library folder again, because macOS lets it read only folders you choose. The panel opens inside the saved folder, so clicking Choose keeps it. If a folder you already granted contains the library, Wafer reopens it without asking. If you choose Not Now, the library shows as unavailable until you choose File > Retry Library, which offers the panel again. Close Library forgets the library; the folder stays granted.
 
 If the folder or an indexed file becomes unreadable, Wafer keeps the last complete library snapshot and shows "Library unavailable. Results may be stale." in Library mode. The saved folder stays selected across launches. After reconnecting a share or restoring access, choose File > Retry Library to rescan and restart monitoring. Close Library explicitly forgets the folder. A successful scan still removes files that were actually deleted.
 
@@ -156,8 +172,10 @@ Use the Theme menu to choose:
 - bundled themes that ship with the app: GitHub Light, GitHub Dark, Dracula, Solarized Light,
   Solarized Dark, Nord, Monokai, One Dark, Gruvbox Dark, Catppuccin Mocha, Catppuccin Latte,
   Tokyo Night, Rosé Pine, and Synthwave '84
-- custom themes loaded from JSON files in `~/Library/Application Support/Wafer/Themes`; a custom
-  theme with the same `name` as a bundled theme overrides it
+- custom themes loaded from JSON files in Wafer's themes folder,
+  `~/Library/Containers/dev.wafer.app/Data/Library/Application Support/Wafer/Themes` (the first
+  sandboxed launch moves the folder there from `~/Library/Application Support/Wafer/Themes`); a
+  custom theme with the same `name` as a bundled theme overrides it
 
 Bundled themes live in `Sources/WaferApp/Resources/Themes` and are regenerated from compact color
 specs with `python3 scripts/gen_themes.py`.
