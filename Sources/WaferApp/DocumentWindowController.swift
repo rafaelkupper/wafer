@@ -538,6 +538,10 @@ class DocumentWindowController: NSWindowController, ThemeApplying, NSUserInterfa
     var isFolderAccessNoticeVisibleForTesting: Bool {
         folderAccessNotice.map { !$0.isHidden } ?? false
     }
+
+    var titleFrameInWindowForTesting: NSRect {
+        chromeViewController.titleFrameInWindowForTesting
+    }
     #endif
 
     private var activeDocumentURL: URL? {
