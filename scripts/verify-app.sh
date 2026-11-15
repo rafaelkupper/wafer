@@ -97,7 +97,7 @@ sys.exit(1 if problems else 0)
 PY
 
 if (( DISTRIBUTION )); then
-  details=$(codesign -dv "$APP_BUNDLE" 2>&1) || fail "could not read the app's signature details"
+  details=$(codesign -dv --verbose=4 "$APP_BUNDLE" 2>&1) || fail "could not read the app's signature details"
   [[ "$details" == *"Authority=Developer ID Application:"* ]] || fail "app is not signed with a Developer ID Application identity"
   [[ "$details" == *"runtime"* ]] || fail "app is not signed with the hardened runtime"
 fi

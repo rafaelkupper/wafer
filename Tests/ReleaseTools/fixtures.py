@@ -52,8 +52,12 @@ if command == 'codesign':
         if 'APP_ENTITLEMENTS' in os.environ and args[-1].endswith('.app'):
             entitlements = json.loads(os.environ['APP_ENTITLEMENTS'])
         sys.stdout.buffer.write(plistlib.dumps(entitlements))
-    elif '-dv' in args:
-        print('Authority=' + os.environ.get('SIGNING_IDENTITY', 'Developer ID Application: Fixture Publisher (FIXTURE)'))
+    elif '-dv' in args or '-dvv' in args:
+        # Like the real codesign, signer (Authority=) lines appear only at verbosity 2 or higher.
+        verbosity = 2 if '-dvv' in args else 1
+        verbosity = max([verbosity] + [int(a.split('=', 1)[1]) for a in args if a.startswith('--verbose=')])
+        if verbosity >= 2:
+            print('Authority=' + os.environ.get('SIGNING_IDENTITY', 'Developer ID Application: Fixture Publisher (FIXTURE)'))
         print('TeamIdentifier=FIXTURE\nTimestamp=fixture\nflags=' + os.environ.get('CODESIGN_FLAGS', 'runtime'))
 elif command == 'node' and args[:1] == ['-e']:
     version = os.environ.get('NODE_VERSION', '22.0.0')
