@@ -109,6 +109,10 @@ final class DocumentChromeViewController: NSViewController, ThemeApplying {
         centeredTitleView.superview.map { NSStringFromClass(type(of: $0)) }
     }
 
+    var titleFrameInWindowForTesting: NSRect {
+        centeredTitleView.convert(centeredTitleView.bounds, to: nil)
+    }
+
     var isSidebarTransitioningForTesting: Bool { sidebarTransition != nil }
     var contentFrameForTesting: NSRect { contentContainerView.frame }
     var sidebarFrameForTesting: NSRect { sidebarContainerView.frame }
@@ -474,9 +478,17 @@ final class DocumentChromeViewController: NSViewController, ThemeApplying {
                 ),
             ]
         } else {
+            // Titlebar accessories (the folder access bar) make the titlebar view taller, so
+            // centre on the window buttons, which stay in the top row, not on the whole view.
+            let rowCenterY: NSLayoutYAxisAnchor
+            if let closeButton = window.standardWindowButton(.closeButton), closeButton.isDescendant(of: hostView) {
+                rowCenterY = closeButton.centerYAnchor
+            } else {
+                rowCenterY = hostView.centerYAnchor
+            }
             centeredTitleConstraints = [
                 centeredTitleView.centerXAnchor.constraint(equalTo: hostView.centerXAnchor),
-                centeredTitleView.centerYAnchor.constraint(equalTo: hostView.centerYAnchor),
+                centeredTitleView.centerYAnchor.constraint(equalTo: rowCenterY),
                 centeredTitleView.leadingAnchor.constraint(
                     greaterThanOrEqualTo: hostView.leadingAnchor,
                     constant: Self.titlebarLeadingInset
@@ -526,12 +538,13 @@ final class DocumentChromeViewController: NSViewController, ThemeApplying {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = Self.sidebarAnimationDuration
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            context.allowsImplicitAnimation = true
-
-            hostedTransitionLeadingConstraint?.constant = isVisible ? DocumentSidebarViewController.sidebarWidth : 0
-            sidebarRevealWidthConstraint?.constant = isVisible ? DocumentSidebarViewController.sidebarWidth : 0
+            // Animate the constants, not the frames. Animated constants lay the reader out at
+            // every step. An implicit frame animation lays the web view out at its final width
+            // at once and only slides its layer, so the scroll bar jumps by the sidebar width.
+            let target = isVisible ? DocumentSidebarViewController.sidebarWidth : 0
+            hostedTransitionLeadingConstraint?.animator().constant = target
+            sidebarRevealWidthConstraint?.animator().constant = target
             sidebarContainerView.animator().alphaValue = isVisible ? 1 : 0
-            view.layoutSubtreeIfNeeded()
         } completionHandler: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self, self.sidebarTransition?.id == transitionID else { return }

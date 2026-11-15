@@ -1162,6 +1162,29 @@ final class FolderAccessNoticeTests: XCTestCase {
         XCTAssertFalse(host.isFolderAccessNoticeVisibleForTesting)
     }
 
+    func testTheNoticeLeavesTheTitleBesideTheWindowButtons() throws {
+        let directory = try TemporaryTestDirectory()
+        defer { directory.remove() }
+        let fileURL = try directory.createTextFile(named: "Plan.md", contents: "# Plan")
+        let access = installSandboxedFolderAccess()
+        access.store.noteUserSelected([fileURL])
+        let (document, host, _) = try makeHostedDocument(fileURL)
+        defer { document.close() }
+        let window = try XCTUnwrap(host.window)
+        window.layoutIfNeeded()
+        let closeButton = try XCTUnwrap(window.standardWindowButton(.closeButton))
+        let buttonMidY = closeButton.convert(closeButton.bounds, to: nil).midY
+        XCTAssertEqual(host.titleFrameInWindowForTesting.midY, buttonMidY, accuracy: 1)
+
+        access.store.recordRefusedImage(directory.url.appendingPathComponent("image.png"), forDocumentAt: fileURL)
+        window.layoutIfNeeded()
+
+        XCTAssertTrue(host.isFolderAccessNoticeVisibleForTesting)
+        XCTAssertEqual(closeButton.convert(closeButton.bounds, to: nil).midY, buttonMidY, accuracy: 1)
+        XCTAssertEqual(host.titleFrameInWindowForTesting.midY, buttonMidY, accuracy: 1,
+                       "the title moved down into the folder access bar")
+    }
+
     func testANeededFileOutsideTheRangeIsExplainedInsteadOfOffered() throws {
         let directory = try TemporaryTestDirectory()
         defer { directory.remove() }
