@@ -196,7 +196,10 @@ class Fixture:
             path.write_text('#!' + sys.executable + '\n' + STUB)
             path.chmod(0o755)
         (self.root / 'remote.json').write_text(json.dumps({'feed': BASE_FEED.decode(), 'release': None}))
-        self.env = dict(os.environ, PATH=str(bindir) + os.pathsep + os.environ['PATH'],
+        # The caller's release settings (release.py sets WAFER_DIST_DIR, for one) must not reach
+        # the fixture scripts, or they write into the real release directory.
+        inherited = {key: value for key, value in os.environ.items() if not key.startswith('WAFER_')}
+        self.env = dict(inherited, PATH=str(bindir) + os.pathsep + os.environ['PATH'],
                         FIXTURE_ROOT=str(self.root), NEW_FEED=NEW_FEED.decode(),
                         FIXTURE_PRODUCTS_DIR=str(self.products),
                         WAFER_SIGN_IDENTITY=IDENTITY, WAFER_NOTARY_PROFILE='fixture',

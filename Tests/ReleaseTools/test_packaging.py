@@ -1,8 +1,11 @@
 import json
+import os
 import plistlib
 import shutil
 import subprocess
+import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from fixtures import CORE_FILES, IDENTITY, ROOT, Fixture
@@ -49,6 +52,20 @@ class PackagingTests(unittest.TestCase):
 
     def assert_success(self, result):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_the_callers_release_settings_do_not_reach_the_fixture(self):
+        with tempfile.TemporaryDirectory() as outside:
+            marker = Path(outside) / 'release-in-progress'
+            marker.write_text('real release output')
+            with patch.dict(os.environ, WAFER_DIST_DIR=outside, WAFER_SKIP_NOTARIZATION='1'):
+                fixture = Fixture()
+            self.addCleanup(fixture.close)
+            self.assertNotIn('WAFER_DIST_DIR', fixture.env)
+            self.assertNotIn('WAFER_SKIP_NOTARIZATION', fixture.env)
+            result = subprocess.run([str(fixture.root / 'scripts/package-release.sh')],
+                                    env=fixture.env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual([path.name for path in Path(outside).iterdir()], ['release-in-progress'])
 
     def test_build_checks_both_layouts_and_strips_only_appex_runtimes(self):
         for nested in (True, False):
