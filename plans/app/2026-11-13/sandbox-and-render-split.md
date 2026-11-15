@@ -73,7 +73,7 @@ No behavior change. Extract:
 ## Decisions
 
 - The library folder is stored as an ordinary folder grant in `FolderAccessStore`, so there is one bookmark store and one coverage rule; Close Library keeps the grant (documented in GUIDE).
-- Saving keeps `itemReplacementDirectory` plus `replaceItemAt`: a sandboxed probe confirmed it works on a user-opened file on the startup volume and on `/Volumes/Pegasus`.
+- Saving keeps `itemReplacementDirectory` plus `replaceItemAt`: a sandboxed probe confirmed it works on a user-opened file on the startup volume and on an external APFS volume.
 - Sparkle: `SUEnableInstallerLauncherService` on; the Downloader XPC service stays off because the app has `network.client` (Sparkle sandboxing guide). Mach-lookup exceptions `dev.wafer.app-spks` and `dev.wafer.app-spki`.
 - Local builds are ad-hoc signed with the sandbox entitlements but without the hardened runtime (library validation needs a team identity); release builds use Developer ID with the hardened runtime.
 - The reader disables WebKit Safe Browsing lookups; they were the only sandbox denial and add nothing for generated HTML.
