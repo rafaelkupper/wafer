@@ -1134,10 +1134,13 @@ final class ReaderLivePreviewTests: XCTestCase {
         defer { reader.invalidateForTesting(); window.close() }
         // Uneven content: a tall diagram, a table and a long code block, and
         // short paragraphs at both ends.
-        let source = "# Start\n\nIntro\n\n```mermaid\ngraph TD; A-->B; B-->C; C-->D\n```\n\n"
-            + (1...40).map { "Paragraph \($0)." }.joined(separator: "\n\n")
-            + "\n\n| a | b |\n| - | - |\n" + (1...30).map { "| \($0) | x |" }.joined(separator: "\n")
-            + "\n\n```\n" + (1...60).map { "code line \($0)" }.joined(separator: "\n") + "\n```\n\nEnd.\n"
+        let opening = "# Start\n\nIntro\n\n```mermaid\ngraph TD; A-->B; B-->C; C-->D\n```\n\n"
+        let paragraphs: String = (1...40).map { "Paragraph \($0)." }.joined(separator: "\n\n")
+        let rows: String = (1...30).map { "| \($0) | x |" }.joined(separator: "\n")
+        let codeLines: String = (1...60).map { "code line \($0)" }.joined(separator: "\n")
+        let table = "\n\n| a | b |\n| - | - |\n" + rows
+        let code = "\n\n```\n" + codeLines + "\n```\n\nEnd.\n"
+        let source = opening + paragraphs + table + code
         let totalLines = source.split(separator: "\n", omittingEmptySubsequences: false).count
         load(render(source), into: reader, settle: 0.4)
         reader.syncScroll(to: position(line: 1, totalLines: totalLines))

@@ -107,21 +107,22 @@ final class WebKitLocalAssetSchemeHandlerTests: XCTestCase {
         try Data([1]).write(to: url)
         let handler = WebKitLocalAssetSchemeHandler(accessScope: { FolderAccessScope(roots: []) })
         let webView = WKWebView()
-        var announced: [ObjectIdentifier] = []
+        // Posted synchronously on the main thread, so the box needs no lock.
+        let announced = AnnouncedPages()
         let token = NotificationCenter.default.addObserver(forName: .localAssetPageWillLoad, object: nil, queue: nil) { notification in
-            if let object = notification.object as AnyObject? { announced.append(ObjectIdentifier(object)) }
+            if let object = notification.object as AnyObject? { announced.ids.append(ObjectIdentifier(object)) }
         }
         defer { NotificationCenter.default.removeObserver(token) }
 
         handler.documentRootDirectory = directory.url
-        XCTAssertTrue(announced.isEmpty, "nothing served yet, so nothing to reconcile")
+        XCTAssertTrue(announced.ids.isEmpty, "nothing served yet, so nothing to reconcile")
         let refused = expectation(description: "refused")
         handler.webView(webView, start: LocalAssetTestTask(fileURL: url) { refused.fulfill() })
         wait(for: [refused], timeout: 5)
         handler.documentRootDirectory = directory.url
         handler.documentRootDirectory = nil
 
-        XCTAssertEqual(announced, [ObjectIdentifier(webView), ObjectIdentifier(webView)])
+        XCTAssertEqual(announced.ids, [ObjectIdentifier(webView), ObjectIdentifier(webView)])
     }
 
     func testRequestInsideTheSandboxScopeIsRead() throws {
@@ -162,4 +163,8 @@ private final class LocalAssetTestTask: NSObject, WKURLSchemeTask {
     func didReceive(_ data: Data) { self.data.append(data) }
     func didFinish() { finished = true; completion() }
     func didFailWithError(_ error: Error) { self.error = error; completion() }
+}
+
+private final class AnnouncedPages: @unchecked Sendable {
+    var ids: [ObjectIdentifier] = []
 }
