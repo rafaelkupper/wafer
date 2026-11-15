@@ -176,7 +176,10 @@ def publish(review, version, build, public_key, feed, current_feed, repository):
         tag_commit = subprocess.run(["gh", "api", f"repos/{repository}/commits/{tag}", "--jq", ".sha"],
                                     capture_output=True, text=True)
         if tag_commit.returncode:
-            if not existing.returncode or "HTTP 404" not in tag_commit.stderr:
+            # A missing tag answers 404, or 422 "No commit found for SHA" from current GitHub.
+            missing = "HTTP 404" in tag_commit.stderr or (
+                "HTTP 422" in tag_commit.stderr and "no commit found" in tag_commit.stderr.lower())
+            if not existing.returncode or not missing:
                 raise SystemExit(f"Cannot inspect release tag: {tag_commit.stderr.strip()}")
         elif tag_commit.stdout.strip() != receipt["sourceCommit"]:
             raise SystemExit("Release tag does not match source commit")

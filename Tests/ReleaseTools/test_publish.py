@@ -173,6 +173,13 @@ class PublishTests(unittest.TestCase):
         self.invoke(publish=True)
         self.assertEqual(self.state()['release']['commit'], COMMIT)
 
+    def test_missing_tag_reported_as_unknown_commit_is_absent(self):
+        # GitHub answers a missing tag on the commits endpoint with 422, not 404.
+        with patch.dict(os.environ, MISSING_TAG_ERROR='gh: No commit found for SHA: v1.0.0 (HTTP 422)'):
+            self.invoke(publish=True)
+        self.assertEqual(self.state()['release']['commit'], COMMIT)
+        self.assertEqual(self.state()['feed'], NEW_FEED.decode())
+
     def test_tag_lookup_failure_stops_before_mutation(self):
         original = self.state()
         with patch.dict(os.environ, FAIL_COMMAND='gh api repos/example/releases/commits/v1.0.0'):

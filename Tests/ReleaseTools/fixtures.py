@@ -144,7 +144,7 @@ elif command == 'gh':
             sys.exit('fixture API failure')
         commit = state.get('tag') or (state['release']['commit'] if state.get('release') else None)
         if not commit:
-            print('gh: Not Found (HTTP 404)', file=sys.stderr)
+            print(os.environ.get('MISSING_TAG_ERROR', 'gh: Not Found (HTTP 404)'), file=sys.stderr)
             sys.exit(1)
         print(commit)
     else:
