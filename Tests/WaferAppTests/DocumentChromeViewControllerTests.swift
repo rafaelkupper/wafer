@@ -80,6 +80,8 @@ final class DocumentChromeViewControllerTests: XCTestCase {
     /// animates, the web view lays out at the final width at once, so its scroll bar jumps
     /// left by the sidebar width and then slides back with the layer.
     func testSidebarOpeningLaysOutTheReaderAtEachStep() throws {
+        try XCTSkipIf(CGDisplayIsAsleep(CGMainDisplayID()) != 0,
+                      "Animation steps are laid out only while a display refreshes the window")
         _ = NSApplication.shared
         let content = NSViewController()
         content.view = NSView()

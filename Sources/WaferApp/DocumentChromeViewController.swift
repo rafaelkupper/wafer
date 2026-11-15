@@ -5,6 +5,8 @@ import WaferCore
 @MainActor
 final class DocumentChromeViewController: NSViewController, ThemeApplying {
     static let sidebarAnimationDuration: TimeInterval = 0.26
+    /// How long after the animation's duration the transition finishes without its completion.
+    static let sidebarCompletionGrace: TimeInterval = 0.25
     private static let titlebarLeadingInset: CGFloat = 88
     private static let titlebarTrailingInset: CGFloat = 154
 
@@ -547,14 +549,36 @@ final class DocumentChromeViewController: NSViewController, ThemeApplying {
             sidebarContainerView.animator().alphaValue = isVisible ? 1 : 0
         } completionHandler: { [weak self] in
             Task { @MainActor [weak self] in
-                guard let self, self.sidebarTransition?.id == transitionID else { return }
-                self.sidebarTransition = nil
-                self.finalizeAnimatedSidebarTransition(isVisible: isVisible)
-                self.endWindowSizeLockIfNeeded()
-                self.view.layoutSubtreeIfNeeded()
-                if isVisible { self.sidebarViewController.refreshVisibleDocumentSummaries() }
+                self?.completeSidebarTransition(transitionID, isVisible: isVisible)
             }
         }
+        // Constraint animations advance only while a display refreshes the window; with the
+        // display asleep their completion never comes. Finish the transition anyway, so the
+        // window size lock is released and the sidebar reaches its target.
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.sidebarAnimationDuration + Self.sidebarCompletionGrace) {
+            [weak self] in
+            MainActor.assumeIsolated {
+                self?.completeSidebarTransition(transitionID, isVisible: isVisible)
+            }
+        }
+    }
+
+    /// Finishes the transition `transitionID` once, from whichever comes first: the
+    /// animation's completion or the fallback after its duration.
+    private func completeSidebarTransition(_ transitionID: UUID, isVisible: Bool) {
+        guard sidebarTransition?.id == transitionID else { return }
+        sidebarTransition = nil
+        // Replace a constraint animation that has not finished, so it cannot move the
+        // sidebar after the transition is complete.
+        let target = isVisible ? DocumentSidebarViewController.sidebarWidth : 0
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            sidebarRevealWidthConstraint?.animator().constant = target
+        }
+        finalizeAnimatedSidebarTransition(isVisible: isVisible)
+        endWindowSizeLockIfNeeded()
+        view.layoutSubtreeIfNeeded()
+        if isVisible { sidebarViewController.refreshVisibleDocumentSummaries() }
     }
 
     func prepareSidebarForAnimatedOpen() {
