@@ -162,4 +162,21 @@ Wafer is free software under the [GNU Affero General Public License, version 3](
 
 **Contributions.** Contributions are accepted under the same two sets of terms. By opening a pull request you agree that your contribution may be distributed under the AGPL and under commercial licenses for Wafer.
 
-Wafer bundles [Mermaid](https://github.com/mermaid-js/mermaid), [KaTeX](https://github.com/KaTeX/KaTeX), emoji names from [gemoji](https://github.com/github/gemoji), [Sparkle](https://github.com/sparkle-project/Sparkle), and [swift-markdown](https://github.com/swiftlang/swift-markdown), each under its own license.
+## Credits
+
+Wafer is built on these open-source projects. Each one stays under its own license.
+
+| Project | Copyright | License | Used for |
+| --- | --- | --- | --- |
+| [swift-markdown](https://github.com/swiftlang/swift-markdown) | Apple Inc. and the Swift project authors | Apache-2.0 | Markdown parsing |
+| [swift-cmark](https://github.com/swiftlang/swift-cmark) (cmark-gfm) | John MacFarlane, GitHub, Inc., and contributors | BSD-2-Clause, with MIT-licensed parts | Markdown parsing, through swift-markdown |
+| [Sparkle](https://github.com/sparkle-project/Sparkle) | Andy Matuschak and the Sparkle project | MIT, with BSD-2-Clause and zlib-style parts | In-app updates |
+| [Mermaid](https://github.com/mermaid-js/mermaid) | Knut Sveidqvist and contributors | MIT | Diagrams |
+| [KaTeX](https://github.com/KaTeX/KaTeX) and its fonts | Khan Academy and contributors | MIT | Math |
+| [gemoji](https://github.com/github/gemoji) | GitHub, Inc. | MIT | Emoji shortcode names |
+
+The Mermaid build includes about 75 more libraries, among them [D3](https://github.com/d3/d3) (ISC and BSD-3-Clause), [DOMPurify](https://github.com/cure53/DOMPurify) (Apache-2.0 or MPL-2.0), [Cytoscape.js](https://github.com/cytoscape/cytoscape.js), [dagre-d3-es](https://github.com/tbo47/dagre-es), [Langium](https://github.com/eclipse-langium/langium), [Chevrotain](https://github.com/Chevrotain/chevrotain) (Apache-2.0), [lodash](https://github.com/lodash/lodash), [marked](https://github.com/markedjs/marked), [js-yaml](https://github.com/nodeca/js-yaml), and [Rough.js](https://github.com/rough-stuff/rough).
+
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) lists every bundled component and reproduces its copyright notice and license text in full. The same file ships in the app at `Wafer.app/Contents/Resources/THIRD_PARTY_NOTICES.md`. Mermaid, KaTeX, and gemoji also keep their original license files beside their resources.
+
+The bundled themes use color palettes from their original projects: [GitHub Primer](https://primer.style), [Dracula](https://draculatheme.com), [Solarized](https://ethanschoonover.com/solarized/), [Nord](https://www.nordtheme.com), Monokai, [One Dark](https://github.com/atom/atom/tree/master/packages/one-dark-syntax), [Gruvbox](https://github.com/morhetz/gruvbox), [Catppuccin](https://catppuccin.com), [Tokyo Night](https://github.com/enkia/tokyo-night-vscode-theme), [Rosé Pine](https://rosepinetheme.com), and [Synthwave '84](https://github.com/robb0wen/synthwave-vscode). Wafer's theme files contain only colors and are not copied from those projects.

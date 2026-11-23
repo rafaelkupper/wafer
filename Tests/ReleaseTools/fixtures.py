@@ -163,7 +163,8 @@ class Fixture:
                      'check.sh', 'check-source.py', 'verify-vendored-assets.py', 'select-xcode.sh'):
             shutil.copy2(ROOT / 'scripts' / name, self.root / 'scripts' / name)
         shutil.copytree(ROOT / 'App', self.root / 'App')
-        version = {'CFBundleShortVersionString': '1.0.0', 'CFBundleVersion': '2'}
+        (self.root / 'THIRD_PARTY_NOTICES.md').write_text('fixture notices\n')
+        version ={'CFBundleShortVersionString': '1.0.0', 'CFBundleVersion': '2'}
         for name in ('Info.plist', 'QuickLook-Info.plist'):
             path = self.root / 'App' / name
             info = plistlib.loads(path.read_bytes())

@@ -156,6 +156,7 @@ scripts/build-app.sh release
 scripts/verify-appex.sh build/Wafer.app
 scripts/verify-app.sh build/Wafer.app
 test -d build/Wafer.app
+test -f build/Wafer.app/Contents/Resources/THIRD_PARTY_NOTICES.md
 test -f build/Wafer.app/Contents/Resources/Wafer_WaferCore.bundle/Contents/Resources/reader-theme.css
 test -f build/Wafer.app/Contents/Resources/Wafer_WaferCore.bundle/Contents/Resources/mermaid.min.js
 test -f build/Wafer.app/Contents/Resources/Wafer_WaferCore.bundle/Contents/Resources/mermaid-LICENSE.txt

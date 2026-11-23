@@ -74,6 +74,7 @@ APP_RESOURCES=$(resource_directory "$BUILD_PRODUCTS_DIR/Wafer_WaferApp.bundle")
 require_resource "$APP_RESOURCES/Themes/GitHub Light.json"
 require_resource "$APP_ENTITLEMENTS"
 require_resource "$ROOT_DIR/App/container-migration.plist"
+require_resource "$ROOT_DIR/THIRD_PARTY_NOTICES.md"
 
 rm -rf "$APP_BUNDLE"
 mkdir -p \
@@ -86,6 +87,8 @@ mkdir -p \
 cp "$ROOT_DIR/App/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
 cp "$EXECUTABLE_PATH" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 cp "$ROOT_DIR/App/Resources/$APP_NAME.icns" "$APP_BUNDLE/Contents/Resources/$APP_NAME.icns"
+# Third-party license notices for Sparkle, swift-markdown, cmark, Mermaid, KaTeX, and gemoji.
+cp "$ROOT_DIR/THIRD_PARTY_NOTICES.md" "$APP_BUNDLE/Contents/Resources/THIRD_PARTY_NOTICES.md"
 # Read by macOS once, when the first sandboxed launch creates the container.
 if [[ "$BUNDLE_ID" == dev.wafer.app ]]; then
   cp "$ROOT_DIR/App/container-migration.plist" "$APP_BUNDLE/Contents/Resources/container-migration.plist"
